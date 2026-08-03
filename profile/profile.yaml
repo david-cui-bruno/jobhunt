@@ -1,0 +1,45 @@
+name:
+  first: "David"
+  last: "Cui"
+email: "davidcui824@gmail.com"
+school_email: "david_cui@brown.edu"
+phone: "(469) 469-8262"
+location:
+  city: "Providence"
+  state: "RI"
+  country: "USA"
+  street: ""            # TODO: need street address + zip for Workday
+  zip: ""
+links:
+  github: "https://github.com/david-cui-bruno"
+  linkedin: "https://www.linkedin.com/in/david-cui-589a20228/"
+education:
+  school: "Brown University"
+  degree: "BS"
+  major: "Computer Science & Economics"
+  gpa: "4.0"
+  gpa_ok_to_share: true
+  grad_month: "May"
+  grad_year: "2027"
+work_authorization:
+  us_citizen: true
+  authorized_us: true
+  needs_sponsorship: false
+eeo:
+  gender: "Male"
+  race: "Asian"
+  hispanic_latino: false
+  veteran: "I am not a protected veteran"
+  disability: "No, I do not have a disability"
+preferences:
+  roles_include: ["software engineer", "swe", "ml", "machine learning", "ai", "infrastructure", "full stack", "backend", "frontend", "data engineer", "platform", "research engineer"]
+  roles_exclude: ["new grad", "unpaid", "hardware technician", "it support"]
+  season: "Summer 2027"
+  location_rank: ["SF Bay Area", "NYC", "Remote", "anywhere"]
+  remote_ok: true
+  relocate_ok: true
+  exclude_companies: []
+  one_application_per_company: true   # never intern + new grad at same company
+resume:
+  base: "resume/resume.tex"
+  note: "Grad date on resume may be adjusted to May 2027 to match applications"
