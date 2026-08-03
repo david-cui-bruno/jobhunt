@@ -1,0 +1,34 @@
+# Copy to profile.yaml (gitignored if it contains anything sensitive you prefer out of git)
+name:
+  first: ""
+  last: ""
+email: ""              # dedicated applications inbox recommended
+phone: ""
+location:
+  city: ""
+  state: ""
+  country: "USA"
+links:
+  github: ""
+  linkedin: ""
+  website: ""
+education:
+  school: ""
+  degree: "BS"
+  major: ""
+  gpa: ""
+  grad_month: "May"
+  grad_year: "2028"
+work_authorization:
+  authorized_us: true
+  needs_sponsorship: false    # CRITICAL: affects filtering + form answers
+eeo:                          # standard voluntary self-ID answers
+  gender: "Decline to self-identify"
+  race: "Decline to self-identify"
+  veteran: "I am not a protected veteran"
+  disability: "I do not want to answer"
+preferences:
+  roles: ["Software Engineer Intern", "SWE Intern", "Quant"]
+  locations_ok: ["Remote", "NYC", "SF Bay Area", "Seattle"]
+  exclude_companies: []
+  min_notice: false
