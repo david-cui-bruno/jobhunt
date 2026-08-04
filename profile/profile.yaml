@@ -8,8 +8,8 @@ location:
   city: "Providence"
   state: "RI"
   country: "USA"
-  street: ""            # TODO: need street address + zip for Workday
-  zip: ""
+  street: "341 Thayer St #2"
+  zip: "02912"
 links:
   github: "https://github.com/david-cui-bruno"
   linkedin: "https://www.linkedin.com/in/david-cui-589a20228/"
