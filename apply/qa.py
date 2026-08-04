@@ -36,9 +36,12 @@ EXTRACT_JS = """
   const groupInfo = (el) => {
     // checkbox/radio group: same name; group question label = wrapper's first label-ish text
     const boxes = [...document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)];
+    // Ashby: question title label lives on the fieldEntry wrapper
+    const fe = el.closest('[class*=_fieldEntry]');
+    let q = fe?.querySelector('[class*=question-title], label[class*=_label]')?.innerText || '';
     const wrap = el.closest('fieldset, [role=group], div[class*=question], div[class*=checkbox]')
       || boxes[0]?.parentElement?.parentElement;
-    let q = wrap?.querySelector('legend, .label, label:not([for])')?.innerText || '';
+    if (!q) q = wrap?.querySelector('legend, .label, label:not([for])')?.innerText || '';
     if (!q) {
       // walk up until a div whose first text node looks like a question
       let n = boxes[0]?.parentElement;
@@ -53,7 +56,8 @@ EXTRACT_JS = """
   };
   document.querySelectorAll('input, select, textarea, [role=combobox]').forEach(el => {
     if (el.type === 'hidden' || el.type === 'file') return;
-    if (el.offsetParent === null) return;
+    const isYesNo = el.type === 'checkbox' && el.closest('[class*=yesno]');
+    if (el.offsetParent === null && !isYesNo) return;
     const isGroup = (el.type === 'checkbox' || el.type === 'radio') && el.name;
     const key = isGroup ? el.name : (el.id || el.name || labelFor(el));
     if (!key || seen.has(key)) return;
@@ -67,6 +71,8 @@ EXTRACT_JS = """
       const g = groupInfo(el);
       label = g.q || label;
       options = g.opts.slice(0, 60);
+      // Ashby yes/no widget: hidden checkbox with Yes/No buttons
+      if (el.closest('[class*=yesno]')) options = ['Yes', 'No'];
     }
     let chosen = '';
     const shell = (el.parentElement || el).closest('.select-shell, .select__container, [class*=select-shell]');
@@ -107,7 +113,8 @@ Form controls (JSON): {controls}
 
 Return a JSON array, one entry per control you can answer: {{"id_or_name": ..., "answer": ...}}.
 - For selects/comboboxes, answer must EXACTLY match one of the provided options (or be a close prefix for autocomplete widgets).
-- Only answer what the profile + instructions justify. For anything genuinely personal or unanswerable (essays, "why us", salary numbers you can't infer), OMIT it.
+- Short factual free-text questions (visa status, startup experience, availability, grad year, "list your...", one-line whys) SHOULD be answered from the profile/work history, in 1-3 sentences.
+- OMIT only long-form essays (>100 words expected, e.g. "hardest technical challenge", "why us" essays) and anything the profile genuinely cannot justify.
 - Dates: month names and 4-digit years as separate controls demand.
 Return ONLY the JSON array."""
 
@@ -201,12 +208,18 @@ def _is_react_select(c: dict) -> bool:
 def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[str], list[str]]:
     """Apply answers with post-fill verification. Returns (filled_labels, failed_labels)."""
     by_key = {}
+    by_label = {}
     for c in controls:
         if c["id"]: by_key[c["id"]] = c
         if c["name"]: by_key.setdefault(c["name"], c)
+        if c["label"]: by_label.setdefault(c["label"].lower().strip(), c)
     filled, failed = [], []
     for a in answers:
         c = by_key.get(a["id_or_name"])
+        if not c:
+            # ids/names can regenerate between page loads (Ashby); fall back to label match
+            lab = str(a.get("label") or a["id_or_name"]).lower().strip()
+            c = by_label.get(lab)
         if not c:
             failed.append(a["id_or_name"])
             continue
@@ -216,7 +229,10 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
         try:
             page.keyboard.press("Escape")  # dismiss any menu left open by a previous control
             el = page.locator(sel).first
-            el.scroll_into_view_if_needed()
+            try:
+                el.scroll_into_view_if_needed(timeout=2000)
+            except Exception:
+                pass  # hidden inputs (Ashby yes/no) can't scroll; JS click path handles them
             if c["tag"] == "select":
                 try:
                     el.select_option(label=ans)
@@ -245,9 +261,35 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                                 except Exception:
                                     pass
                             break
+                if not got:
+                    # Ashby-style: hidden checkbox + sibling Yes/No buttons
+                    got = int(bool(boxes.first.evaluate("""
+                        (el, ans) => {
+                            const wrap = el.closest('[class*=yesno], [class*=_container]');
+                            const btns = wrap ? [...wrap.querySelectorAll('button')] : [];
+                            if (!btns.length) return false;
+                            const want = ['yes','true','1','on'].includes(ans.toLowerCase()) ? 'yes' : 'no';
+                            const btn = btns.find(b => b.innerText.trim().toLowerCase() === want);
+                            if (btn) { btn.click(); return true; }
+                            return false;
+                        }
+                    """, str(wanted[0]))) if nb else 0)
                 ok = got > 0
             elif c["type"] in ("checkbox", "radio"):
-                if ans.lower() in ("yes", "true", "1", "on"):
+                # Ashby-style yes/no: hidden checkbox with sibling Yes/No buttons
+                handled = el.evaluate("""
+                    (el, ans) => {
+                        const wrap = el.closest('[class*=yesno], [class*=_container]');
+                        if (!wrap) return false;
+                        const btns = [...wrap.querySelectorAll('button')];
+                        if (!btns.length) return false;
+                        const want = ['yes','true','1','on'].includes(ans.toLowerCase()) ? 'yes' : 'no';
+                        const btn = btns.find(b => b.innerText.trim().toLowerCase() === want);
+                        if (btn) { btn.click(); return true; }
+                        return false;
+                    }
+                """, ans)
+                if not handled and ans.lower() in ("yes", "true", "1", "on"):
                     el.check()
                 ok = True
             elif _is_react_select(c):
