@@ -35,6 +35,8 @@ RULES:
    - You may swap in bullets from the APPROVED BULLET BANK when they fit the job better than current ones.
 4. Stay one page: roughly the same total length (within ~20%).
 
+{quality_rules}
+
 {bullet_bank}
 
 JOB POSTING:
@@ -47,6 +49,13 @@ RESUME (LaTeX source):
 {tex}
 
 Return ONLY the complete modified LaTeX source, no commentary, no markdown fences."""
+
+
+def _load_quality_rules() -> str:
+    rules = ROOT / "resume" / "quality_rules.md"
+    if rules.exists():
+        return "QUALITY RULES (follow strictly):\n" + rules.read_text()
+    return ""
 
 
 def _load_bullet_bank() -> str:
@@ -66,7 +75,7 @@ def call_claude(company: str, title: str, jd: str) -> str:
         "max_tokens": 8000,
         "messages": [{"role": "user", "content": PROMPT.format(
             company=company, title=title, jd=jd[:6000], tex=BASE_TEX,
-            bullet_bank=_load_bullet_bank())}],
+            bullet_bank=_load_bullet_bank(), quality_rules=_load_quality_rules())}],
     }).encode()
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
