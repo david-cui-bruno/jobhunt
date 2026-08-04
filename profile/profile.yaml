@@ -47,3 +47,9 @@ competitions:
   usaco: true          # participated in USACO
   aime: true           # qualified for AIME
   note: "For competition checkboxes: select USACO-type options; AIME counts for math-competition questions below USAMO level. Never claim IMO/USAMO/Putnam/IOI/ICPC."
+work_history_summary: |
+  - Framewise Health (YC-backed healthcare startup), Co-Founder & CTO, Mar-Jul 2026: built AVS-to-video patient pipeline (Temporal/Python/Supabase), patient+provider apps (React Native, Next.js).
+  - Freya (YC S25 startup), SWE Intern, Aug-Dec 2025: real-time LLM voice agents, sub-300ms latency, 200+ concurrent calls; distributed backend services.
+  - Sotatek, SWE Intern, May-Sep 2025: fraud-detection ML (CatBoost), SQL/ETL pipelines 10K+ txns/day.
+  Startup experience: yes, two YC startups (one as technical co-founder).
+  Visa status: U.S. citizen, no visa needed, no sponsorship ever required.

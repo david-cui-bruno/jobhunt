@@ -23,6 +23,11 @@ EXTRACT_JS = """
   const labelFor = (el) => {
     let t = el.labels?.[0]?.innerText || el.getAttribute('aria-label') || '';
     if (!t) {
+      // Lever cards: question text in .application-label above the field
+      const q = el.closest('.application-question, li[class*=question]');
+      t = q?.querySelector('.application-label, .text, label')?.innerText || '';
+    }
+    if (!t) {
       const wrap = el.closest('div[class*=question], fieldset, .field, [role=group]');
       t = wrap?.querySelector('label, legend, .label')?.innerText || '';
     }
@@ -92,6 +97,8 @@ Additional standing instructions:
 - Willing to relocate: Yes. Open to any listed office location; prefer SF then NYC if ranked. If preferred cities are not offered, choose any offered US city over non-US.
 - If a select's options are provided, your answer MUST be copied verbatim from the options list (character for character). Pick the option most consistent with the profile.
 - How did you hear about us: "Company website" or closest option.
+- Signature blocks: "Name"/"Signature" = the candidate's full legal name; "Date" = today's date {today} (use the format the field implies, default MM/DD/YYYY).
+- Consent/acknowledgment checkboxes (privacy policy, accurate-info attestations, future contact): Yes/agree.
 - Previous employment at this company / referral: No.
 - Non-compete / can you work legally: consistent with profile (US citizen, no sponsorship needed).
 - Internship history: yes, completed software engineering internships (see resume); none at a hedge fund/prop firm unless resume says otherwise.
@@ -139,13 +146,16 @@ def harvest_select_options(page, controls: list[dict]) -> None:
 
 
 def get_answers(controls: list[dict]) -> list[dict]:
+    import datetime
     unanswered = [c for c in controls if not c["value"]]
     if not unanswered:
         return []
+    today = datetime.date.today().strftime("%m/%d/%Y")
     body = json.dumps({
         "model": MODEL, "max_tokens": 4000,
         "messages": [{"role": "user", "content": ANSWER_PROMPT.format(
-            profile=yaml.dump(PROFILE), controls=json.dumps(unanswered)[:20000])}],
+            profile=yaml.dump(PROFILE), controls=json.dumps(unanswered)[:20000],
+            today=today)}],
     }).encode()
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages", data=body,
@@ -200,7 +210,7 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
         if not c:
             failed.append(a["id_or_name"])
             continue
-        sel = f"#{css_escape(c['id'])}" if c["id"] else f"[name='{css_escape(c['name'])}']"
+        sel = f"[id=\"{c['id']}\"]" if c["id"] else f"[name=\"{c['name']}\"]"
         ans = str(a["answer"])
         ok = False
         try:
