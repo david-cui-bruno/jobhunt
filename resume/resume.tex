@@ -96,7 +96,7 @@
   \href{mailto:david_cui@brown.edu}{david\_cui@brown.edu} &
   \multirow{2}{*}{\Huge \textbf{David Cui}} &
   \href{https://www.linkedin.com/in/david-cui-589a20228/}{LinkedIn} \\
-  (469) 469-8262 && 
+  (469) 469-8262 \textbar\ Providence, RI && 
   \href{https://github.com/david-cui-bruno}{Github}
 \end{tabular*}
 
@@ -105,7 +105,7 @@
   \resumeSubHeadingListStart
     \resumeSubheading
       {Brown University}{Providence, RI}
-      {B.S. in Computer Science \& Economics}{Aug 2024 -- May 2027}{}
+      {B.S. in Computer Science \& Economics \textbar\ GPA: 4.0}{Aug 2024 -- May 2027}{}
       \resumeItemListStart
         \resumeItem{Coursework}
           {Data Structures \& Algorithms, Computer Systems, Computer Vision, Linear Algebra, Statistics, Databases, Machine Learning, Computer Architecture, Deep Learning}
@@ -139,6 +139,7 @@
       {Software Engineering Intern}{May 2025 -- Sep 2025}{}
       \resumeItemListStart
         \resumeItemNH{Optimized production fraud detection models (CatBoost), reducing false positives by 22\%; built SQL pipelines processing 10K+ transactions/day and cutting query latency by 35\%}
+        \resumeItemNH{Designed ETL workflows aggregating multi-source transaction data into analytics-ready tables, automating ingestion, validation, and backfill jobs that replaced manual reporting for the risk team}
       \resumeItemListEnd
   \resumeSubHeadingListEnd
 
@@ -148,11 +149,11 @@
 \section*{Projects}
 
 \resumeProjectRow
-  {Framewise Video Pipeline}
-  {Python, Temporal, Supabase, AWS, FFmpeg}
+  {\href{https://github.com/david-cui-bruno}{Agent-RTM}}
+  {TypeScript, Node.js, Docker, Git internals}
   {
-    \item Built 9-stage Temporal pipeline converting discharge AVS PDFs into personalized patient videos, orchestrating Reducto parsing, Claude script generation, PHI classification, clip routing, ElevenLabs TTS, FFmpeg stitching, and S3 delivery
-    \item Implemented human-in-the-loop review harness with script/render/provider gates, Claude-assisted transcript edits, RAI-aware reroll fallbacks, HMAC-signed customer webhooks, health monitoring, and provider approval links
+    \item Built chat-first multi-agent ``software factory'' where LLM agent producers open candidate PRs with proof bundles and a repo-global merge queue protects main via fresh-main gates, fail-closed classification, serial merges, and post-merge verification
+    \item Designed agent dispatch seam isolating worker orchestration behind a single adapter, with self-healing fix agents and observability pipeline; zero false merges across the project's lifetime
   }
 
 \resumeProjectRow
@@ -160,7 +161,7 @@
   {Next.js, TypeScript, Supabase, Stripe, Dedalus SDK}
   {
     \item Built .edu-verified peer-to-peer storage marketplace with listings, search/filtering, multi-step booking, Stripe Checkout/Connect, real-time messaging, reviews, and push notifications
-    \item Implemented Smart Split AI agent that queries inventory, scores hosts by distance/price/rating, and returns multi-host storage plans; won Top 5 at TartanHacks 2026
+    \item Implemented Smart Split AI agent that queries inventory, scores hosts by distance/price/rating, and returns multi-host storage plans; \textbf{won Top 5 at TartanHacks 2026}
   }
 
 \resumeProjectRow
