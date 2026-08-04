@@ -44,18 +44,28 @@ def _shot(page, slug, stage):
 WD_EXTRACT_JS = """
 () => {
   const out = [];
-  document.querySelectorAll('[data-automation-id^="formField-"]').forEach(ff => {
+  const ffs = [...document.querySelectorAll('[data-automation-id^="formField-"]')];
+  ffs.forEach((ff, idx) => {
     const label = ff.querySelector('label, [data-automation-id="richText"], legend')?.innerText
         ?.replace(/\\s+/g, ' ')?.trim()?.slice(0, 250) || ff.getAttribute('data-automation-id');
-    const entry = {faid: ff.getAttribute('data-automation-id'), label, kind: 'unknown',
+    const entry = {faid: (ff.getAttribute('data-fkit-id') || 'x') + '|' + idx,
+                   label, kind: 'unknown',
                    value: '', required: !!ff.querySelector('[aria-required="true"], [required]')
                             || /\\*/.test(ff.querySelector('label')?.innerText || '')};
+    const dateWrap = ff.querySelector('[data-automation-id="dateInputWrapper"]');
     const txt = ff.querySelector('input[type=text], input[type=email], input[type=tel], input:not([type]), textarea');
     const btn = ff.querySelector('button[aria-haspopup="listbox"]');
     const radios = ff.querySelectorAll('input[type=radio]');
     const checks = ff.querySelectorAll('input[type=checkbox]');
     const multi = ff.querySelector('[data-automation-id="multiSelectContainer"], [data-automation-id*=searchBox]');
-    if (btn) {
+    if (dateWrap) {
+      entry.kind = 'date';
+      const m = dateWrap.querySelector('[data-automation-id="dateSectionMonth-input"]');
+      const d = dateWrap.querySelector('[data-automation-id="dateSectionDay-input"]');
+      const y = dateWrap.querySelector('[data-automation-id="dateSectionYear-input"]');
+      entry.hasDay = !!d;
+      entry.value = (m?.value && y?.value) ? `${m.value}/${d?.value ? d.value + '/' : ''}${y.value}` : '';
+    } else if (btn) {
       entry.kind = 'dropdown';
       entry.value = btn.innerText.replace(/\\s+/g,' ').trim();
       if (/select one|^$/i.test(entry.value)) entry.value = '';
@@ -67,8 +77,13 @@ WD_EXTRACT_JS = """
       entry.options = [...radios].map(r => r.labels?.[0]?.innerText?.trim() || r.value);
       entry.value = [...radios].find(r => r.checked)?.labels?.[0]?.innerText?.trim() || '';
     } else if (checks.length) {
-      entry.kind = 'checkbox';
-      entry.value = [...checks].some(c => c.checked) ? 'checked' : '';
+      entry.kind = checks.length > 1 ? 'checkgroup' : 'checkbox';
+      if (checks.length > 1) {
+        entry.options = [...checks].map(c => c.labels?.[0]?.innerText?.trim() || c.value).filter(Boolean);
+        entry.value = [...checks].find(c => c.checked)?.labels?.[0]?.innerText?.trim() || '';
+      } else {
+        entry.value = [...checks].some(c => c.checked) ? 'checked' : '';
+      }
     } else if (txt) {
       entry.kind = txt.tagName === 'TEXTAREA' ? 'textarea' : 'text';
       entry.value = txt.value || '';
@@ -83,31 +98,80 @@ WD_EXTRACT_JS = """
 
 
 def wd_fill(page, field: dict, answer: str) -> bool:
-    """Fill one Workday formField by automation id. Returns success."""
-    faid = field["faid"]
-    ff = page.locator(f"[data-automation-id='{faid}']").first
+    """Fill one Workday formField. Address by fkit id when unique (index shifts as
+    the DOM mutates), else fall back to extraction index."""
+    fkit, _, idx_s = field["faid"].partition("|")
+    ff = None
+    if fkit and fkit != "x":
+        cand = page.locator(f"[data-fkit-id='{fkit}']")
+        if cand.count() == 1:
+            ff = cand.first
+    if ff is None:
+        ff = page.locator("[data-automation-id^='formField-']").nth(int(idx_s))
     try:
         ff.scroll_into_view_if_needed(timeout=3000)
     except Exception:
         pass
     kind = field["kind"]
     try:
+        if kind == "date":
+            import datetime as _dt
+            ans_s = str(answer)
+            m3 = re.search(r"(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})", ans_s)
+            m2 = re.search(r"(\d{1,2})\s*/\s*(\d{4})", ans_s)
+            if field.get("hasDay"):
+                if m3:
+                    mm, dd, yyyy = m3.group(1), m3.group(2), m3.group(3)
+                else:
+                    t = _dt.date.today()
+                    mm, dd, yyyy = str(t.month), str(t.day), str(t.year)
+            else:
+                dd = ""
+                if m2:
+                    mm, yyyy = m2.group(1), m2.group(2)
+                else:
+                    y = re.search(r"(\d{4})", ans_s)
+                    if not y:
+                        return False
+                    mm, yyyy = "05", y.group(1)
+            mi = ff.locator("[data-automation-id='dateSectionMonth-input']").first
+            di = ff.locator("[data-automation-id='dateSectionDay-input']").first
+            yi = ff.locator("[data-automation-id='dateSectionYear-input']").first
+            mi.scroll_into_view_if_needed(timeout=4000)
+            page.wait_for_timeout(300)
+            mi.evaluate("el => el.focus()")
+            page.keyboard.type(mm.zfill(2), delay=120)
+            if dd and di.count():
+                page.wait_for_timeout(150)
+                di.evaluate("el => el.focus()")
+                page.keyboard.type(dd.zfill(2), delay=120)
+            page.wait_for_timeout(200)
+            yi.evaluate("el => el.focus()")
+            page.keyboard.type(yyyy, delay=120)
+            page.wait_for_timeout(300)
+            return bool(mi.evaluate("el => el.value") and yi.evaluate("el => el.value"))
         if kind == "text" or kind == "textarea":
-            inp = ff.locator("input, textarea").first
+            inp = ff.locator("textarea, input[type=text], input[type=email], input[type=tel], input:not([type])").first
             inp.fill(str(answer))
             return bool(inp.evaluate("el => (el.value||'').trim()"))
         if kind == "dropdown":
             btn = ff.locator("button[aria-haspopup='listbox']").first
+            btn.scroll_into_view_if_needed(timeout=4000)
             btn.click(timeout=4000)
-            page.wait_for_timeout(700)
-            opts = [o.strip() for o in page.locator("[role=option]").all_inner_texts()]
+            page.wait_for_timeout(900)
+            # scope to the OPEN listbox (page may contain other [role=option] noise)
+            lb = page.locator("ul[role=listbox]:visible, [role=listbox]:visible").last
+            box = lb if lb.count() else page
+            opts = [o.strip() for o in box.locator("[role=option]").all_inner_texts()]
+            opts = [o for o in opts if o and o.lower() != "select one"]
             target = qa._best_option(str(answer), opts) or (opts[0] if len(opts) == 1 else None)
             if target is None:
                 page.keyboard.press("Escape")
                 return False
-            page.locator(f"[role=option]:has-text(\"{target[:45]}\")").first.click(timeout=4000)
+            box.locator(f"[role=option]:has-text(\"{target[:45]}\")").first.click(timeout=4000)
             page.wait_for_timeout(400)
-            return target.lower() in ff.locator("button").first.inner_text().lower()
+            now = ff.locator("button").first.inner_text().strip().lower()
+            return bool(now) and "select one" not in now
         if kind == "radio":
             radios = ff.locator("input[type=radio]")
             for i in range(radios.count()):
@@ -117,6 +181,18 @@ def wd_fill(page, field: dict, answer: str) -> bool:
                         radios.nth(i).check(timeout=3000)
                     except Exception:
                         radios.nth(i).evaluate("el => el.labels?.[0]?.click() || el.click()")
+                    return True
+            return False
+        if kind == "checkgroup":
+            checks = ff.locator("input[type=checkbox]")
+            n = checks.count()
+            for i in range(n):
+                lab = checks.nth(i).evaluate("el => el.labels?.[0]?.innerText || el.value || ''").strip()
+                if lab and qa._best_option(str(answer), [lab]):
+                    try:
+                        checks.nth(i).check(timeout=3000)
+                    except Exception:
+                        checks.nth(i).evaluate("el => el.labels?.[0]?.click() || el.click()")
                     return True
             return False
         if kind == "checkbox":
@@ -130,15 +206,40 @@ def wd_fill(page, field: dict, answer: str) -> bool:
         if kind == "multiselect":
             inp = ff.locator("input").first
             inp.click(timeout=3000)
-            inp.fill(str(answer)[:50])
-            page.wait_for_timeout(1500)
-            opt = page.locator("[data-automation-id='promptOption'], [role=option]").first
-            if opt.count():
-                opt.click(timeout=4000)
-                page.wait_for_timeout(400)
-                return True
+            page.wait_for_timeout(1200)
+            # Try typing first (moniker search)
+            try:
+                inp.fill(str(answer)[:50])
+                page.wait_for_timeout(1600)
+            except Exception:
+                pass
+            opt = page.locator("[data-automation-id='promptOption'], [role=option]")
+            opts = [o.strip() for o in opt.all_inner_texts()]
+            target = qa._best_option(str(answer), opts)
+            if target is None and opts:
+                # hierarchical prompt: navigate category -> leaf (up to 2 levels)
+                try:
+                    inp.fill("")
+                except Exception:
+                    pass
+                page.wait_for_timeout(800)
+                for level in range(2):
+                    opts = [o.strip() for o in opt.all_inner_texts()]
+                    pick = qa._best_option(str(answer), opts) or next(
+                        (o for o in opts if o.lower() in ("career websites", "job boards", "other")), None)
+                    if not pick:
+                        break
+                    page.locator(f"[data-automation-id='promptOption']:has-text(\"{pick[:40]}\")").first.click(timeout=4000)
+                    page.wait_for_timeout(1200)
+                    if ff.locator("[data-automation-id='selectedItem']").count():
+                        return True
+                opts = [o.strip() for o in opt.all_inner_texts()]
+                target = qa._best_option(str(answer), opts) or (opts[0] if opts else None)
+            if target:
+                page.locator(f"[data-automation-id='promptOption']:has-text(\"{target[:40]}\"), [role=option]:has-text(\"{target[:40]}\")").first.click(timeout=4000)
+                page.wait_for_timeout(600)
             page.keyboard.press("Escape")
-            return False
+            return bool(ff.locator("[data-automation-id='selectedItem']").count())
     except Exception:
         return False
     return False
@@ -160,7 +261,10 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
         f"\nContext: applying to {company} — {title} via Workday. "
         "Use 'faid' as the key, copied exactly from the input. "
         "For 'How Did You Hear About Us': prefer company website/careers site options. "
-        "For source dropdowns with many options, answer with the best guess text; matching is fuzzy."
+        "For source dropdowns with many options, answer with the best guess text; matching is fuzzy. "
+        "Date fields (kind='date') expect MM/YYYY. Work experience dates come from the resume in the profile's work_history_summary. "
+        "Education From/To: 09/2024 to 05/2027. Degree dropdown: 'Bachelor of Science (B.S.)' or closest BS option. "
+        "If a 'To' date field pairs with an 'I currently work here' checkbox, give the real end date instead of checking it."
     )
     body = json.dumps({
         "model": qa.MODEL, "max_tokens": 4000,
@@ -267,6 +371,39 @@ def maybe_sign_in(page, company_key: str) -> None:
     page.wait_for_timeout(4000)
 
 
+def fill_current_page(page, company_key: str, slug: str) -> None:
+    """One extraction + Claude answering + fill pass over the current wizard page."""
+    fields = page.evaluate(WD_EXTRACT_JS)
+    force_identity(page, fields)
+    fields = page.evaluate(WD_EXTRACT_JS)
+    for f in fields:
+        if f["kind"] == "dropdown" and not f["value"]:
+            try:
+                fkit, _, idx_s = f["faid"].partition("|")
+                ff = page.locator(f"[data-fkit-id='{fkit}']").first if fkit != "x" else \
+                    page.locator("[data-automation-id^='formField-']").nth(int(idx_s))
+                btn = ff.locator("button[aria-haspopup='listbox']").first
+                btn.scroll_into_view_if_needed(timeout=3000)
+                btn.click(timeout=3000)
+                page.wait_for_timeout(700)
+                lb = page.locator("ul[role=listbox]:visible, [role=listbox]:visible").last
+                f["options"] = [o.strip() for o in lb.locator("[role=option]").all_inner_texts()
+                                if o.strip() and o.strip().lower() != "select one"][:40]
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(200)
+            except Exception:
+                page.keyboard.press("Escape")
+    todo = [f for f in fields if not f["value"]]
+    if not todo:
+        return
+    answers = wd_answers(fields, company_key, slug)
+    amap = {a["faid"]: a["answer"] for a in answers if "faid" in a}
+    for f in todo:
+        if f["faid"] in amap:
+            wd_fill(page, f, str(amap[f["faid"]]))
+            page.wait_for_timeout(250)
+
+
 def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
     company_key = url.split("//")[1].split(".")[0]  # tenant subdomain
     result = {"ok": False, "submitted": False, "reason": "", "pages": [], "unanswered": []}
@@ -283,18 +420,39 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
             result["reason"] = "apply button not found (posting closed?)"
             browser.close()
             return result
-        btn.click()
-        page.wait_for_timeout(2500)
+        # cookie banner steals the first click on some tenants
+        cb = page.locator("[data-automation-id='legalNoticeAcceptButton'], #onetrust-accept-btn-handler").first
+        try:
+            if cb.count() and cb.is_visible():
+                cb.click(timeout=3000)
+                page.wait_for_timeout(800)
+        except Exception:
+            pass
+        af = page.locator("[data-automation-id='autofillWithResume']").first
+        for attempt in range(3):
+            try:
+                btn.click(timeout=5000)
+            except Exception:
+                pass
+            try:
+                af.wait_for(state="visible", timeout=6000)
+                break
+            except Exception:
+                page.wait_for_timeout(1000)
         maybe_create_account(page, company_key)
         maybe_sign_in(page, company_key)
-        af = page.locator("[data-automation-id='autofillWithResume']").first
-        if af.count():
+        if af.count() and af.is_visible():
             af.click(timeout=8000)
-            page.wait_for_timeout(2500)
         up = page.locator("[data-automation-id='file-upload-input-ref']").first
-        if up.count():
+        try:
+            up.wait_for(state="attached", timeout=10000)
             up.set_input_files(str(resume_pdf))
             page.wait_for_timeout(5000)
+        except Exception:
+            result["reason"] = "resume upload zone never appeared"
+            _shot(page, slug, "fail_upload")
+            browser.close()
+            return result
 
         # wizard loop
         for page_no in range(MAX_PAGES):
@@ -317,48 +475,32 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                 browser.close()
                 return result
 
-            fields = page.evaluate(WD_EXTRACT_JS)
-            force_identity(page, fields)
-            fields = page.evaluate(WD_EXTRACT_JS)
-            todo = [f for f in fields if not f["value"]]
-            if todo:
-                answers = wd_answers(fields, company_key, slug)
-                amap = {a["faid"]: a["answer"] for a in answers if "faid" in a}
-                for f in todo:
-                    if f["faid"] in amap:
-                        wd_fill(page, f, str(amap[f["faid"]]))
-                        page.wait_for_timeout(250)
-            _shot(page, slug, f"page{page_no}_{step[:20].replace(' ', '_')}")
-            result["pages"].append(step or f"page{page_no}")
-
-            nxt = page.locator("[data-automation-id='pageFooterNextButton']").first
-            if not nxt.count():
-                result["reason"] = f"no Next button on step '{step}'"
-                browser.close()
-                return result
-            nxt.click(timeout=8000)
-            page.wait_for_timeout(4500)
-            errs = wd_page_errors(page)
-            if errs:
-                # one retry: re-extract and refill missing required fields
-                fields = page.evaluate(WD_EXTRACT_JS)
-                missing = [f for f in fields if f["required"] and not f["value"]]
-                if missing:
-                    answers = wd_answers(missing, company_key, slug)
-                    amap = {a["faid"]: a["answer"] for a in answers if "faid" in a}
-                    for f in missing:
-                        if f["faid"] in amap:
-                            wd_fill(page, f, str(amap[f["faid"]]))
-                    nxt.click(timeout=8000)
-                    page.wait_for_timeout(4500)
-                errs2 = wd_page_errors(page)
-                if errs2:
-                    result["reason"] = f"stuck on '{step}': {errs2[:3]}"
-                    result["unanswered"] = [f["label"] for f in page.evaluate(WD_EXTRACT_JS)
-                                            if f["required"] and not f["value"]][:10]
-                    _shot(page, slug, "stuck")
+            # Fill-and-advance with up to 3 passes per step. Conditional questions
+            # appear after earlier answers, so each pass re-extracts + re-harvests.
+            advanced = False
+            for fill_pass in range(3):
+                fill_current_page(page, company_key, slug)
+                if fill_pass == 0:
+                    _shot(page, slug, f"page{page_no}_{step[:20].replace(' ', '_')}")
+                    result["pages"].append(step or f"page{page_no}")
+                nxt = page.locator("[data-automation-id='pageFooterNextButton']").first
+                if not nxt.count():
+                    result["reason"] = f"no Next button on step '{step}'"
                     browser.close()
                     return result
+                nxt.click(timeout=8000)
+                page.wait_for_timeout(4500)
+                if not wd_page_errors(page):
+                    advanced = True
+                    break
+            if not advanced:
+                errs = wd_page_errors(page)
+                result["reason"] = f"stuck on '{step}': {errs[:3]}"
+                result["unanswered"] = [f["label"] for f in page.evaluate(WD_EXTRACT_JS)
+                                        if f["required"] and not f["value"]][:10]
+                _shot(page, slug, "stuck")
+                browser.close()
+                return result
         result["reason"] = "wizard exceeded max pages"
         browser.close()
     return result

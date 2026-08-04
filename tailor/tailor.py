@@ -25,12 +25,17 @@ API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 PROMPT = """You are tailoring a LaTeX resume to a specific job posting.
 
-STRICT RULES:
-1. Reword and reorder EXISTING content only. Never invent employers, projects, titles, dates, metrics, technologies, or skills that are not already present.
-2. Keep the exact same LaTeX structure, custom commands, and section order. Keep all personal info identical.
-3. You may: swap the order of bullets or projects to lead with the most relevant, adjust phrasing to mirror the job description's vocabulary, and emphasize matching technologies already on the resume.
-4. Length must stay within a few characters of the original so it still fits one page.
-5. Escape special characters correctly for LaTeX. Output MUST compile.
+RULES:
+1. Never invent employers, titles, dates, degrees, or credentials. Bullets must stay grounded in the resume's existing facts and the approved bullet bank (if provided below).
+2. Keep the same LaTeX custom commands and personal info. Output MUST compile.
+3. AGGRESSIVE TAILORING ENCOURAGED:
+   - Reorder PROJECTS so the most relevant to this job comes first. Reorder bullets within roles similarly.
+   - Reweight the Skills section: list the job's stack first; drop the 2-3 least relevant items if space is needed.
+   - Rewrite bullets to mirror the job description's vocabulary and emphases, expanding relevant bullets and compressing irrelevant ones.
+   - You may swap in bullets from the APPROVED BULLET BANK when they fit the job better than current ones.
+4. Stay one page: roughly the same total length (within ~20%).
+
+{bullet_bank}
 
 JOB POSTING:
 Company: {company}
@@ -44,12 +49,24 @@ RESUME (LaTeX source):
 Return ONLY the complete modified LaTeX source, no commentary, no markdown fences."""
 
 
+def _load_bullet_bank() -> str:
+    bank = ROOT / "resume" / "bullet_bank.md"
+    if not bank.exists():
+        return ""
+    approved = [l for l in bank.read_text().splitlines()
+                if l.strip() and "[PENDING]" not in l and not l.startswith("#")]
+    if not any(l[0].isdigit() for l in approved if l):
+        return ""
+    return "APPROVED BULLET BANK (pre-approved truthful bullets you may swap in):\n" + "\n".join(approved)
+
+
 def call_claude(company: str, title: str, jd: str) -> str:
     body = json.dumps({
         "model": MODEL,
         "max_tokens": 8000,
         "messages": [{"role": "user", "content": PROMPT.format(
-            company=company, title=title, jd=jd[:6000], tex=BASE_TEX)}],
+            company=company, title=title, jd=jd[:6000], tex=BASE_TEX,
+            bullet_bank=_load_bullet_bank())}],
     }).encode()
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
@@ -74,7 +91,7 @@ def validate(tex: str) -> bool:
         if tex.count(tok) != BASE_TEX.count(tok):
             return False
     # length guard: within 15% of original
-    if not 0.85 < len(tex) / len(BASE_TEX) < 1.15:
+    if not 0.75 < len(tex) / len(BASE_TEX) < 1.25:
         return False
     return True
 
