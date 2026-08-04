@@ -43,3 +43,7 @@ preferences:
 resume:
   base: "resume/resume.tex"
   note: "Grad date on resume may be adjusted to May 2027 to match applications"
+competitions:
+  usaco: true          # participated in USACO
+  aime: true           # qualified for AIME
+  note: "For competition checkboxes: select USACO-type options; AIME counts for math-competition questions below USAMO level. Never claim IMO/USAMO/Putnam/IOI/ICPC."
