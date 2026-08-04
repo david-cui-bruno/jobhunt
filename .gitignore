@@ -6,3 +6,4 @@ out/
 *.pdf
 *.log
 .DS_Store
+__pycache__/
