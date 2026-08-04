@@ -177,6 +177,27 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
         try:
             page.locator("button:has-text('Submit application'), input[type=submit]").first.click(timeout=5000)
             page.wait_for_timeout(4000)
+            # email verification gate: Greenhouse sends a 6-char code to the applicant email
+            body = page.inner_text("body").lower()
+            if "verification code" in body or "security code" in body:
+                code = _fetch_gh_code()
+                if not code:
+                    result["reason"] = "verification code email not found"
+                    _shot(page, slug, "fail_code")
+                    browser.close()
+                    return result
+                boxes = page.locator("input[autocomplete='one-time-code'], input[maxlength='1']")
+                if boxes.count() >= 6:
+                    for i, ch in enumerate(code[:6]):
+                        boxes.nth(i).fill(ch)
+                else:
+                    page.locator("input[name*=code i], input[id*=code i], input[type=text]:below(:text('code'))").first.fill(code)
+                page.wait_for_timeout(800)
+                _shot(page, slug, "code_entered")
+                sub = page.locator("button:has-text('Submit application'), button:has-text('Verify'), input[type=submit]").first
+                if sub.count():
+                    sub.click(timeout=5000)
+                page.wait_for_timeout(4000)
             _shot(page, slug, "submitted")
             body = page.inner_text("body").lower()
             if "thank" in body or "received" in body or "submitted" in body:
@@ -187,6 +208,28 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
             result["reason"] = "submit button not found"
         browser.close()
     return result
+
+
+def _fetch_gh_code(timeout_s: int = 90) -> str | None:
+    """Poll Gmail for the newest Greenhouse verification code."""
+    import re as _re
+    import time as _time
+    sys.path.insert(0, str(ROOT / "notify"))
+    import mailer
+    deadline = _time.time() + timeout_s
+    while _time.time() < deadline:
+        try:
+            data = mailer._call("/messages?q=newer_than:1h%20(verification%20OR%20security)%20code&maxResults=5")
+            for m in data.get("messages", [])[:5]:
+                full = mailer._call(f"/messages/{m['id']}?format=full")
+                text = mailer.extract_plain(full) or full.get("snippet", "")
+                mm = _re.search(r"\b([A-Z0-9]{6})\b", text)
+                if mm and int(full.get("internalDate", 0)) / 1000 > _time.time() - 300:
+                    return mm.group(1)
+        except Exception:
+            pass
+        _time.sleep(6)
+    return None
 
 
 if __name__ == "__main__":
