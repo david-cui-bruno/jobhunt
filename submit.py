@@ -28,6 +28,8 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
     from ashby import apply_ashby
     from workday import apply_workday
     from smartrecruiters import apply_smartrecruiters
+    sys.path.insert(0, str(ROOT / "watcher"))
+    from waas import apply_waas
     import mailer
 
     now = datetime.datetime.now(ET)
@@ -47,6 +49,8 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
         ats = detect_ats(r["url"])
         fn = {"greenhouse": apply_greenhouse, "lever": apply_lever, "ashby": apply_ashby,
               "workday": apply_workday, "smartrecruiters": apply_smartrecruiters}.get(ats)
+        if fn is None and "workatastartup.com" in r["url"]:
+            fn = lambda url, pdf, slug, dry_run=False: apply_waas(url, slug, dry_run=dry_run)
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
         if fn is None:
             conn.execute("UPDATE postings SET status='manual' WHERE posting_id=?",

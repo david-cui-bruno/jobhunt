@@ -1,0 +1,155 @@
+"""Work at a Startup (YC) source + applicant.
+
+Uses the saved YC session (secrets/yc_state.json). Two functions:
+  scrape(): intern+eng jobs -> tracker as source 'waas'
+  apply_waas(url, note): sends the WaaS application ("connect") with a short
+    note drafted by Claude — WaaS applications message founders directly.
+Applications are approval-gated like everything else: postings flow through the
+normal tailor->email->approve cycle; on 'ready' the submitter calls apply_waas.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sqlite3
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DB = ROOT / "out" / "tracker.db"
+STATE = ROOT / "secrets" / "yc_state.json"
+MODEL = "claude-sonnet-5"
+API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+LIST_URL = "https://www.workatastartup.com/companies?jobType=intern&sortBy=created_desc&role=eng"
+
+
+def _browser(pw):
+    b = pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
+    ctx = b.new_context(storage_state=str(STATE), viewport={"width": 1280, "height": 1200})
+    return b, ctx
+
+
+def scrape(max_scroll: int = 6) -> int:
+    from playwright.sync_api import sync_playwright
+    rows = []
+    with sync_playwright() as pw:
+        b, ctx = _browser(pw)
+        page = ctx.new_page()
+        page.goto(LIST_URL, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(4000)
+        for _ in range(max_scroll):
+            page.mouse.wheel(0, 2500)
+            page.wait_for_timeout(1200)
+        cards = page.evaluate("""
+            () => {
+                const out = [];
+                document.querySelectorAll('a[href*="/jobs/"]').forEach(a => {
+                    const t = a.innerText.trim();
+                    if (!t || t === 'View job') return;
+                    // company name: nearest heading above the job link
+                    const card = a.closest('div[class*=company], div[class*=directory], div');
+                    let comp = '';
+                    let el = card;
+                    for (let i = 0; i < 5 && el; i++, el = el.parentElement) {
+                        const h = el.querySelector('a[href*="/companies/"] span, a[href*="/companies/"]');
+                        if (h && h.innerText.trim()) { comp = h.innerText.trim().split('\\n')[0]; break; }
+                    }
+                    out.push({url: a.href, title: t, company: comp.slice(0, 60)});
+                });
+                return out;
+            }
+        """)
+        ctx.storage_state(path=str(STATE))
+        b.close()
+    seen = set()
+    for c in cards:
+        if c["url"] in seen:
+            continue
+        seen.add(c["url"])
+        if re.search(r"mechatronics|electrical|hardware|mechanical", c["title"], re.I):
+            continue
+        rows.append(c)
+    conn = sqlite3.connect(DB)
+    new = 0
+    now = int(time.time())
+    for r in rows:
+        pid = f"waas:{r['url'].rsplit('/',1)[-1]}"
+        if conn.execute("SELECT 1 FROM postings WHERE posting_id=?", (pid,)).fetchone():
+            continue
+        conn.execute("INSERT INTO postings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                     (pid, "waas", r["company"] or "YC startup", r["title"], "",
+                      r["url"], "", 0, 0, now, "new"))
+        new += 1
+    conn.commit()
+    conn.close()
+    return new
+
+
+NOTE_PROMPT = """Write a 90-120 word Work at a Startup application note to the founders for this job.
+Candidate: David Cui — Brown CS+Econ '27 (4.0), ex-founding CTO of Framewise Health (YC-backed,
+patient video pipeline: Temporal/Python/Supabase/Claude), SWE intern at Freya (YC S25, real-time
+LLM voice agents, p99 latency work), fraud-detection ML at Sotatek. USACO/AIME. Ships fast.
+
+JOB POSTING:
+{jd}
+
+Rules: specific to THIS job's stack/problem, founder-to-founder tone (he ran a YC company),
+no flattery, no "I'm excited". End without a signoff (WaaS shows the profile).
+Return ONLY the note text."""
+
+
+def apply_waas(url: str, slug: str, dry_run: bool = True) -> dict:
+    from playwright.sync_api import sync_playwright
+    result = {"ok": False, "submitted": False, "reason": ""}
+    with sync_playwright() as pw:
+        b, ctx = _browser(pw)
+        page = ctx.new_page()
+        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(3000)
+        jd = page.inner_text("body")[:5000]
+        # draft note
+        body = json.dumps({"model": MODEL, "max_tokens": 500,
+                           "messages": [{"role": "user", "content": NOTE_PROMPT.format(jd=jd)}]}).encode()
+        req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=body,
+                                     headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01",
+                                              "content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=90) as r:
+            resp = json.load(r)
+        note = "".join(bk.get("text", "") for bk in resp["content"] if bk.get("type") == "text").strip()
+        result["note"] = note
+
+        apply_btn = page.locator("button:has-text('Apply'), a:has-text('Apply')").first
+        if not apply_btn.count():
+            result["reason"] = "apply button not found (already applied?)"
+            b.close()
+            return result
+        apply_btn.click(timeout=5000)
+        page.wait_for_timeout(2000)
+        ta = page.locator("textarea").first
+        if ta.count():
+            ta.fill(note)
+        page.wait_for_timeout(500)
+        if dry_run:
+            page.screenshot(path=str(ROOT / "out" / "screenshots" / f"{slug}_waas_filled.png"), full_page=True)
+            result.update(ok=True, reason="dry run — note drafted, not sent")
+            b.close()
+            return result
+        send = page.locator("button:has-text('Send'), button:has-text('Apply')").last
+        send.click(timeout=5000)
+        page.wait_for_timeout(3000)
+        page.screenshot(path=str(ROOT / "out" / "screenshots" / f"{slug}_waas_sent.png"), full_page=True)
+        result.update(ok=True, submitted=True, reason="sent")
+        ctx.storage_state(path=str(STATE))
+        b.close()
+    return result
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "scrape":
+        print("new postings:", scrape())
+    else:
+        print(apply_waas(sys.argv[1], "waas_test", dry_run=True))

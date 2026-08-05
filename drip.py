@@ -64,6 +64,11 @@ def run():
             print(f"[drip] startups: {sres}")
         except Exception as e:
             print(f"[drip] startup discovery failed: {e}")
+        try:
+            from watcher import waas
+            print(f"[drip] waas new: {waas.scrape()}")
+        except Exception as e:
+            print(f"[drip] waas scrape failed: {e}")
 
     filt_res = filt.run()
     print(f"[drip] watcher: {summary['new_count']} new, filter: {filt_res}")
