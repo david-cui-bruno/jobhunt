@@ -30,6 +30,7 @@ def detect_ats(url: str) -> str:
     if "ashbyhq.com" in host: return "ashby"
     if "myworkdayjobs.com" in host: return "workday"
     if "icims.com" in host: return "icims"
+    if "smartrecruiters.com" in host: return "smartrecruiters"
     return "other"
 
 
