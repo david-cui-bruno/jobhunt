@@ -37,6 +37,22 @@ def _user_is_gaming() -> bool:
     return False
 
 
+DEAD_MARKERS = ("job not found", "no longer available", "job you requested was not found",
+                "position has been filled", "posting is closed", "job posting is no longer")
+
+
+def _posting_dead(url: str) -> bool:
+    """Cheap liveness sniff before spending a browser session."""
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with _ur.urlopen(req, timeout=15) as r:
+            body = r.read(60000).decode("utf-8", "replace").lower()
+        return any(m in body for m in DEAD_MARKERS)
+    except Exception:
+        return False
+
+
 def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
     from jd import detect_ats
     from greenhouse import apply_greenhouse
@@ -82,6 +98,12 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
         pdf = Path(r["resume_pdf"])
         if not pdf.is_absolute():
             pdf = ROOT / pdf
+        if _posting_dead(r["url"]):
+            conn.execute("UPDATE postings SET status='filtered_out' WHERE posting_id=?",
+                         (r["posting_id"],))
+            conn.commit()
+            results.append({"company": r["company"], "ats": ats, "status": "dead posting"})
+            continue
         try:
             res = fn(r["url"], pdf, slug, dry_run=dry_run)
         except Exception as e:
