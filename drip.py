@@ -55,6 +55,16 @@ def run():
     # 1) watcher + filter every run
     from watcher import watch, filter as filt  # noqa
     summary = watch.run()
+
+    # 1b) startup discovery once a day (10:00-11:00 window)
+    if now.hour == 10:
+        try:
+            from watcher import startups
+            sres = startups.run()
+            print(f"[drip] startups: {sres}")
+        except Exception as e:
+            print(f"[drip] startup discovery failed: {e}")
+
     filt_res = filt.run()
     print(f"[drip] watcher: {summary['new_count']} new, filter: {filt_res}")
 
