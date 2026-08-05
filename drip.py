@@ -136,14 +136,17 @@ def run():
                 conn.commit()
                 print(f"[drip] emailed: {row['company']} — {row['title']}")
 
-    # 4) 72h auto-approve for easy-ATS threads with no reply
+    # 4) AUTO-APPROVE (David delegated judgment 2026-08-05): tailored postings on
+    # trusted ATSes go ready after a short 2h reply window (so a quick 'skip' reply
+    # still wins). Essays/email-apps remain explicitly human-gated elsewhere.
     from jd import detect_ats as _ats
-    cutoff = time.time() - 72 * 3600
+    TRUSTED = ("greenhouse", "lever", "ashby", "workday", "smartrecruiters")
+    cutoff = time.time() - 2 * 3600
     for r in conn.execute("SELECT e.*, p.url, p.company FROM emails e JOIN postings p USING(posting_id) "
                           "WHERE p.status='tailored' AND e.sent_at < ? AND e.revision=0", (cutoff,)).fetchall():
-        if _ats(r["url"]) in EASY_ATS:
+        if _ats(r["url"]) in TRUSTED:
             conn.execute("UPDATE postings SET status='ready' WHERE posting_id=?", (r["posting_id"],))
-            print(f"[drip] auto-approved after 72h: {r['company']}")
+            print(f"[drip] auto-approved: {r['company']}")
     conn.commit()
 
     # 4b) weekly funnel stats (Sunday 6pm)
