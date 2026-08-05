@@ -26,6 +26,7 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
     from greenhouse import apply_greenhouse
     from lever import apply_lever
     from ashby import apply_ashby
+    from workday import apply_workday
     import mailer
 
     now = datetime.datetime.now(ET)
@@ -43,7 +44,8 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
         if done >= limit:
             break
         ats = detect_ats(r["url"])
-        fn = {"greenhouse": apply_greenhouse, "lever": apply_lever, "ashby": apply_ashby}.get(ats)
+        fn = {"greenhouse": apply_greenhouse, "lever": apply_lever, "ashby": apply_ashby,
+              "workday": apply_workday}.get(ats)
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
         if fn is None:
             conn.execute("UPDATE postings SET status='manual' WHERE posting_id=?",
