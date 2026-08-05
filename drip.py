@@ -74,6 +74,16 @@ def run():
     if any(actions.values()):
         print(f"[drip] revise actions: {actions}")
 
+    # 2b) email applications: compose drafts for ready HN postings + poll approvals
+    try:
+        import email_apply
+        comp = email_apply.compose_ready_email_postings()
+        appr = email_apply.poll_approvals()
+        if comp or appr:
+            print(f"[drip] email apps: composed={comp} approvals={appr}")
+    except Exception as e:
+        print(f"[drip] email apps failed: {e}")
+
     # 3) drip one tailored email if within window and under cap
     if 9 <= now.hour < 21 and sent_today(conn) < DAILY_CAP:
         row = pick_next(conn)
