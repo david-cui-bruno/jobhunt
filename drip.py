@@ -79,6 +79,26 @@ def run():
     if any(actions.values()):
         print(f"[drip] revise actions: {actions}")
 
+    # 2a2) batch-approval: poll replies every run; send digest at 9am and 3pm
+    try:
+        import batch_approve
+        acted = batch_approve.poll_batch_replies(verbose=False)
+        if any(acted.values()):
+            print(f"[drip] batch approvals: {acted}")
+        if now.hour in (9, 15):
+            import sqlite3 as _sq
+            _c = _sq.connect(DB)
+            batch_approve.ensure_tables(_c)
+            last = _c.execute("SELECT MAX(sent_at) FROM batch_emails").fetchone()[0] or 0
+            _c.close()
+            import time as _t
+            if _t.time() - last > 4 * 3600:
+                n = batch_approve.send_batch()
+                if n:
+                    print(f"[drip] batch approval email sent ({n} items)")
+    except Exception as e:
+        print(f"[drip] batch approval failed: {e}")
+
     # 2b) email applications: compose drafts for ready HN postings + poll approvals
     try:
         import email_apply
