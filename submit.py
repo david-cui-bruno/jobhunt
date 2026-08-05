@@ -28,6 +28,7 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
     from ashby import apply_ashby
     from workday import apply_workday
     from smartrecruiters import apply_smartrecruiters
+    from rippling import apply_rippling
     sys.path.insert(0, str(ROOT / "watcher"))
     from waas import apply_waas
     import mailer
@@ -48,7 +49,8 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
             break
         ats = detect_ats(r["url"])
         fn = {"greenhouse": apply_greenhouse, "lever": apply_lever, "ashby": apply_ashby,
-              "workday": apply_workday, "smartrecruiters": apply_smartrecruiters}.get(ats)
+              "workday": apply_workday, "smartrecruiters": apply_smartrecruiters,
+              "rippling": apply_rippling}.get(ats)
         if fn is None and "workatastartup.com" in r["url"]:
             fn = lambda url, pdf, slug, dry_run=False: apply_waas(url, slug, dry_run=dry_run)
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
