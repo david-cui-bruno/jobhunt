@@ -176,19 +176,23 @@ def get_answers(controls: list[dict]) -> list[dict]:
 
 
 def _best_option(ans: str, options: list[str]) -> str | None:
-    """Pick the menu option best matching the desired answer, else None."""
+    """Pick the menu option best matching the desired answer, else None.
+    Word-boundary aware: 'Male' must NOT match 'Female'."""
     if not options:
         return None
     al = ans.lower().strip()
+    # 1) exact
     for o in options:
         if o.lower().strip() == al:
             return o
+    # 2) whole-phrase containment at word boundaries only
+    def phrase_in(needle: str, hay: str) -> bool:
+        return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", hay) is not None
     for o in options:
         ol = o.lower().strip()
-        if al in ol or ol in al:
+        if phrase_in(al, ol) or phrase_in(ol, al):
             return o
-    # token overlap fallback (conservative: >=0.6 to avoid e.g. 'Aalborg University'
-    # matching 'Brown University' on the shared token)
+    # 3) token overlap (conservative >=0.6; tokens are whole words so male!=female)
     atoks = set(re.findall(r"[a-z0-9]+", al))
     best, score = None, 0.0
     for o in options:

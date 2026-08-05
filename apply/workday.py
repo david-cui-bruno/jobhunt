@@ -97,6 +97,34 @@ WD_EXTRACT_JS = """
 """
 
 
+def _claude_pick(question: str, answer_intent: str, options: list[str]) -> str | None:
+    """Last-resort: have Claude pick the verbatim option for this question."""
+    import urllib.request
+    if not options:
+        return None
+    body = json.dumps({
+        "model": qa.MODEL, "max_tokens": 200,
+        "messages": [{"role": "user", "content":
+            f"Candidate profile intent: {answer_intent}\n"
+            f"Application question: {question}\n"
+            f"Options: {json.dumps(options)}\n"
+            "Candidate facts: Brown University BS, graduating May 2027; US citizen; "
+            "born 2005; no prior employment at this company.\n"
+            "Reply with EXACTLY one option, verbatim, nothing else."}],
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages", data=body,
+        headers={"x-api-key": qa.API_KEY, "anthropic-version": "2023-06-01",
+                 "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            resp = json.load(r)
+        text = "".join(b.get("text", "") for b in resp["content"] if b.get("type") == "text").strip()
+        return text if text in options else qa._best_option(text, options)
+    except Exception:
+        return None
+
+
 def wd_fill(page, field: dict, answer: str) -> bool:
     """Fill one Workday formField. Address by fkit id when unique (index shifts as
     the DOM mutates), else fall back to extraction index."""
@@ -166,35 +194,52 @@ def wd_fill(page, field: dict, answer: str) -> bool:
             opts = [o for o in opts if o and o.lower() != "select one"]
             target = qa._best_option(str(answer), opts) or (opts[0] if len(opts) == 1 else None)
             if target is None:
+                # fuzzy match failed: let Claude pick the verbatim option
+                target = _claude_pick(field.get("label", ""), str(answer), opts)
+            if target is None:
                 page.keyboard.press("Escape")
                 return False
-            box.locator(f"[role=option]:has-text(\"{target[:45]}\")").first.click(timeout=4000)
+            # click by INDEX in the harvested list — never by substring (has-text
+            # is case-insensitive so "Male" would match "Female")
+            all_opts = [o.strip() for o in box.locator("[role=option]").all_inner_texts()]
+            try:
+                idx = all_opts.index(target)
+            except ValueError:
+                idx = next((i for i, o in enumerate(all_opts) if o.strip() == target.strip()), -1)
+            if idx < 0:
+                page.keyboard.press("Escape")
+                return False
+            box.locator("[role=option]").nth(idx).click(timeout=4000)
             page.wait_for_timeout(400)
-            now = ff.locator("button").first.inner_text().strip().lower()
-            return bool(now) and "select one" not in now
+            now = ff.locator("button").first.inner_text().strip()
+            return now.strip().lower() == target.strip().lower() or (
+                bool(now) and "select one" not in now.lower())
         if kind == "radio":
             radios = ff.locator("input[type=radio]")
-            for i in range(radios.count()):
-                lab = radios.nth(i).evaluate("el => el.labels?.[0]?.innerText || el.value || ''").strip()
-                if qa._best_option(str(answer), [lab]):
-                    try:
-                        radios.nth(i).check(timeout=3000)
-                    except Exception:
-                        radios.nth(i).evaluate("el => el.labels?.[0]?.click() || el.click()")
-                    return True
-            return False
+            labels = [radios.nth(i).evaluate("el => el.labels?.[0]?.innerText || el.value || ''").strip()
+                      for i in range(radios.count())]
+            pick = qa._best_option(str(answer), [l for l in labels if l])
+            if pick is None:
+                return False
+            i = labels.index(pick)
+            try:
+                radios.nth(i).check(timeout=3000)
+            except Exception:
+                radios.nth(i).evaluate("el => el.labels?.[0]?.click() || el.click()")
+            return True
         if kind == "checkgroup":
             checks = ff.locator("input[type=checkbox]")
-            n = checks.count()
-            for i in range(n):
-                lab = checks.nth(i).evaluate("el => el.labels?.[0]?.innerText || el.value || ''").strip()
-                if lab and qa._best_option(str(answer), [lab]):
-                    try:
-                        checks.nth(i).check(timeout=3000)
-                    except Exception:
-                        checks.nth(i).evaluate("el => el.labels?.[0]?.click() || el.click()")
-                    return True
-            return False
+            labels = [checks.nth(i).evaluate("el => el.labels?.[0]?.innerText || el.value || ''").strip()
+                      for i in range(checks.count())]
+            pick = qa._best_option(str(answer), [l for l in labels if l])
+            if pick is None:
+                return False
+            i = labels.index(pick)
+            try:
+                checks.nth(i).check(timeout=3000)
+            except Exception:
+                checks.nth(i).evaluate("el => el.labels?.[0]?.click() || el.click()")
+            return True
         if kind == "checkbox":
             box = ff.locator("input[type=checkbox]").first
             if str(answer).lower() in ("yes", "true", "1", "on", "checked", "agree"):
@@ -493,6 +538,22 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                 if not wd_page_errors(page):
                     advanced = True
                     break
+            if not advanced:
+                # Stale error banners / aria-invalid can linger after fields are
+                # actually filled. If nothing required is empty, push Next again.
+                really_empty = [f["label"] for f in page.evaluate(WD_EXTRACT_JS)
+                                if f["required"] and not f["value"]]
+                if not really_empty:
+                    for _ in range(2):
+                        nxt = page.locator("[data-automation-id='pageFooterNextButton']").first
+                        if not nxt.count():
+                            break
+                        nxt.click(timeout=8000)
+                        page.wait_for_timeout(4500)
+                        new_step = current_step(page)
+                        if new_step != step:
+                            advanced = True
+                            break
             if not advanced:
                 errs = wd_page_errors(page)
                 result["reason"] = f"stuck on '{step}': {errs[:3]}"
