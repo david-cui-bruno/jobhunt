@@ -79,7 +79,8 @@ def _parse_md_table(md: str, source: str) -> list[Posting]:
         cells = [c.strip() for c in line.strip("|").split("|")]
         if len(cells) < 4 or set(cells[0]) <= {"-", " "} or cells[0] in ("Company",):
             continue
-        company = re.sub(r"\*\*|\[|\]\([^)]*\)|↳", "", cells[0]).strip() or last_company
+        company = re.sub(r"<[^>]+>", "", cells[0])          # strip embedded HTML
+        company = re.sub(r"\*\*|\[|\]\([^)]*\)|↳", "", company).strip() or last_company
         last_company = company
         title = cells[1]
         m = _MD_LINK.search(line)
