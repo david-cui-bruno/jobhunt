@@ -42,13 +42,27 @@ DEAD_MARKERS = ("job not found", "no longer available", "job you requested was n
 
 
 def _posting_dead(url: str) -> bool:
-    """Cheap liveness sniff before spending a browser session."""
+    """Cheap liveness check before spending a browser session.
+    Ashby: authoritative board API (SPA hides deadness from raw HTTP).
+    Others: body-text marker sniff."""
+    import json as _json
+    import re as _re
     import urllib.request as _ur
+    m = _re.search(r"ashbyhq\.com/([^/?]+)/([0-9a-f-]{36})", url)
+    if m:
+        try:
+            req = _ur.Request(f"https://api.ashbyhq.com/posting-api/job-board/{m.group(1)}",
+                              headers={"User-Agent": "Mozilla/5.0"})
+            d = _json.load(_ur.urlopen(req, timeout=15))
+            ids = {j.get("id") for j in d.get("jobs", [])} |                   {str(j.get("jobUrl", ""))[-36:] for j in d.get("jobs", [])}
+            return m.group(2) not in ids
+        except Exception:
+            return False
     try:
         req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with _ur.urlopen(req, timeout=15) as r:
             body = r.read(60000).decode("utf-8", "replace").lower()
-        return any(m in body for m in DEAD_MARKERS)
+        return any(mk in body for mk in DEAD_MARKERS)
     except Exception:
         return False
 
