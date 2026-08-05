@@ -146,6 +146,14 @@ def run():
             print(f"[drip] auto-approved after 72h: {r['company']}")
     conn.commit()
 
+    # 4b) weekly funnel stats (Sunday 6pm)
+    try:
+        from weekly import weekly_stats
+        if weekly_stats():
+            print("[drip] weekly stats sent")
+    except Exception as e:
+        print(f"[drip] weekly stats failed: {e}")
+
     # 5) nightly summary at 21h
     if now.hour == 21:
         import mailer
