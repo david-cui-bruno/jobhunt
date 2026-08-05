@@ -25,9 +25,9 @@ def _shot(page, slug, stage):
 def apply_ashby(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
     p = PROFILE
     result = {"ok": False, "submitted": False, "reason": "", "unanswered": []}
-    apply_url = url.rstrip("/")
-    if "/application" not in apply_url:
-        apply_url += "/application"
+    # normalize: strip query params (?embed=... breaks the standalone form), ensure /application
+    base = url.split("?")[0].rstrip("/")
+    apply_url = base if base.endswith("/application") else base + "/application"
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=False)
         ctx = browser.new_context(viewport={"width": 1280, "height": 1600})

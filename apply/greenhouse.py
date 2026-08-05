@@ -210,7 +210,7 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
     return result
 
 
-def _fetch_gh_code(timeout_s: int = 90) -> str | None:
+def _fetch_gh_code(timeout_s: int = 240) -> str | None:
     """Poll Gmail for the newest Greenhouse verification code."""
     import re as _re
     import time as _time
@@ -219,7 +219,7 @@ def _fetch_gh_code(timeout_s: int = 90) -> str | None:
     deadline = _time.time() + timeout_s
     while _time.time() < deadline:
         try:
-            data = mailer._call("/messages?q=newer_than:1h%20(verification%20OR%20security)%20code&maxResults=5")
+            data = mailer._call("/messages?q=newer_than:1h%20(verification%20OR%20security%20OR%20greenhouse)&maxResults=8")
             for m in data.get("messages", [])[:5]:
                 full = mailer._call(f"/messages/{m['id']}?format=full")
                 text = mailer.extract_plain(full) or full.get("snippet", "")
