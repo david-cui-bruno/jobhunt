@@ -104,6 +104,7 @@ Additional standing instructions:
 - If a select's options are provided, your answer MUST be copied verbatim from the options list (character for character). Pick the option most consistent with the profile.
 - How did you hear about us: "Company website" or closest option.
 - Signature blocks: "Name"/"Signature" = the candidate's full legal name; "Date" = today's date {today} (use the format the field implies, default MM/DD/YYYY).
+- Internship availability dates: start "05/25/2027", end "08/20/2027" (Summer 2027). For Fall 2026 roles: start "09/08/2026", end "12/18/2026". Infer season from the job title/context.
 - Consent/acknowledgment checkboxes (privacy policy, accurate-info attestations, future contact): Yes/agree.
 - Previous employment at this company / referral: No.
 - Non-compete / can you work legally: consistent with profile (US citizen, no sponsorship needed).
