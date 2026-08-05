@@ -21,6 +21,22 @@ ET = ZoneInfo("America/New_York")
 HOURLY_CAP = 3
 
 
+GAME_APPS = ("league of legends", "leagueclient", "riot client", "valorant", "steam_osx",
+             "cs2", "dota 2", "minecraft")
+
+
+def _user_is_gaming() -> bool:
+    """True if a known game is running or the frontmost app is fullscreen."""
+    import subprocess
+    try:
+        ps = subprocess.run(["ps", "-axo", "comm"], capture_output=True, text=True, timeout=5).stdout.lower()
+        if any(g in ps for g in GAME_APPS):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
     from jd import detect_ats
     from greenhouse import apply_greenhouse
@@ -35,6 +51,9 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
 
     now = datetime.datetime.now(ET)
     if not (9 <= now.hour < 21):
+        return []
+    if _user_is_gaming():
+        print("[submit] deferring: game/fullscreen app active")
         return []
 
     conn = sqlite3.connect(DB)

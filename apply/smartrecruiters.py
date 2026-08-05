@@ -29,7 +29,7 @@ def apply_smartrecruiters(url: str, resume_pdf: Path, slug: str, dry_run: bool =
     p = PROFILE
     result = {"ok": False, "submitted": False, "reason": "", "unanswered": []}
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
+        browser = pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled", "--window-position=-3200,-3200"])
         ctx = browser.new_context(viewport={"width": 1280, "height": 1600},
                           user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
         page = ctx.new_page()

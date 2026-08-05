@@ -29,7 +29,7 @@ def apply_ashby(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
     base = url.split("?")[0].rstrip("/")
     apply_url = base if base.endswith("/application") else base + "/application"
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
+        browser = pw.chromium.launch(headless=False, args=["--window-position=-3200,-3200"])
         ctx = browser.new_context(viewport={"width": 1280, "height": 1600})
         page = ctx.new_page()
         page.goto(apply_url, wait_until="domcontentloaded", timeout=45000)

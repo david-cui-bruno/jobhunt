@@ -28,7 +28,7 @@ LIST_URL = "https://www.workatastartup.com/companies?jobType=intern&sortBy=creat
 
 
 def _browser(pw):
-    b = pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
+    b = pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled", "--window-position=-3200,-3200"])
     ctx = b.new_context(storage_state=str(STATE), viewport={"width": 1280, "height": 1200})
     return b, ctx
 
