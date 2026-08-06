@@ -17,6 +17,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from timeouts import configure_page
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "out" / "tracker.db"
@@ -38,7 +39,7 @@ def scrape(max_scroll: int = 6) -> int:
     rows = []
     with sync_playwright() as pw:
         b, ctx = _browser(pw)
-        page = ctx.new_page()
+        page = configure_page(ctx.new_page())
         page.goto(LIST_URL, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(4000)
         for _ in range(max_scroll):
@@ -107,7 +108,7 @@ def apply_waas(url: str, slug: str, dry_run: bool = True) -> dict:
     result = {"ok": False, "submitted": False, "reason": ""}
     with sync_playwright() as pw:
         b, ctx = _browser(pw)
-        page = ctx.new_page()
+        page = configure_page(ctx.new_page())
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(3000)
         jd = page.inner_text("body")[:5000]

@@ -118,6 +118,10 @@ def init_db(conn: sqlite3.Connection) -> None:
         source TEXT, company TEXT, title TEXT, locations TEXT, url TEXT,
         sponsorship TEXT, citizenship_required INTEGER, closed INTEGER,
         first_seen INTEGER, status TEXT DEFAULT 'new'
+        , outcome TEXT
+        , last_attempt_at INTEGER
+        , attempt_count INTEGER NOT NULL DEFAULT 0
+        , last_error TEXT
         -- status: new -> filtered_out | queued -> tailored -> ready -> submitted | failed | skipped_dupe_company
     );
     CREATE TABLE IF NOT EXISTS applications (

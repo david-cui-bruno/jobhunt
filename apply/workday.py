@@ -25,6 +25,7 @@ import yaml
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 import qa
+from timeouts import configure_page
 
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
@@ -455,7 +456,7 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         ctx = browser.new_context(viewport={"width": 1280, "height": 1400})
-        page = ctx.new_page()
+        page = configure_page(ctx.new_page())
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3500)
 

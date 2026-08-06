@@ -14,6 +14,7 @@ import yaml
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 import qa
+from timeouts import configure_page
 
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
@@ -32,7 +33,7 @@ def apply_smartrecruiters(url: str, resume_pdf: Path, slug: str, dry_run: bool =
         browser = pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled", "--window-position=-3200,-3200"])
         ctx = browser.new_context(viewport={"width": 1280, "height": 1600},
                           user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-        page = ctx.new_page()
+        page = configure_page(ctx.new_page())
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(2500)
 

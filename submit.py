@@ -6,8 +6,12 @@ Unknown ATS or adapter failure -> posting marked 'manual', summarized in nightly
 from __future__ import annotations
 
 import datetime
+import json
+import os
 import random
+import signal
 import sqlite3
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -19,6 +23,8 @@ sys.path[:0] = [str(ROOT / "apply"), str(ROOT / "notify")]
 DB = ROOT / "out" / "tracker.db"
 ET = ZoneInfo("America/New_York")
 HOURLY_CAP = 3
+POSTING_TIMEOUT_SECONDS = int(os.environ.get("JOBHUNT_POSTING_TIMEOUT_SECONDS", "180"))
+PLAYWRIGHT_TIMEOUT_MS = int(os.environ.get("JOBHUNT_PLAYWRIGHT_TIMEOUT_MS", "30000"))
 
 
 GAME_APPS = ("league of legends", "leagueclient", "riot client", "valorant", "steam_osx",
@@ -67,18 +73,100 @@ def _posting_dead(url: str) -> bool:
         return False
 
 
-def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
-    from jd import detect_ats
-    from greenhouse import apply_greenhouse
-    from lever import apply_lever
-    from ashby import apply_ashby
-    from workday import apply_workday
-    from smartrecruiters import apply_smartrecruiters
-    from rippling import apply_rippling
-    sys.path.insert(0, str(ROOT / "watcher"))
-    from waas import apply_waas
-    import mailer
+def _ensure_outcome_columns(conn: sqlite3.Connection) -> None:
+    """Add operational outcome fields without requiring a destructive migration."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(postings)")}
+    columns = {
+        "outcome": "TEXT",
+        "last_attempt_at": "INTEGER",
+        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_error": "TEXT",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE postings ADD COLUMN {name} {definition}")
+    conn.commit()
 
+
+def _mark_outcome(conn: sqlite3.Connection, posting_id: str, status: str,
+                  outcome: str, reason: str = "", dry_run: bool = False) -> None:
+    if dry_run:
+        return
+    conn.execute(
+        """UPDATE postings
+           SET status=?, outcome=?, last_attempt_at=?,
+               attempt_count=COALESCE(attempt_count, 0) + 1,
+               last_error=?
+         WHERE posting_id=?""",
+        (status, outcome, int(time.time()), reason[:1000] or None, posting_id),
+    )
+    conn.commit()
+
+
+def _isolated_adapter(payload: dict) -> dict:
+    """Run one adapter in a killable process with a hard per-posting deadline."""
+    proc = subprocess.Popen(
+        [sys.executable, str(ROOT / "submit_worker.py")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=str(ROOT),
+        env={**os.environ, "JOBHUNT_PLAYWRIGHT_TIMEOUT_MS": str(PLAYWRIGHT_TIMEOUT_MS)},
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(
+            json.dumps(payload), timeout=POSTING_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        return {
+            "outcome": "retryable_failure",
+            "ok": False,
+            "submitted": False,
+            "retryable": True,
+            "reason": f"posting timeout after {POSTING_TIMEOUT_SECONDS}s",
+        }
+
+    if proc.returncode != 0:
+        return {
+            "outcome": "retryable_failure",
+            "ok": False,
+            "submitted": False,
+            "retryable": True,
+            "reason": f"worker exited {proc.returncode}: {stderr[-500:]}",
+        }
+    try:
+        result = json.loads(stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {
+            "outcome": "retryable_failure",
+            "ok": False,
+            "submitted": False,
+            "retryable": True,
+            "reason": f"worker returned invalid JSON: {stderr[-500:]}",
+        }
+    return result
+
+
+def _outcome(result: dict) -> str:
+    if result.get("outcome") in {"submitted", "manual", "stale", "retryable_failure", "failed"}:
+        return result["outcome"]
+    if result.get("submitted"):
+        return "submitted"
+    if result.get("ok") and result.get("unanswered"):
+        return "manual"
+    if result.get("retryable"):
+        return "retryable_failure"
+    return "failed"
+
+
+def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
     now = datetime.datetime.now(ET)
     if not (9 <= now.hour < 21):
         return []
@@ -88,6 +176,7 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
 
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
+    _ensure_outcome_columns(conn)
     rows = conn.execute(
         "SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING(posting_id) "
         "WHERE p.status='ready'").fetchall()
@@ -96,53 +185,48 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
     for r in rows:
         if done >= limit:
             break
-        ats = detect_ats(r["url"])
-        fn = {"greenhouse": apply_greenhouse, "lever": apply_lever, "ashby": apply_ashby,
-              "workday": apply_workday, "smartrecruiters": apply_smartrecruiters,
-              "rippling": apply_rippling}.get(ats)
-        if fn is None and "workatastartup.com" in r["url"]:
-            fn = lambda url, pdf, slug, dry_run=False: apply_waas(url, slug, dry_run=dry_run)
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
-        if fn is None:
-            conn.execute("UPDATE postings SET status='manual' WHERE posting_id=?",
-                         (r["posting_id"],))
-            conn.commit()
-            results.append({"company": r["company"], "ats": ats, "status": "manual (no adapter)"})
-            continue
         pdf = Path(r["resume_pdf"])
         if not pdf.is_absolute():
             pdf = ROOT / pdf
         if _posting_dead(r["url"]):
-            conn.execute("UPDATE postings SET status='filtered_out' WHERE posting_id=?",
-                         (r["posting_id"],))
-            conn.commit()
-            results.append({"company": r["company"], "ats": ats, "status": "dead posting"})
+            _mark_outcome(conn, r["posting_id"], "filtered_out", "stale",
+                          "liveness check marked posting stale", dry_run)
+            results.append({"company": r["company"], "ats": "unknown", "outcome": "stale"})
             continue
-        try:
-            res = fn(r["url"], pdf, slug, dry_run=dry_run)
-        except Exception as e:
-            res = {"ok": False, "submitted": False, "reason": f"adapter crash: {e}"}
-        if res.get("submitted"):
-            conn.execute("UPDATE postings SET status='submitted' WHERE posting_id=?",
-                         (r["posting_id"],))
+
+        res = _isolated_adapter({
+            "url": r["url"],
+            "resume_pdf": str(pdf),
+            "slug": slug,
+            "dry_run": dry_run,
+        })
+        outcome = _outcome(res)
+        status_for_outcome = {
+            "submitted": "submitted",
+            "manual": "manual",
+            "retryable_failure": "failed",
+            "failed": "failed",
+        }.get(outcome, "failed")
+        reason = str(res.get("reason", ""))
+        _mark_outcome(conn, r["posting_id"], status_for_outcome, outcome, reason, dry_run)
+        if outcome == "submitted" and not dry_run:
+            ats = str(res.get("detected_ats", "unknown"))
             conn.execute(
                 "INSERT OR REPLACE INTO applications VALUES (?,?,?,?,?,?)",
-                (r["posting_id"], str(pdf), ats, int(time.time()), res.get("reason", ""), ""))
+                (r["posting_id"], str(pdf), ats, int(time.time()), reason, ""))
+            conn.commit()
             done += 1
-        elif res.get("ok") and res.get("unanswered"):
-            conn.execute("UPDATE postings SET status='manual' WHERE posting_id=?",
-                         (r["posting_id"],))
+        elif outcome == "manual" and res.get("unanswered") and not dry_run:
+            import mailer
             mailer.send(f"[jobhunt] manual input needed: {r['company']}",
                         f"{r['company']} — {r['title']}\n{r['url']}\n\n"
                         f"Auto-fill couldn't answer: {res['unanswered']}\n"
                         "Reply with answers and I'll retry, or apply manually.")
-        else:
-            conn.execute("UPDATE postings SET status='failed' WHERE posting_id=?",
-                         (r["posting_id"],))
-        conn.commit()
-        results.append({"company": r["company"], "ats": ats,
-                        "status": "submitted" if res.get("submitted") else res.get("reason", "?")})
-        time.sleep(random.uniform(60, 240))  # human-ish gap
+        results.append({"company": r["company"], "ats": res.get("detected_ats", "unknown"),
+                        "outcome": outcome, "reason": reason})
+        if not dry_run:
+            time.sleep(random.uniform(60, 240))  # human-ish gap
     conn.close()
     return results
 
