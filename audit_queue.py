@@ -20,6 +20,17 @@ STATUSES = ("queued", "ready", "failed")
 def audit() -> dict[str, int]:
     conn = sqlite3.connect(DB)
     _ensure_outcome_columns(conn)
+    normalized = 0
+    for status, outcome in (("failed", "failed"), ("manual", "manual"), ("submitted", "submitted")):
+        cur = conn.execute(
+            """UPDATE postings
+                  SET outcome=?,
+                      last_error=COALESCE(last_error, 'legacy terminal status predates explicit outcomes')
+                WHERE status=? AND outcome IS NULL""",
+            (outcome, status),
+        )
+        normalized += cur.rowcount
+    conn.commit()
     rows = conn.execute(
         "SELECT posting_id, company, url, status FROM postings WHERE status IN (?,?,?)",
         STATUSES,
@@ -50,7 +61,7 @@ def audit() -> dict[str, int]:
             conn.close()
             stale += 1
             print(f"stale: {row[1]} [{row[3]}] {row[2]}")
-    return {"checked": checked, "stale": stale, "preserved": checked - stale}
+    return {"checked": checked, "stale": stale, "preserved": checked - stale, "normalized": normalized}
 
 
 if __name__ == "__main__":
