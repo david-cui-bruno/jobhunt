@@ -156,10 +156,12 @@ def _strip_fences(text: str) -> str:
 
 
 def make_plan(company: str, title: str, jd: str) -> str:
+    # NB max_tokens must be generous: the model's internal reasoning counts
+    # toward it, and a starved budget truncated plans to ~190 chars (seen live).
     return _api([{"role": "user", "content": PLAN_PROMPT.format(
         company=company, title=title, jd=jd[:6000], tex=BASE_TEX,
         bullet_bank=_load_bullet_bank(),
-        skills_whitelist=_load_skills_whitelist())}], max_tokens=2000).strip()
+        skills_whitelist=_load_skills_whitelist())}], max_tokens=6000).strip()
 
 
 def call_claude(company: str, title: str, jd: str, plan: str = "") -> str:
@@ -172,7 +174,7 @@ def call_claude(company: str, title: str, jd: str, plan: str = "") -> str:
 def critique(company: str, title: str, jd: str, tex: str) -> tuple[bool, str]:
     """Returns (is_strong, critique_text)."""
     text = _api([{"role": "user", "content": CRITIQUE_PROMPT.format(
-        company=company, title=title, jd=jd[:6000], tex=tex)}], max_tokens=1500)
+        company=company, title=title, jd=jd[:6000], tex=tex)}], max_tokens=4000)
     strong = bool(re.search(r"VERDICT:\s*STRONG", text))
     return strong, text.strip()
 
@@ -188,6 +190,28 @@ def revise_with_critique(company: str, title: str, jd: str, tex: str, crit: str,
 
 
 FORBIDDEN_DRIFT = ["\\newcommand", "\\documentclass"]  # sanity: these must match base count
+
+# Per-role education variants (David, 2026-08-07): Brown's open curriculum lets
+# him declare/switch concentration freely, so embedded/hardware roles present
+# the EE+CS direction he may declare; everything else keeps the current line.
+# Applied deterministically after generation (never left to the model).
+EDU_BASE_RE = r"B\.S\. in Computer Science \\& Economics"
+EDU_VARIANTS = {
+    "embedded": "B.S. in Electrical Engineering \\& Computer Science",
+    "hardware": "B.S. in Electrical Engineering \\& Computer Science",
+}
+
+
+def parse_role_type(plan: str) -> str:
+    m = re.search(r"ROLE_TYPE:\s*([^\n]+)", plan)
+    return m.group(1).strip().lower() if m else ""
+
+
+def apply_education_variant(tex: str, role_type: str) -> str:
+    for key, repl in EDU_VARIANTS.items():
+        if key in role_type:
+            return re.sub(EDU_BASE_RE, lambda _m: repl, tex, count=1)
+    return tex
 
 # Employers must stay reverse-chronological, always (David's rule 2026-08-07).
 EMPLOYER_ORDER = ["Framewise Health", "Freya", "Sotatek"]
@@ -353,6 +377,7 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
 
     def finish(tex: str) -> Path | None:
         tex = sanitize(tex)
+        tex = apply_education_variant(tex, parse_role_type(plan))
         tex = enforce_coverage(tex, jd)
         if not validate(tex):
             return None
