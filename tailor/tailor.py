@@ -133,7 +133,7 @@ def employers_in_order(tex: str) -> bool:
 # demands: JD names it + we can claim it => it appears in the Skills section.
 CLAIMABLE = {
     "C++": r"\bC\+\+",
-    "C": r"(?<![A-Za-z+#.])C(?![A-Za-z+#])(?!\+\+)",
+    "C": r"(?<![A-Za-z+#.])C(?![A-Za-z+#])(?!\+\+)(?!-suite|-level|-corp|\.F\.R)",
     "Python": r"\bPython\b",
     "SQL": r"\bSQL\b",
     "TypeScript": r"\bTypeScript\b",
