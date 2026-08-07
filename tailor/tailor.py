@@ -345,6 +345,11 @@ def validate(tex: str, why: list | None = None) -> bool:
 
 
 def compile_pdf(tex: str, out_pdf: Path) -> bool:
+    """Compile; also records the page count from pdflatex's log into
+    LAST_PAGE_COUNT (object streams make counting pages from PDF bytes
+    unreliable, but the log line 'Output written on resume.pdf (N pages' is
+    authoritative)."""
+    global LAST_PAGE_COUNT
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / "resume.tex"
         src.write_text(tex)
@@ -356,21 +361,18 @@ def compile_pdf(tex: str, out_pdf: Path) -> bool:
         pdf = Path(td) / "resume.pdf"
         if p.returncode != 0 or not pdf.exists():
             return False
+        m = re.search(rb"Output written on resume\.pdf \((\d+) page", p.stdout or b"")
+        if not m:
+            log = (Path(td) / "resume.log")
+            if log.exists():
+                m = re.search(rb"Output written on resume\.pdf \((\d+) page", log.read_bytes())
+        LAST_PAGE_COUNT = int(m.group(1)) if m else 0
         out_pdf.parent.mkdir(parents=True, exist_ok=True)
         out_pdf.write_bytes(pdf.read_bytes())
         return True
 
 
-def pdf_pages(pdf: Path) -> int:
-    """Page count straight from the PDF (mdls needs Spotlight; this doesn't)."""
-    try:
-        data = pdf.read_bytes()
-        m = re.findall(rb"/Type\s*/Pages[^>]*?/Count\s+(\d+)", data)
-        if m:
-            return max(int(x) for x in m)
-        return len(re.findall(rb"/Type\s*/Page[^s]", data))
-    except Exception:
-        return 0
+LAST_PAGE_COUNT = 0
 
 
 SHRINK_PROMPT = """This LaTeX resume compiles to {pages} pages; it MUST fit exactly 1 page.
@@ -448,7 +450,7 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
             return None
         # hard one-page gate with up to 2 shrink passes
         for _ in range(2):
-            pages = pdf_pages(out_pdf)
+            pages = LAST_PAGE_COUNT
             if pages <= 1:
                 break
             print(f"[tailor] {pages} pages; shrinking", file=sys.stderr)
@@ -463,7 +465,7 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
             if not compile_pdf(smaller, out_pdf):
                 return None
             tex = smaller
-        if pdf_pages(out_pdf) > 1:
+        if LAST_PAGE_COUNT > 1:
             print("[tailor] still >1 page after shrinks", file=sys.stderr)
             return None
         out_tex.write_text(tex)
