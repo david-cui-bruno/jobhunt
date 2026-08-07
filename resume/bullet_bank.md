@@ -28,3 +28,18 @@
 10. jobhunt — Autonomous job-application pipeline: watchers diff 3 GitHub listing repos ($\sim$450 postings tracked), Claude tailors LaTeX resumes per JD, Playwright adapters submit across Greenhouse/Lever/Ashby/Workday with Gmail human-in-the-loop approvals (Python, Playwright, SQLite, launchd)
 11. SpaceOverflow — Stripe Connect marketplace flows with idempotent webhook processing and real-time messaging via Supabase channels; .edu-verified onboarding across 2 campuses
 12. Bruno's Dictionary — Next.js 14 + Supabase app with auth, moderated submissions, and type-safe DB migrations; 500+ entries, deployed on Vercel
+
+## PROPOSED — NOT YET APPROVED (drafted 2026-08-07; do not use in tailored resumes until David approves)
+# Source of numbers: verified benchmark runs and committed eval results, not estimates.
+# orderbook: ~/orderbook README + docs/optimization.md (best-of-3, M-series MacBook)
+# agent-rts: bench/evals/results/summary.json (50 trials, seed 42)
+
+P1. lob (C++ order book) — Built C++20 limit order book and price-time matching engine sustaining 20.4M msg/s with 41ns p50 / 166ns p99 per-op latency on 1M-message ITCH-style replay; zero hot-path allocation via preallocated intrusive order pool
+
+P2. lob (C++ order book) — Measured 3.7x throughput and 53x max-latency improvement over an idiomatic std::map implementation on identical tapes; attributed gains to cache-resident array-of-levels layout, pooled allocation, and open-addressing order index with backward-shift deletion
+
+P3. lob (C++ order book, compact variant) — C++20 limit order book: 20.4M msg/s, p99 166ns, 3.7x measured vs std::map baseline on identical replay tapes; writeup attributes each gain to cache layout, zero-allocation pooling, and index design
+
+P4. agent-rts — Built fault-injection evaluation for a multi-agent code factory: 50 seeded worker-bug trials show the gated merge queue blocks 92% of injected bugs vs 0% ungated, with residual failures traced to a test-suite gap rather than the gate
+
+P5. agent-rts — Designed evals-first development loop for multi-agent orchestration (spec-conformance gate, per-criterion probes, merge-queue proofs), quantifying safety impact with seeded fault-injection ablations
