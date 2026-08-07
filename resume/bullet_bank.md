@@ -1,4 +1,4 @@
-# Bullet Bank — APPROVED 2026-08-04 (all 12; metric-injected)
+# Bullet Bank — APPROVED (1-12 on 2026-08-04; 13-17 on 2026-08-07; all metric-injected)
 #
 # All bullets below are approved for use in tailored resumes. David asked for
 # specific numbers; figures marked ($\sim$) are David-authorized estimates: he should
@@ -29,17 +29,13 @@
 11. SpaceOverflow — Stripe Connect marketplace flows with idempotent webhook processing and real-time messaging via Supabase channels; .edu-verified onboarding across 2 campuses
 12. Bruno's Dictionary — Next.js 14 + Supabase app with auth, moderated submissions, and type-safe DB migrations; 500+ entries, deployed on Vercel
 
-## PROPOSED — NOT YET APPROVED (drafted 2026-08-07; do not use in tailored resumes until David approves)
-# Source of numbers: verified benchmark runs and committed eval results, not estimates.
-# orderbook: ~/orderbook README + docs/optimization.md (best-of-3, M-series MacBook)
-# agent-rts: bench/evals/results/summary.json (50 trials, seed 42)
+# Bullets 13-17 approved 2026-08-07. Numbers come from verified benchmark runs and
+# committed eval artifacts (not estimates): orderbook README + docs/optimization.md
+# (best-of-3, M-series MacBook); agent-rts bench/evals/results/summary.json (50 trials, seed 42).
+# NOTE: 15 is a compact alternative to 13+14 — use 13+14 OR 15, never all three together.
 
-P1. [PENDING] lob (C++ order book) — Built C++20 limit order book and price-time matching engine sustaining 20.4M msg/s with 41ns p50 / 166ns p99 per-op latency on 1M-message ITCH-style replay; zero hot-path allocation via preallocated intrusive order pool
-
-P2. [PENDING] lob (C++ order book) — Measured 3.7x throughput and 53x max-latency improvement over an idiomatic std::map implementation on identical tapes; attributed gains to cache-resident array-of-levels layout, pooled allocation, and open-addressing order index with backward-shift deletion
-
-P3. [PENDING] lob (C++ order book, compact variant) — C++20 limit order book: 20.4M msg/s, p99 166ns, 3.7x measured vs std::map baseline on identical replay tapes; writeup attributes each gain to cache layout, zero-allocation pooling, and index design
-
-P4. [PENDING] agent-rts — Built fault-injection evaluation for a multi-agent code factory: 50 seeded worker-bug trials show the gated merge queue blocks 92% of injected bugs vs 0% ungated, with residual failures traced to a test-suite gap rather than the gate
-
-P5. [PENDING] agent-rts — Designed evals-first development loop for multi-agent orchestration (spec-conformance gate, per-criterion probes, merge-queue proofs), quantifying safety impact with seeded fault-injection ablations
+13. lob (C++ order book) — Built C++20 limit order book and price-time matching engine sustaining 20.4M msg/s with 41ns p50 / 166ns p99 per-op latency on 1M-message ITCH-style replay; zero hot-path allocation via preallocated intrusive order pool
+14. lob (C++ order book) — Measured 3.7x throughput and 53x max-latency improvement over an idiomatic std::map implementation on identical tapes; attributed gains to cache-resident array-of-levels layout, pooled allocation, and open-addressing order index with backward-shift deletion
+15. lob (C++ order book, compact variant of 13+14) — C++20 limit order book: 20.4M msg/s, p99 166ns, 3.7x measured vs std::map baseline on identical replay tapes; writeup attributes each gain to cache layout, zero-allocation pooling, and index design
+16. agent-rts — Built fault-injection evaluation for a multi-agent code factory: 50 seeded worker-bug trials show the gated merge queue blocks 92% of injected bugs vs 0% ungated, with residual failures traced to a test-suite gap rather than the gate
+17. agent-rts — Designed evals-first development loop for multi-agent orchestration (spec-conformance gate, per-criterion probes, merge-queue proofs), quantifying safety impact with seeded fault-injection ablations
