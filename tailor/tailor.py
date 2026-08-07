@@ -358,10 +358,36 @@ def compile_pdf(tex: str, out_pdf: Path) -> bool:
             return False
         out_pdf.parent.mkdir(parents=True, exist_ok=True)
         out_pdf.write_bytes(pdf.read_bytes())
-        # one-page check
-        info = subprocess.run(["mdls", "-name", "kMDItemNumberOfPages", str(out_pdf)],
-                              capture_output=True, text=True)
         return True
+
+
+def pdf_pages(pdf: Path) -> int:
+    """Page count straight from the PDF (mdls needs Spotlight; this doesn't)."""
+    try:
+        data = pdf.read_bytes()
+        m = re.findall(rb"/Type\s*/Pages[^>]*?/Count\s+(\d+)", data)
+        if m:
+            return max(int(x) for x in m)
+        return len(re.findall(rb"/Type\s*/Page[^s]", data))
+    except Exception:
+        return 0
+
+
+SHRINK_PROMPT = """This LaTeX resume compiles to {pages} pages; it MUST fit exactly 1 page.
+Cut the weakest content for this job until it fits: drop the least relevant project entirely, trim bullets to at most 2 lines, compress the coursework line to the 5-6 most relevant courses. Do NOT touch employers, dates, or personal info. Keep employer order Framewise Health, Freya, Sotatek. Keep $\\rightarrow$/$\\sim$ hygiene.
+
+JOB POSTING (for relevance judgment):
+{jd}
+
+LATEX:
+{tex}
+
+Return ONLY the complete LaTeX source, no commentary, no fences."""
+
+
+def shrink_to_one_page(tex: str, jd: str, pages: int) -> str:
+    return _strip_fences(_api([{"role": "user", "content": SHRINK_PROMPT.format(
+        pages=pages, jd=jd[:3000], tex=tex)}], max_tokens=20000))
 
 
 LANG_SKILLS = {"C++", "C", "Python", "SQL", "TypeScript", "JavaScript", "Pandas", "NumPy", "PyTorch"}
@@ -417,11 +443,31 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
         if not validate(tex, why):
             print(f"[tailor] validate failed: {'; '.join(why)}", file=sys.stderr)
             return None
-        if compile_pdf(tex, out_pdf):
-            out_tex.write_text(tex)
-            return out_pdf
-        print("[tailor] pdflatex failed", file=sys.stderr)
-        return None
+        if not compile_pdf(tex, out_pdf):
+            print("[tailor] pdflatex failed", file=sys.stderr)
+            return None
+        # hard one-page gate with up to 2 shrink passes
+        for _ in range(2):
+            pages = pdf_pages(out_pdf)
+            if pages <= 1:
+                break
+            print(f"[tailor] {pages} pages; shrinking", file=sys.stderr)
+            try:
+                smaller = sanitize(shrink_to_one_page(tex, jd, pages))
+            except Exception:
+                return None
+            swhy: list = []
+            if not validate(smaller, swhy):
+                print(f"[tailor] shrink validate failed: {'; '.join(swhy)}", file=sys.stderr)
+                return None
+            if not compile_pdf(smaller, out_pdf):
+                return None
+            tex = smaller
+        if pdf_pages(out_pdf) > 1:
+            print("[tailor] still >1 page after shrinks", file=sys.stderr)
+            return None
+        out_tex.write_text(tex)
+        return out_pdf
 
     for attempt in range(2):
         try:
