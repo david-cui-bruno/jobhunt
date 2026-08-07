@@ -32,7 +32,7 @@
 ## PROPOSED — NOT YET APPROVED (drafted 2026-08-07; do not use in tailored resumes until David approves)
 # Source of numbers: verified benchmark runs and committed eval results, not estimates.
 # orderbook: ~/orderbook README + docs/optimization.md (best-of-3, M-series MacBook)
-# agent-rtm: bench/evals/results/summary.json (50 trials, seed 42)
+# agent-rts: bench/evals/results/summary.json (50 trials, seed 42)
 
 P1. [PENDING] lob (C++ order book) — Built C++20 limit order book and price-time matching engine sustaining 20.4M msg/s with 41ns p50 / 166ns p99 per-op latency on 1M-message ITCH-style replay; zero hot-path allocation via preallocated intrusive order pool
 
@@ -40,6 +40,6 @@ P2. [PENDING] lob (C++ order book) — Measured 3.7x throughput and 53x max-late
 
 P3. [PENDING] lob (C++ order book, compact variant) — C++20 limit order book: 20.4M msg/s, p99 166ns, 3.7x measured vs std::map baseline on identical replay tapes; writeup attributes each gain to cache layout, zero-allocation pooling, and index design
 
-P4. [PENDING] agent-rtm — Built fault-injection evaluation for a multi-agent code factory: 50 seeded worker-bug trials show the gated merge queue blocks 92% of injected bugs vs 0% ungated, with residual failures traced to a test-suite gap rather than the gate
+P4. [PENDING] agent-rts — Built fault-injection evaluation for a multi-agent code factory: 50 seeded worker-bug trials show the gated merge queue blocks 92% of injected bugs vs 0% ungated, with residual failures traced to a test-suite gap rather than the gate
 
-P5. [PENDING] agent-rtm — Designed evals-first development loop for multi-agent orchestration (spec-conformance gate, per-criterion probes, merge-queue proofs), quantifying safety impact with seeded fault-injection ablations
+P5. [PENDING] agent-rts — Designed evals-first development loop for multi-agent orchestration (spec-conformance gate, per-criterion probes, merge-queue proofs), quantifying safety impact with seeded fault-injection ablations
