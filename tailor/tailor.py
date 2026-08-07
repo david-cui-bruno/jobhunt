@@ -29,11 +29,13 @@ RULES:
 1. Never invent employers, titles, dates, degrees, or credentials. Bullets must stay grounded in the resume's existing facts and the approved bullet bank (if provided below).
 2. Keep the same LaTeX custom commands and personal info. Output MUST compile.
 3. AGGRESSIVE TAILORING ENCOURAGED:
-   - Reorder PROJECTS so the most relevant to this job comes first. Reorder bullets within roles similarly.
-   - Reweight the Skills section: list the job's stack first; drop the 2-3 least relevant items if space is needed.
-   - Rewrite bullets to mirror the job description's vocabulary and emphases, expanding relevant bullets and compressing irrelevant ones.
-   - You may swap in bullets from the APPROVED BULLET BANK when they fit the job better than current ones.
+   - WORK EXPERIENCE ORDER IS FIXED reverse-chronological: Framewise Health, then Freya, then Sotatek. NEVER reorder employers. Tailor a role by rewriting its bullets, not by moving the role.
+   - Rewrite work-experience bullets to foreground whatever in that role is closest to THIS job: mirror the JD's vocabulary and emphases, expand relevant bullets, compress or swap out irrelevant ones (using the APPROVED BULLET BANK when its bullets fit better).
+   - Reorder PROJECTS so the most relevant to this job comes first. Reorder bullets within a role/project by relevance.
+   - SKILLS MUST BE VISIBLY TAILORED: first extract the technologies the JD names, then lead each Skills line with the ones the candidate actually has (from the base resume or bullet bank), and drop the 2-3 least relevant items. Someone comparing Skills to the JD should immediately see the overlap. Never add a skill the candidate doesn't have.
+   - Reweight the Coursework line the same way (e.g. systems courses first for embedded/systems roles, ML first for ML roles).
 4. Stay one page: roughly the same total length (within ~20%).
+5. LaTeX hygiene: arrows must be $\\rightarrow$ (NEVER plain "->", which renders as an upside-down question mark). Approximation must be $\\sim$ (NEVER bare "~" before a number, which renders as a space). ASCII only.
 
 {quality_rules}
 
@@ -92,6 +94,27 @@ def call_claude(company: str, title: str, jd: str) -> str:
 
 FORBIDDEN_DRIFT = ["\\newcommand", "\\documentclass"]  # sanity: these must match base count
 
+# Employers must stay reverse-chronological, always (David's rule 2026-08-07).
+EMPLOYER_ORDER = ["Framewise Health", "Freya", "Sotatek"]
+
+# LaTeX text-mode traps -> safe math-mode equivalents. Plain "->"/">" render as
+# upside-down question marks in OT1; bare "~" before a digit silently becomes a
+# space. The bullet bank uses both, so sanitize whatever the model emits.
+def sanitize(tex: str) -> str:
+    out = tex
+    for uni, repl in [("\u2192", "$\\rightarrow$"), ("\u2190", "$\\leftarrow$"),
+                      ("\u2248", "$\\sim$"), ("\u00d7", "x"), ("\u2264", "$\\leq$"),
+                      ("\u2265", "$\\geq$")]:
+        out = out.replace(uni, repl)
+    out = re.sub(r"(?<![$\\{-])->(?!\$)", r"$\\rightarrow$", out)  # bare ->
+    out = re.sub(r"(?<=[\s(])~(?=\d)", r"$\\sim$", out)  # bare ~35% etc.
+    return out
+
+
+def employers_in_order(tex: str) -> bool:
+    positions = [tex.find(e) for e in EMPLOYER_ORDER]
+    return all(p >= 0 for p in positions) and positions == sorted(positions)
+
 
 def validate(tex: str) -> bool:
     if "\\begin{document}" not in tex or "\\end{document}" not in tex:
@@ -101,6 +124,11 @@ def validate(tex: str) -> bool:
             return False
     # length guard: within 15% of original
     if not 0.75 < len(tex) / len(BASE_TEX) < 1.25:
+        return False
+    if not employers_in_order(tex):
+        return False
+    # no text-mode arrows / raw angle brackets left (math mode is fine)
+    if re.search(r"(?<![$\\{-])->", tex):
         return False
     return True
 
@@ -135,6 +163,7 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
             tex = call_claude(company, title, jd)
         except Exception:
             continue
+        tex = sanitize(tex)
         if not validate(tex):
             continue
         if compile_pdf(tex, out_pdf):

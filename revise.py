@@ -18,14 +18,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT / "tailor"), str(ROOT / "notify")]
 
-from tailor import validate, compile_pdf, MODEL, API_KEY  # noqa: E402
+from tailor import validate, compile_pdf, sanitize, MODEL, API_KEY  # noqa: E402
 import mailer  # noqa: E402
 
 DB = ROOT / "out" / "tracker.db"
 
 REVISE_PROMPT = """You are revising a tailored LaTeX resume based on the owner's feedback.
 
-RULES: reword/reorder existing truthful content only; never invent new employers, metrics, or skills unless the feedback explicitly supplies the factual content. Keep structure and one-page length. Output must compile.
+RULES: reword/reorder existing truthful content only; never invent new employers, metrics, or skills unless the feedback explicitly supplies the factual content. Keep structure and one-page length. Work-experience employers stay in this fixed order: Framewise Health, Freya, Sotatek. Arrows must be $\\rightarrow$ (never plain ->) and approximations $\\sim$ (never bare ~). Output must compile.
 
 OWNER FEEDBACK:
 {feedback}
@@ -102,7 +102,7 @@ def poll_once(verbose: bool = True) -> dict:
             if verbose:
                 print(f"revising {name} per: {text[:100]!r}")
             tex = Path(r["resume_tex"]).read_text()
-            new_tex = call_claude_revise(tex, text)
+            new_tex = sanitize(call_claude_revise(tex, text))
             pdf_path = Path(r["resume_pdf"])
             rev = r["revision"] + 1
             if validate(new_tex) or True:  # user-driven edits may change length; compile is the gate
