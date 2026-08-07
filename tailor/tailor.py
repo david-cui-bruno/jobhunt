@@ -202,6 +202,31 @@ EDU_VARIANTS = {
 }
 
 
+# Per-role coursework pools drawn ONLY from resume/courses.md (verified with
+# David 2026-08-07; he has taken every course listed there, ENGN 2912 excluded).
+# The variant line replaces the base Coursework list wholesale so the model
+# can't drop real courses or invent new ones; ordering = screening relevance.
+COURSE_VARIANTS = {
+    "embedded": "Real-Time \\& Embedded Software, Digital Electronics Systems Design, Design of Computing Systems (Computer Architecture), Operating Systems (Weenix kernel), Electrical Circuits \\& Signals, Computer Networks, Multiprocessor Synchronization, Linear Systems \\& Signals",
+    "hardware": "Digital Electronics Systems Design, Design of Computing Systems (Computer Architecture), Real-Time \\& Embedded Software, Electrical Circuits \\& Signals, Electricity \\& Magnetism, Operating Systems (Weenix kernel), Linear Systems \\& Signals, Communication Systems",
+    "backend": "Distributed Systems, Computer Networks, Operating Systems (Weenix kernel), Databases, Multiprocessor Synchronization, Design \\& Analysis of Algorithms, Computer Systems Security, Software Security",
+    "ml": "Machine Learning, Deep Learning, Computer Vision, Design \\& Analysis of Algorithms, Distributed Systems, Linear Algebra, Statistics, Operating Systems",
+    "full-stack": "Distributed Systems, Computer Networks, Databases, Operating Systems (Weenix kernel), Design \\& Analysis of Algorithms, Software Security, Machine Learning, Deep Learning",
+    "data": "Databases, Distributed Systems, Machine Learning, Design \\& Analysis of Algorithms, Statistics, Computer Networks, Deep Learning, Linear Algebra",
+    "security": "Software Security \\& Exploitation, Computer Systems Security, Operating Systems (Weenix kernel), Computer Networks, Compilers, Distributed Systems, Multiprocessor Synchronization, Theory of Computation",
+}
+
+
+def apply_course_variant(tex: str, role_type: str) -> str:
+    for key, courses in COURSE_VARIANTS.items():
+        if key in role_type:
+            return re.sub(
+                r"(\\resumeItem\{Coursework\}\s*\{)[^}]+(\})",
+                lambda m: m.group(1) + courses + m.group(2),
+                tex, count=1)
+    return tex
+
+
 def parse_role_type(plan: str) -> str:
     m = re.search(r"ROLE_TYPE:\s*([^\n]+)", plan)
     return m.group(1).strip().lower() if m else ""
@@ -377,7 +402,9 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
 
     def finish(tex: str) -> Path | None:
         tex = sanitize(tex)
-        tex = apply_education_variant(tex, parse_role_type(plan))
+        role = parse_role_type(plan)
+        tex = apply_education_variant(tex, role)
+        tex = apply_course_variant(tex, role)
         tex = enforce_coverage(tex, jd)
         if not validate(tex):
             return None
