@@ -165,10 +165,12 @@ def make_plan(company: str, title: str, jd: str) -> str:
 
 
 def call_claude(company: str, title: str, jd: str, plan: str = "") -> str:
+    # 20k: reasoning tokens count toward max_tokens on this model; 8k truncated
+    # the LaTeX mid-document (observed live: 0.73 ratio, no \end{document}).
     return _strip_fences(_api([{"role": "user", "content": PROMPT.format(
         company=company, title=title, jd=jd[:6000], tex=BASE_TEX, plan=plan or "(none)",
         bullet_bank=_load_bullet_bank(), quality_rules=_load_quality_rules(),
-        skills_whitelist=_load_skills_whitelist())}]))
+        skills_whitelist=_load_skills_whitelist())}], max_tokens=20000))
 
 
 def critique(company: str, title: str, jd: str, tex: str) -> tuple[bool, str]:
@@ -186,7 +188,8 @@ def revise_with_critique(company: str, title: str, jd: str, tex: str, crit: str,
         "$\\rightarrow$ not ->, $\\sim$ not ~, must compile.\n\nTAILORING PLAN:\n" + plan +
         "\n\nCRITIQUE:\n" + crit + "\n\nJOB POSTING:\nCompany: " + company + "\nTitle: " + title +
         "\n" + jd[:4000] + "\n\nCURRENT LATEX:\n" + tex +
-        "\n\nReturn ONLY the complete revised LaTeX source, no commentary, no fences.")}]))
+        "\n\nReturn ONLY the complete revised LaTeX source, no commentary, no fences.")}],
+        max_tokens=20000))
 
 
 FORBIDDEN_DRIFT = ["\\newcommand", "\\documentclass"]  # sanity: these must match base count
@@ -320,20 +323,24 @@ def jd_skills_covered(tex: str, jd: str) -> tuple[bool, list[str]]:
     return not missing, missing
 
 
-def validate(tex: str) -> bool:
-    if "\\begin{document}" not in tex or "\\end{document}" not in tex:
+def validate(tex: str, why: list | None = None) -> bool:
+    def fail(reason: str) -> bool:
+        if why is not None:
+            why.append(reason)
         return False
+    if "\\begin{document}" not in tex or "\\end{document}" not in tex:
+        return fail("missing document env")
     for tok in FORBIDDEN_DRIFT:
         if tex.count(tok) != BASE_TEX.count(tok):
-            return False
-    # length guard: within 15% of original
+            return fail(f"drift: {tok} count {tex.count(tok)} != {BASE_TEX.count(tok)}")
+    # length guard: within 25% of original
     if not 0.75 < len(tex) / len(BASE_TEX) < 1.25:
-        return False
+        return fail(f"length ratio {len(tex)/len(BASE_TEX):.2f} outside 0.75..1.25")
     if not employers_in_order(tex):
-        return False
+        return fail("employer order violated")
     # no text-mode arrows / raw angle brackets left (math mode is fine)
     if re.search(r"(?<![$\\{-])->", tex):
-        return False
+        return fail("raw -> present")
     return True
 
 
@@ -406,11 +413,14 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
         tex = apply_education_variant(tex, role)
         tex = apply_course_variant(tex, role)
         tex = enforce_coverage(tex, jd)
-        if not validate(tex):
+        why: list = []
+        if not validate(tex, why):
+            print(f"[tailor] validate failed: {'; '.join(why)}", file=sys.stderr)
             return None
         if compile_pdf(tex, out_pdf):
             out_tex.write_text(tex)
             return out_pdf
+        print("[tailor] pdflatex failed", file=sys.stderr)
         return None
 
     for attempt in range(2):
