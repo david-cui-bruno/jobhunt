@@ -512,6 +512,10 @@ def enforce_coverage(tex: str, jd: str) -> str:
 def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
     """Plan -> write -> critique -> (revise) -> guardrails -> compile.
     Returns path to tailored PDF, or None on failure (caller falls back to base)."""
+    if not API_KEY:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY is not set: refusing to run (would silently "
+            "fall back to the base resume for every posting)")
     safe = re.sub(r"[^A-Za-z0-9]+", "_", f"{company}_{title}")[:80]
     out_pdf = OUT_DIR / f"{safe}.pdf"
     out_tex = OUT_DIR / f"{safe}.tex"
