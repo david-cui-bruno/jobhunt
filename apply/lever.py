@@ -31,7 +31,7 @@ def apply_lever(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
     if not apply_url.endswith("/apply"):
         apply_url += "/apply"
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False, args=["--window-position=-3200,-3200"])
+        browser = pw.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
         ctx = browser.new_context(viewport={"width": 1280, "height": 1600})
         page = configure_page(ctx.new_page())
         page.goto(apply_url, wait_until="domcontentloaded", timeout=45000)

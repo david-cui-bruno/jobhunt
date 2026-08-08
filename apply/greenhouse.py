@@ -43,7 +43,7 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
     p = PROFILE
     result = {"ok": False, "submitted": False, "reason": "", "unanswered": []}
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False, args=["--window-position=-3200,-3200"])
+        browser = pw.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
         ctx = browser.new_context(viewport={"width": 1280, "height": 1600})
         page = configure_page(ctx.new_page())
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
