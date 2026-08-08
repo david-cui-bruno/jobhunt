@@ -230,6 +230,18 @@ def apply_course_variant(tex: str, role_type: str) -> str:
     return tex
 
 
+# Grad date is role-dependent (David 2026-08-08): internship applications say
+# May 2028 (returning to school after), full-time say May 2027. Base tex has 2027.
+GRAD_INTERN = "May 2028"
+GRAD_FULLTIME = "May 2027"
+
+
+def apply_grad_date(tex: str, title: str) -> str:
+    is_intern = bool(re.search(r"\bintern|co[- ]?op\b", title, re.I))
+    target = GRAD_INTERN if is_intern else GRAD_FULLTIME
+    return re.sub(r"Aug 2024 -- May 202[0-9]", f"Aug 2024 -- {target}", tex, count=1)
+
+
 def parse_role_type(plan: str) -> str:
     m = re.search(r"ROLE_TYPE:\s*([^\n]+)", plan)
     return m.group(1).strip().lower() if m else ""
@@ -341,6 +353,11 @@ def validate(tex: str, why: list | None = None) -> bool:
     # no text-mode arrows / raw angle brackets left (math mode is fine)
     if re.search(r"(?<![$\\{-])->", tex):
         return fail("raw -> present")
+    # education = degree + ONE Coursework bullet, nothing else (David 2026-08-08)
+    edu = tex[tex.find("EDUCATION"):tex.find("EXPERIENCE")]
+    n_bullets = len(re.findall(r"\\resumeItem(?:NH)?\{", edu))
+    if n_bullets > 1:
+        return fail("extra bullet in Education (only the Coursework line is allowed)")
     return True
 
 
@@ -440,6 +457,7 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
         role = parse_role_type(plan)
         tex = apply_education_variant(tex, role)
         tex = apply_course_variant(tex, role)
+        tex = apply_grad_date(tex, title)
         tex = enforce_coverage(tex, jd)
         why: list = []
         if not validate(tex, why):

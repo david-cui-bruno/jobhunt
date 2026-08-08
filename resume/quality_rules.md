@@ -27,6 +27,10 @@ SKILLS SECTION
 ATS / FORMATTING
 - Single column, no icons/graphics/tables for content. (Our template complies.)
 - Don't bold keywords inside bullets (distracting); bolding is for headers.
+- Education section: the degree line plus exactly ONE bullet — the "Coursework"
+  list. No second bullet, no extra bolded labels ("Systems Coursework",
+  "Relevant Coursework", per-course project blurbs). Course project detail
+  belongs in Projects, not Education.
 - En dashes for date ranges.
 
 CONTEXT NOTES FOR THIS CANDIDATE
