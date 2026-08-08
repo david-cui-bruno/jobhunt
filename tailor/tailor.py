@@ -394,6 +394,73 @@ def compile_pdf(tex: str, out_pdf: Path) -> bool:
 LAST_PAGE_COUNT = 0
 
 
+def measure_fill(pdf: Path) -> float:
+    """Fraction of the page height actually used (0..1): renders page 1 and
+    finds the lowest row with ink. Pure stdlib: pdftoppm -> PGM bytes."""
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["pdftoppm", "-gray", "-r", "50", "-f", "1", "-l", "1",
+                            str(pdf), f"{td}/pg"], capture_output=True, timeout=60)
+            pgms = sorted(Path(td).glob("pg*.pgm"))
+            if not pgms:
+                return 1.0
+            data = pgms[0].read_bytes()
+            # P5 header: magic, width height, maxval, then raw bytes
+            parts = data.split(b"\n", 3)
+            w, h = (int(x) for x in parts[1].split())
+            raw = parts[3][-(w * h):]
+            last_ink = 0
+            for row in range(h):
+                seg = raw[row * w:(row + 1) * w]
+                if any(b < 128 for b in seg):
+                    last_ink = row
+            return last_ink / h
+    except Exception:
+        return 1.0  # measurement failure must never block a resume
+
+
+EXPAND_PROMPT = """This LaTeX resume leaves too much blank space: content ends at {fill_pct}% of the page. Make it fill the page (while staying EXACTLY 1 page):
+- Add 1-2 more truthful bullets to the most JD-relevant roles/projects, drawn ONLY from the approved bullet bank or the tailoring plan's MATCHES evidence below. Never invent facts.
+- Or expand the most JD-relevant existing bullets with truthful specifics already present in the source material.
+Keep employer order Framewise Health, Freya, Sotatek. Keep the bold-impact convention (\\textbf on each bullet's outcome phrase). Keep $\\rightarrow$/$\\sim$ hygiene.
+
+TAILORING PLAN:
+{plan}
+
+{bullet_bank}
+
+JOB POSTING (for relevance):
+{jd}
+
+LATEX:
+{tex}
+
+Return ONLY the complete LaTeX source, no commentary, no fences."""
+
+
+def expand_to_fill(tex: str, jd: str, plan: str, fill: float) -> str:
+    return _strip_fences(_api([{"role": "user", "content": EXPAND_PROMPT.format(
+        fill_pct=int(fill * 100), plan=plan[:3000], jd=jd[:3000], tex=tex,
+        bullet_bank=_load_bullet_bank())}], max_tokens=20000))
+
+
+def log_skill_gaps(posting_id: str, company: str, plan: str) -> None:
+    """Append this JD's unmet ideals to a ledger so recurring gaps become the
+    roadmap for which portfolio projects to build next (David 2026-08-08:
+    'if I can't hit those ideals, make a project so that I can')."""
+    try:
+        gaps = re.search(r"GAPS:\s*(.+?)(?:\n[A-Z_]+:|\Z)", plan, re.S)
+        ideals = re.search(r"IDEAL_SKILLS:\s*(.+?)(?:\n[A-Z_]+:|\Z)", plan, re.S)
+        with (OUT_DIR.parent / "skill_gaps.log").open("a") as f:
+            f.write(f"--- {posting_id} | {company}\n")
+            if ideals:
+                f.write(f"IDEAL: {' '.join(ideals.group(1).split())}\n")
+            if gaps:
+                f.write(f"GAPS: {' '.join(gaps.group(1).split())}\n")
+    except Exception:
+        pass
+
+
 SHRINK_PROMPT = """This LaTeX resume compiles to {pages} pages; it MUST fit exactly 1 page.
 Cut the weakest content for this job until it fits: drop the least relevant project entirely, trim bullets to at most 2 lines, compress the coursework line to the 5-6 most relevant courses. Do NOT touch employers, dates, or personal info. Keep employer order Framewise Health, Freya, Sotatek. Keep $\\rightarrow$/$\\sim$ hygiene.
 
@@ -488,7 +555,28 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
         if LAST_PAGE_COUNT > 1:
             print("[tailor] still >1 page after shrinks", file=sys.stderr)
             return None
+        # whitespace gate: if content ends high on the page, expand with
+        # truthful bullets (measured, not guessed; 0.88 leaves normal margins)
+        if jd.strip():
+            for _ in range(2):
+                fill = measure_fill(out_pdf)
+                if fill >= 0.88:
+                    break
+                print(f"[tailor] page only {fill:.0%} full; expanding", file=sys.stderr)
+                try:
+                    bigger = sanitize(expand_to_fill(tex, jd, plan, fill))
+                except Exception:
+                    break
+                ewhy: list = []
+                if not validate(enforce_coverage(bigger, jd), ewhy):
+                    print(f"[tailor] expand validate failed: {'; '.join(ewhy)}", file=sys.stderr)
+                    break
+                if not compile_pdf(bigger, out_pdf) or LAST_PAGE_COUNT > 1:
+                    compile_pdf(tex, out_pdf)  # restore the good one
+                    break
+                tex = bigger
         out_tex.write_text(tex)
+        log_skill_gaps(posting_id, company, plan)
         return out_pdf
 
     for attempt in range(2):
