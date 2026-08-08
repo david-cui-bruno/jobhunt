@@ -1,4 +1,4 @@
-# Bullet Bank — APPROVED (1-12 on 2026-08-04; 13-17 on 2026-08-07; all metric-injected)
+# Bullet Bank — APPROVED (1-12 on 2026-08-04; 13-17 on 2026-08-07; 18-20 on 2026-08-08; all metric-injected)
 #
 # All bullets below are approved for use in tailored resumes. David asked for
 # specific numbers; figures marked ($\sim$) are David-authorized estimates: he should
@@ -40,12 +40,9 @@
 16. agent-rts — Built fault-injection evaluation for a multi-agent code factory: 50 seeded worker-bug trials show the gated merge queue blocks 92% of injected bugs vs 0% ungated, with residual failures traced to a test-suite gap rather than the gate
 17. agent-rts — Designed evals-first development loop for multi-agent orchestration (spec-conformance gate, per-criterion probes, merge-queue proofs), quantifying safety impact with seeded fault-injection ablations
 
-## PROPOSED — NOT YET APPROVED (drafted 2026-08-07)
-# Source: lob-transformer repo, results/*/summary.json (committed). FI-2010 benchmark,
-# test days 8-10, macro F1 at k=10, 3 seeds. Never use [PENDING] bullets in resumes.
+# Bullets 18-20 approved 2026-08-08. Source: lob-transformer repo, results/*/summary.json
+# (committed). FI-2010 benchmark, test days 8-10, macro F1 at k=10, 3 seeds.
 
-P6. [PENDING] lob-transformer — Trained a 210k-param transformer on 254k limit-order-book snapshots (FI-2010) to predict short-horizon mid-price direction: 0.61 macro F1 vs 0.36 MLP / 0.27 logistic baselines under a fixed walk-forward protocol, +25 F1 over an MLP with 5x more parameters (PyTorch, Apple-Silicon MPS)
-
-P7. [PENDING] lob-transformer — Found and fixed a data-leakage bug in the standard FI-2010 setup (files silently concatenate 5 stocks; naive sliding windows cross stock boundaries), with segment detection and split hygiene enforced by construction and 33 unit tests
-
-P8. [PENDING] lob-transformer — Ran seeded ablations (context length, feature-order control, depth) attributing the transformer's +25 F1 gain to sequence modeling rather than capacity; reported honest gap vs published DeepLOB results with reproducible per-run JSON artifacts
+18. lob-transformer — Trained a 210k-param transformer on 254k limit-order-book snapshots (FI-2010) to predict short-horizon mid-price direction: 0.61 macro F1 vs 0.36 MLP / 0.27 logistic baselines under a fixed walk-forward protocol, +25 F1 over an MLP with 5x more parameters (PyTorch, Apple-Silicon MPS)
+19. lob-transformer — Found and fixed a data-leakage bug in the standard FI-2010 setup (files silently concatenate 5 stocks; naive sliding windows cross stock boundaries), with segment detection and split hygiene enforced by construction and 33 unit tests
+20. lob-transformer — Ran seeded ablations (context length, feature-order control, depth) attributing the transformer's +25 F1 gain to sequence modeling rather than capacity; reported honest gap vs published DeepLOB results with reproducible per-run JSON artifacts
