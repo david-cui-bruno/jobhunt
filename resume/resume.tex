@@ -165,11 +165,11 @@
   }
 
 \resumeProjectRow
-  {\href{https://github.com/Evan-Luo-jpg/SVD_CannyEdges}{SVD-Extend}}
-  {Python, PyTorch, Diffusers}
+  {\href{https://github.com/david-cui-bruno/lob-transformer}{LOB-Transformer}}
+  {Python, PyTorch, Apple-Silicon MPS}
   {
-    \item Fine-tuned Stable Video Diffusion on BDD100K with LoRA ($\sim$800K trainable params), cutting training time from 30 to 9 minutes and reducing VRAM usage by 60\%
-    \item Modified UNet conditioning to incorporate Canny edge maps, improving edge preservation by 23\% and reducing loss by 18\%
+    \item Trained transformers on 254K limit-order-book snapshots (FI-2010) for short-horizon price direction: conv-stem model reaches 0.70 macro F1 vs 0.65 plain transformer at an equal 60-epoch budget (3 seeds each, non-overlapping ranges), isolating architecture gains from training budget with a fair-budget control
+    \item Found and fixed a data-leakage bug in the standard benchmark setup (5 stocks silently concatenated; naive windows cross boundaries); every published number re-derived from committed artifacts by an automated claim verifier
   }
 
 \vspace{-12pt}

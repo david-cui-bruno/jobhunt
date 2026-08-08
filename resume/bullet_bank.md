@@ -42,10 +42,11 @@
 
 # Bullets 18-20 approved 2026-08-08. Source: lob-transformer repo, results/*/summary.json
 # (committed). FI-2010 benchmark, test days 8-10, macro F1 at k=10, 3 seeds.
+# Updated 2026-08-08 evening with v2 conv-stem campaign (scripts/verify_claims.py: 16/16).
 
-18. lob-transformer — Trained a 210k-param transformer on 254k limit-order-book snapshots (FI-2010) to predict short-horizon mid-price direction: 0.61 macro F1 vs 0.36 MLP / 0.27 logistic baselines under a fixed walk-forward protocol, +25 F1 over an MLP with 5x more parameters (PyTorch, Apple-Silicon MPS)
-19. lob-transformer — Found and fixed a data-leakage bug in the standard FI-2010 setup (files silently concatenate 5 stocks; naive sliding windows cross stock boundaries), with segment detection and split hygiene enforced by construction and 33 unit tests
-20. lob-transformer — Ran seeded ablations (context length, feature-order control, depth) attributing the transformer's +25 F1 gain to sequence modeling rather than capacity; reported honest gap vs published DeepLOB results with reproducible per-run JSON artifacts
+18. lob-transformer — Trained transformers on 254k limit-order-book snapshots (FI-2010) to predict short-horizon mid-price direction: conv-stem transformer reaches 0.70 macro F1 vs 0.65 plain transformer at an equal 60-epoch budget (3 seeds each, non-overlapping ranges) and 0.36/0.27 MLP/logistic baselines under a fixed walk-forward protocol (PyTorch, Apple-Silicon MPS)
+19. lob-transformer — Found and fixed a data-leakage bug in the standard FI-2010 setup (files silently concatenate 5 stocks; naive sliding windows cross stock boundaries), with segment detection and split hygiene enforced by construction and 34 unit tests
+20. lob-transformer — Isolated architecture from training budget with a fair-budget control: 4x longer training bought +4.2 F1 alone, DeepLOB-style conv stem added +5.4 on top; every published number re-derived from committed JSON artifacts by an automated claim verifier (16/16)
 
 # Bullets 21-24 approved 2026-08-08. Source: raft-kv repo results/chaos_summary.json,
 # mutation_summary.json, m1_deep_hunt.json, figure8_summary.json (all committed).
@@ -56,3 +57,12 @@
 22. raft-kv — Built Wing-Gong linearizability checker validating 51k client operations across chaos schedules against a sequential put/get/CAS spec, with exactly-once client sessions; checker itself unit-tested to reject stale reads, lost updates, and lying CAS results
 23. raft-kv — Used mutation testing to measure test-suite power: 3 of 4 injected Raft bugs caught within 3 random schedules, but the Figure 8 commit bug (§5.4.2) survived 5,000 — closed the gap with a scripted adversarial interleaving that triggers state-machine divergence deterministically
 24. raft-kv (compact variant of 21+23) — Raft + linearizable KV verified by deterministic simulation: 1000 seeded chaos schedules, 5 invariants per tick, 0 violations; mutation testing exposed that random fault injection misses the Figure 8 bug in 5,000 schedules, fixed with a scripted adversarial scenario
+
+# Bullets 25-28 approved 2026-08-08. Source: zonal-ecu-sim repo (github.com/david-cui-bruno/zonal-ecu-sim),
+# tests/run_tests.sh output (all suites green), README. C11, -Wall -Wextra -Werror, no dynamic allocation.
+# NOTE: 28 is a compact variant of 25+26 — use 25+26+27 OR 27+28, never 25/26/28 together.
+
+25. zonal-ecu-sim — Built a miniature software-defined-vehicle network in C11: four ECUs (BMS, vehicle controller, sensor, zonal gateway) exchanging CRC-8/rolling-counter-protected CAN-FD frames over an emulated bus, with signal layouts code-generated from a DBC file and cross-validated byte-for-byte against cantools
+26. zonal-ecu-sim — Implemented UDS (ISO 14229) diagnostics over ISO-TP on a zonal gateway: sessions with S3 timeout, seed/key security access, DTC read/clear derived from live fault flags, multi-frame transfers, plus allowlist routing and token-bucket rate limiting isolating the untrusted diag bus (verified by adversarial injection tests: zero frames leaked)
+27. zonal-ecu-sim — Verified fault handling end-to-end with live fault injection: thermal-runaway drill latches BMS contactors open and drops the VCU to limp mode with torque gated to zero; dead-sensor drill caps torque at 30% and recovers; diagnosed and fixed a head-of-line-blocking bus bug where one stalled client wedged the network (non-blocking fan-out, per-client queues, overrun drop)
+28. zonal-ecu-sim (compact variant of 25+26) — Four-ECU vehicle network in C11 over emulated CAN-FD: DBC-generated signal packing (cross-validated vs cantools), UDS/ISO-TP diagnostics with seed/key security, allowlist gateway isolating an untrusted diag bus, all behavior verified by live integration + adversarial injection tests
