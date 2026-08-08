@@ -208,7 +208,9 @@ def upsert(rows: list[dict]) -> int:
             continue
         if conn.execute("SELECT 1 FROM postings WHERE url=?", (r["url"],)).fetchone():
             continue
-        conn.execute("INSERT INTO postings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        conn.execute("INSERT INTO postings (posting_id, source, company, title, locations, url, "
+                     "sponsorship, citizenship_required, closed, first_seen, status) "
+                     "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                      (pid, r["source"], r["company"], r["title"], r.get("locations", ""),
                       r["url"], "", 0, 0, now, "new"))
         new += 1

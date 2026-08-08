@@ -147,7 +147,9 @@ def upsert(conn: sqlite3.Connection, postings: list[Posting]) -> list[Posting]:
         if cur.fetchone():
             continue
         conn.execute(
-            "INSERT INTO postings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO postings (posting_id, source, company, title, locations, url, "
+            "sponsorship, citizenship_required, closed, first_seen, status) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (p.posting_id, p.source, p.company, p.title, p.locations, p.url,
              p.sponsorship, int(p.citizenship_required), int(p.closed), now, "new"),
         )

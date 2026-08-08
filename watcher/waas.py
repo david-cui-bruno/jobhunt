@@ -81,7 +81,9 @@ def scrape(max_scroll: int = 6) -> int:
         pid = f"waas:{r['url'].rsplit('/',1)[-1]}"
         if conn.execute("SELECT 1 FROM postings WHERE posting_id=?", (pid,)).fetchone():
             continue
-        conn.execute("INSERT INTO postings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        conn.execute("INSERT INTO postings (posting_id, source, company, title, locations, url, "
+                     "sponsorship, citizenship_required, closed, first_seen, status) "
+                     "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                      (pid, "waas", r["company"] or "YC startup", r["title"], "",
                       r["url"], "", 0, 0, now, "new"))
         new += 1
