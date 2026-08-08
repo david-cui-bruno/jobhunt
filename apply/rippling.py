@@ -157,7 +157,13 @@ def apply_rippling(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) 
             return result
 
         try:
-            frame.locator("button:has-text('Submit'), button:has-text('Apply')").last.click(timeout=6000)
+            # The Apply/Submit button lives in the PARENT page's sticky header
+            # (recon 2026-08-08: SpreeAI), not inside the application iframe.
+            # Try the frame first (older boards), then fall back to the page.
+            btn = frame.locator("button:has-text('Submit'), button:has-text('Apply')")
+            if not btn.count():
+                btn = page.locator("button:has-text('Submit'), button:has-text('Apply')")
+            btn.last.click(timeout=6000)
             page.wait_for_timeout(6000)
             _shot(page, slug, "submitted")
             body = page.inner_text("body").lower()
