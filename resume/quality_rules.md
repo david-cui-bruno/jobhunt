@@ -6,6 +6,10 @@ BULLET FORMULA
 - Every bullet: strong past-tense action verb + system built + scale + measured outcome.
   XYZ form: "Accomplished [X] as measured by [Y], by doing [Z]".
 - Move metrics toward the START of the bullet when possible.
+- BOLD THE IMPACT: wrap the outcome phrase (metric/scale/consequence) of every
+  work/project bullet in \textbf{...}. Exactly one bold phrase per bullet, only
+  the impact, never the whole bullet. State the impact as impressively as the
+  truth allows (absolute numbers, percentages, scale, stakes).
 - Use digits ("8", "3x", "p99"), never spelled-out numbers.
 - 1 sentence per bullet, max 2 lines. No periods at end. No personal pronouns.
 - Banned verbs: utilized, helped, worked on, assisted, participated, spearheaded,
@@ -26,7 +30,8 @@ SKILLS SECTION
 
 ATS / FORMATTING
 - Single column, no icons/graphics/tables for content. (Our template complies.)
-- Don't bold keywords inside bullets (distracting); bolding is for headers.
+- Bolding inside bullets is ONLY for the impact phrase (see BULLET FORMULA);
+  never bold plain keywords or tech names.
 - Education section: the degree line plus exactly ONE bullet — the "Coursework"
   list. No second bullet, no extra bolded labels ("Systems Coursework",
   "Relevant Coursework", per-course project blurbs). Course project detail
@@ -38,4 +43,4 @@ CONTEXT NOTES FOR THIS CANDIDATE
 - "U.S. Citizen" displayed in header removes sponsorship ambiguity (wiki-endorsed).
 - Coursework line is low-value per wiki; MAY be dropped for space when a JD-relevant
   bullet needs room. Keep ML/DL courses when applying to ML roles.
-- TartanHacks bold: keep despite no-bold rule (deliberate exception, award signal).
+- TartanHacks bold: keep (award signal, counts as an impact bold).

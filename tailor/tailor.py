@@ -50,7 +50,8 @@ Return a plan in EXACTLY this format (plain text, no markdown):
 
 ROLE_TYPE: <embedded-systems | backend | ml | full-stack | data | other: one phrase>
 TOP_REQUIREMENTS: <the 5-7 things this JD actually screens for, comma-separated, most important first>
-MATCHES: <one line per requirement the candidate can TRUTHFULLY support, format "requirement => strongest truthful evidence from resume/whitelist/bank, and where it should appear (which bullet/section)">
+IDEAL_SKILLS: <describe the hiring manager's IDEAL candidate for this exact posting: the skills, tools, and experiences they dream of seeing, comma-separated, INCLUDING ones this candidate lacks>
+MATCHES: <one line per requirement/ideal-skill the candidate can TRUTHFULLY support, format "requirement => strongest truthful evidence from resume/whitelist/bank, and where it should appear (which bullet/section)">
 GAPS: <requirements with NO truthful support. Never fake these. Note any adjacent-but-honest framing, e.g. RTOS gap => emphasize real-time latency work at Freya WITHOUT claiming RTOS>
 ANGLE: <2-3 sentences: the honest story this resume should tell for this job, e.g. "low-level-curious systems builder with real-time latency and Linux infra experience">
 PROJECT_ORDER: <the 3 projects best-first for THIS job, with 4 words on why each>
@@ -68,10 +69,11 @@ RULES:
 3. Execute the plan aggressively:
    - WORK EXPERIENCE ORDER IS FIXED reverse-chronological: Framewise Health, then Freya, then Sotatek. NEVER reorder employers; tailor each role's bullets instead.
    - Rewrite bullets to serve the ANGLE, using the VOCAB where truthful. Every MATCHES line must be visible in the final resume where the plan says. Expand what the plan emphasizes, compress what it doesn't. GAPS get adjacent-honest framing only.
+   - IMPACT FIRST, AND BOLD IT: every work/project bullet must contain a concrete outcome (metric, scale, or consequence) stated as impressively as the truth allows, and the impact phrase must be wrapped in \\textbf{...}. Exactly one bold phrase per bullet, covering just the outcome (e.g. \\textbf{cutting p99 turn latency $\\sim$35\\%}), never the whole bullet.
    - PROJECTS in the plan's PROJECT_ORDER. Rewrite project bullets toward the angle too, from the same truthful facts.
    - SKILLS: every JD-named technology from MATCHES appears, placed FIRST on its line; drop the least relevant items. Never add anything not on the base resume or whitelist.
    - COURSEWORK: reorder so the plan-relevant courses come first.
-4. Stay one page: roughly the same total length (within ~20%).
+4. FILL the page: exactly 1 page with no big blank band at the bottom. If content runs short, add one more truthful bullet (bullet bank or plan MATCHES) to the most JD-relevant role or project rather than leaving whitespace.
 5. LaTeX hygiene: arrows must be $\\rightarrow$ (NEVER plain "->", which renders as an upside-down question mark). Approximation must be $\\sim$ (NEVER bare "~" before a number, which renders as a space). ASCII only.
 
 {quality_rules}
@@ -101,7 +103,7 @@ Title: {title}
 RESUME (LaTeX):
 {tex}
 
-For each of the JD's top requirements: does the resume visibly address it (cite the line), weakly address it, or ignore it? Then answer:
+For each of the JD's top requirements: does the resume visibly address it (cite the line), weakly address it, or ignore it? Also check: does every bullet state a concrete outcome with the impact phrase bolded (\\textbf), and is the page well used (no more than ~15% trailing whitespace implied by sparse content)? Then answer:
 VERDICT: STRONG or WEAK
 FIXES: if WEAK, the 3-5 highest-impact concrete edits (reword bullet X to say Y, move project Z first, lead skills with W). Only truthful edits from the resume's existing facts; never invent experience.
 Return plain text in that format."""
