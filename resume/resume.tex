@@ -168,8 +168,8 @@
   {\href{https://github.com/david-cui-bruno/lob-transformer}{LOB-Transformer}}
   {Python, PyTorch, Apple-Silicon MPS}
   {
-    \item Trained transformers on 254K limit-order-book snapshots (FI-2010) for short-horizon price direction: conv-stem model reaches 0.70 macro F1 vs 0.65 plain transformer at an equal 60-epoch budget (3 seeds each, non-overlapping ranges), isolating architecture gains from training budget with a fair-budget control
-    \item Found and fixed a data-leakage bug in the standard benchmark setup (5 stocks silently concatenated; naive windows cross boundaries); every published number re-derived from committed artifacts by an automated claim verifier
+    \item Trained transformers on 254K limit-order-book snapshots (FI-2010) for short-horizon price direction: \textbf{0.70 macro F1 vs 0.65 plain-transformer control at an equal 60-epoch budget} (3 seeds each, non-overlapping ranges), isolating architecture gains from training budget
+    \item Found and fixed a data-leakage bug in the standard benchmark setup (5 stocks silently concatenated; naive windows cross boundaries); \textbf{every published number re-derived from committed artifacts} by an automated claim verifier
   }
 
 \vspace{-12pt}
