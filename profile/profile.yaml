@@ -20,7 +20,8 @@ education:
   gpa: "4.0"
   gpa_ok_to_share: true
   grad_month: "May"
-  grad_year: "2027"
+  grad_year: "2028"
+  grad_date_rule: "INTERNSHIP applications: graduating May 2028 (returning to school after the internship). FULL-TIME applications: graduating May 2027. Resume PDFs are generated per-role with the matching date; form answers must match the attached resume."
 work_authorization:
   us_citizen: true
   authorized_us: true
@@ -39,10 +40,10 @@ preferences:
   remote_ok: true
   relocate_ok: true
   exclude_companies: []
-  one_application_per_company: true   # never intern + new grad at same company
+  one_application_per_company: true   # one app per company, ever; intern beats full-time (see filter.py)
 resume:
   base: "resume/resume.tex"
-  note: "Grad date on resume may be adjusted to May 2027 to match applications"
+  note: "Grad date on resume is role-dependent: May 2028 for internships, May 2027 for full-time (rule from David 2026-08-08)"
 competitions:
   usaco: true          # participated in USACO
   aime: true           # qualified for AIME

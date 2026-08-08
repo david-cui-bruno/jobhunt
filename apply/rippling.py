@@ -54,7 +54,7 @@ def _answers(p: dict) -> list[tuple[re.Pattern, str]]:
         (re.compile(r"linkedin", re.I), p["links"]["linkedin"]),
         (re.compile(r"website|portfolio|github", re.I), p["links"]["github"]),
         (re.compile(r"position are you applying", re.I), "__JOB_TITLE__"),
-        (re.compile(r"earliest start date", re.I), "May 2027 (flexible)"),
+        (re.compile(r"earliest start date", re.I), "May 2027 (flexible)"),  # Summer 2027 internship start, NOT grad date
         (re.compile(r"legally eligible to work", re.I), "Yes"),
         (re.compile(r"visa sponsorship", re.I), "No"),
         (re.compile(r"how did you hear", re.I), "Company careers page"),

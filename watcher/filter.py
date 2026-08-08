@@ -53,13 +53,25 @@ def run(verbose: bool = False) -> dict:
             reason = "title mismatch"
         else:
             # one-app-per-company: any other posting already queued or beyond?
+            # (David 2026-08-08: never intern + full-time at the same company.
+            # When the new posting is an INTERN role and the one in the pipeline
+            # is a not-yet-submitted full-time role, swap: intern wins.)
             dup = conn.execute(
-                "SELECT posting_id FROM postings WHERE lower(company)=lower(?) "
+                "SELECT posting_id, title, status FROM postings WHERE lower(company)=lower(?) "
                 "AND status IN ('queued','tailored','ready','submitted') LIMIT 1",
                 (r["company"],),
             ).fetchone()
             if dup:
-                reason = "company already in pipeline"
+                new_is_intern = bool(re.search(r"\bintern|co[- ]?op\b", r["title"], re.I))
+                old_is_intern = bool(re.search(r"\bintern|co[- ]?op\b", dup["title"], re.I))
+                if new_is_intern and not old_is_intern and dup["status"] != "submitted":
+                    conn.execute(
+                        "UPDATE postings SET status='filtered_out' WHERE posting_id=?",
+                        (dup["posting_id"],))
+                    if verbose:
+                        print(f"  SWAP: intern beats full-time at {r['company']} ({dup['title']})")
+                else:
+                    reason = "company already in pipeline"
         if reason:
             conn.execute("UPDATE postings SET status='filtered_out' WHERE posting_id=?",
                          (r["posting_id"],))

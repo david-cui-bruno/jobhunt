@@ -109,7 +109,7 @@ def _claude_pick(question: str, answer_intent: str, options: list[str]) -> str |
             f"Candidate profile intent: {answer_intent}\n"
             f"Application question: {question}\n"
             f"Options: {json.dumps(options)}\n"
-            "Candidate facts: Brown University BS, graduating May 2027; US citizen; "
+            "Candidate facts: Brown University BS; for INTERNSHIP roles graduating May 2028, for full-time May 2027; US citizen; "
             "born 2005; no prior employment at this company.\n"
             "Reply with EXACTLY one option, verbatim, nothing else."}],
     }).encode()
@@ -309,7 +309,7 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
         "For 'How Did You Hear About Us': prefer company website/careers site options. "
         "For source dropdowns with many options, answer with the best guess text; matching is fuzzy. "
         "Date fields (kind='date') expect MM/YYYY. Work experience dates come from the resume in the profile's work_history_summary. "
-        "Education From/To: 09/2024 to 05/2027. Degree dropdown: 'Bachelor of Science (B.S.)' or closest BS option. "
+        "Education From/To: 09/2024 to 05/2028 for internship roles, 09/2024 to 05/2027 for full-time roles (this posting's type decides). Degree dropdown: 'Bachelor of Science (B.S.)' or closest BS option. "
         "If a 'To' date field pairs with an 'I currently work here' checkbox, give the real end date instead of checking it."
     )
     body = json.dumps({
