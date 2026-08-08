@@ -16,7 +16,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT /
 
 DB = ROOT / "out" / "tracker.db"
 ET = ZoneInfo("America/New_York")
-DAILY_CAP = 12
+DAILY_CAP = 20
 
 LOC_PRIORITY = ["san francisco", "sf", "bay area", "palo alto", "mountain view", "menlo",
                 "new york", "nyc", "manhattan", "brooklyn", "remote"]
@@ -136,17 +136,14 @@ def run():
                 conn.commit()
                 print(f"[drip] emailed: {row['company']} — {row['title']}")
 
-    # 4) AUTO-APPROVE (David delegated judgment 2026-08-05): tailored postings on
-    # trusted ATSes go ready after a short 2h reply window (so a quick 'skip' reply
-    # still wins). Essays/email-apps remain explicitly human-gated elsewhere.
-    from jd import detect_ats as _ats
-    TRUSTED = ("greenhouse", "lever", "ashby", "workday", "smartrecruiters")
-    cutoff = time.time() - 2 * 3600
+    # 4) FULL AUTO (David ratified 2026-08-08): ALL tailored postings go ready
+    # after a 1h reply window (one drip cycle, so a quick 'skip' reply still
+    # wins). Unknown-ATS postings just settle 'manual' at submit time as before.
+    cutoff = time.time() - 1 * 3600
     for r in conn.execute("SELECT e.*, p.url, p.company FROM emails e JOIN postings p USING(posting_id) "
                           "WHERE p.status='tailored' AND e.sent_at < ? AND e.revision=0", (cutoff,)).fetchall():
-        if _ats(r["url"]) in TRUSTED:
-            conn.execute("UPDATE postings SET status='ready' WHERE posting_id=?", (r["posting_id"],))
-            print(f"[drip] auto-approved: {r['company']}")
+        conn.execute("UPDATE postings SET status='ready' WHERE posting_id=?", (r["posting_id"],))
+        print(f"[drip] auto-approved: {r['company']}")
     conn.commit()
 
     # 4b) weekly funnel stats (Sunday 6pm)
@@ -157,12 +154,32 @@ def run():
     except Exception as e:
         print(f"[drip] weekly stats failed: {e}")
 
-    # 5) nightly summary at 21h
+    # 5) nightly summary at 21h — FULL-AUTO audit digest: everything that was
+    # submitted/sent/answered today, so David reviews after the fact.
     if now.hour == 21:
+        import json as _json
         import mailer
         stats = dict(conn.execute("SELECT status, COUNT(*) FROM postings GROUP BY status").fetchall())
-        mailer.send("[jobhunt] daily summary",
-                    "Queue state:\n" + "\n".join(f"  {k}: {v}" for k, v in sorted(stats.items())))
+        day_start = int(datetime.datetime(now.year, now.month, now.day, tzinfo=ET).timestamp())
+        subs = conn.execute(
+            "SELECT p.company, p.title, a.ats, a.confirmation FROM applications a "
+            "JOIN postings p USING(posting_id) WHERE a.submitted_at >= ? "
+            "ORDER BY a.submitted_at", (day_start,)).fetchall()
+        lines = ["Queue state:"] + [f"  {k}: {v}" for k, v in sorted(stats.items())]
+        lines += ["", f"Applications submitted today ({len(subs)}):"]
+        lines += [f"  {r[0]} — {r[1]} [{r[2]}] {r[3] or ''}" for r in subs] or ["  (none)"]
+        qa_log = ROOT / "out" / "qa_answers.log"
+        if qa_log.exists():
+            today_str = now.strftime("%Y-%m-%d")
+            answers = [
+                _json.loads(l) for l in qa_log.read_text().splitlines()
+                if l.strip() and l.startswith('{"ts": "' + today_str)]
+            long_ones = [a for a in answers if len(str(a.get("answer", ""))) > 120]
+            lines += ["", f"Form answers auto-filled today: {len(answers)} "
+                          f"({len(long_ones)} long-form, shown below):"]
+            for a in long_ones:
+                lines += [f"  Q: {a.get('question')}", f"  A: {a.get('answer')}", ""]
+        mailer.send("[jobhunt] daily summary", "\n".join(lines))
     conn.close()
 
 

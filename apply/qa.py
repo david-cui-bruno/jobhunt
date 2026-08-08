@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import datetime
 import urllib.request
 from pathlib import Path
 
@@ -13,6 +14,18 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
+
+
+def _grounding() -> str:
+    """Truthful long-form material: STAR story bank + approved bullet bank.
+    Used ONLY as source facts for essay-style answers; never fabricated beyond."""
+    out = []
+    for p in (ROOT / "docs" / "interview_stories.md", ROOT / "resume" / "bullet_bank.md"):
+        if p.exists():
+            out.append(p.read_text())
+    return "\n\n".join(out)[:24000]
+
+
 MODEL = "claude-sonnet-5"
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
@@ -112,10 +125,18 @@ Additional standing instructions:
 
 Form controls (JSON): {controls}
 
+STORY BANK (truthful long-form source material):
+{stories}
+
 Return a JSON array, one entry per control you can answer: {{"id_or_name": ..., "answer": ...}}.
 - For selects/comboboxes, answer must EXACTLY match one of the provided options (or be a close prefix for autocomplete widgets).
 - Short factual free-text questions (visa status, startup experience, availability, grad year, "list your...", one-line whys) SHOULD be answered from the profile/work history, in 1-3 sentences.
-- OMIT only long-form essays (>100 words expected, e.g. "hardest technical challenge", "why us" essays) and anything the profile genuinely cannot justify.
+- Essay-style questions ("hardest technical challenge", "why us", "tell us about a project"):
+  answer them (FULL AUTO, David ratified 2026-08-08) in 80-150 words using ONLY the
+  STORY BANK below. Pick the most relevant story, adapt tone to the company, first person,
+  plain text, no markdown. NEVER invent projects, employers, metrics, or credentials that
+  are not in the story bank/profile. If nothing in the story bank honestly fits, OMIT it.
+- OMIT anything the profile and story bank genuinely cannot justify.
 - Dates: month names and 4-digit years as separate controls demand.
 Return ONLY the JSON array."""
 
@@ -163,7 +184,7 @@ def get_answers(controls: list[dict]) -> list[dict]:
         "model": MODEL, "max_tokens": 4000,
         "messages": [{"role": "user", "content": ANSWER_PROMPT.format(
             profile=yaml.dump(PROFILE), controls=json.dumps(unanswered)[:20000],
-            today=today)}],
+            stories=_grounding(), today=today)}],
     }).encode()
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages", data=body,
@@ -173,7 +194,25 @@ def get_answers(controls: list[dict]) -> list[dict]:
         resp = json.load(r)
     text = "".join(b.get("text", "") for b in resp["content"] if b.get("type") == "text")
     m = re.search(r"\[.*\]", text, re.S)
-    return json.loads(m.group(0)) if m else []
+    answers = json.loads(m.group(0)) if m else []
+    # FULL-AUTO audit trail: every answer Claude gives is logged for review
+    # (nightly summary points here; long essay answers especially).
+    try:
+        label_by_key = {}
+        for c in unanswered:
+            for k in (c.get("id"), c.get("name")):
+                if k:
+                    label_by_key.setdefault(k, c.get("label", ""))
+        with open(ROOT / "out" / "qa_answers.log", "a") as f:
+            for a in answers:
+                f.write(json.dumps({
+                    "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+                    "question": label_by_key.get(a.get("id_or_name"), a.get("id_or_name")),
+                    "answer": a.get("answer"),
+                }) + "\n")
+    except Exception:
+        pass
+    return answers
 
 
 def _best_option(ans: str, options: list[str]) -> str | None:
