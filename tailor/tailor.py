@@ -74,7 +74,7 @@ RULES:
    - PROJECTS in the plan's PROJECT_ORDER. Rewrite project bullets toward the angle too, from the same truthful facts.
    - SKILLS: every JD-named technology from MATCHES appears, placed FIRST on its line; drop the least relevant items. Never add anything not on the base resume or whitelist.
    - COURSEWORK: reorder so the plan-relevant courses come first.
-4. FILL the page: exactly 1 page with no big blank band at the bottom. If content runs short, add one more truthful bullet (bullet bank or plan MATCHES) to the most JD-relevant role or project rather than leaving whitespace.
+4. FILL the page: exactly 1 page with no big blank band at the bottom. If content runs short, add one more truthful bullet (bullet bank or plan MATCHES) to the most JD-relevant role or project rather than leaving whitespace. NEVER fill space with a summary/objective/profile blurb: the template is Jake's-resume style with sections EXACTLY Education, Work Experience, Projects, Skills, and nothing between the header and Education.
 5. LaTeX hygiene: arrows must be $\\rightarrow$ (NEVER plain "->", which renders as an upside-down question mark). Approximation must be $\\sim$ (NEVER bare "~" before a number, which renders as a space). ASCII only.
 
 {quality_rules}
@@ -361,6 +361,17 @@ def validate(tex: str, why: list | None = None) -> bool:
     n_bullets = len(re.findall(r"\\resumeItem(?:NH)?\{", edu))
     if n_bullets > 1:
         return fail("extra bullet in Education (only the Coursework line is allowed)")
+    # Jake's template: NO summary/objective (David 2026-08-08). Reject any prose
+    # between the heading tabular and the first section, and any summary-like section.
+    body = tex[tex.find("\\begin{document}"):]
+    m = re.search(r"\\end\{tabular\*\}(.*?)\\section", body, re.S)
+    if m:
+        between = re.sub(r"%.*", "", m.group(1)).strip()
+        if len(between) > 10:
+            return fail("summary/blurb between header and first section (Jake's template forbids)")
+    for s in re.findall(r"\\section\*?\{([^}]*)\}", body):
+        if re.search(r"summary|objective|about|profile", s, re.I):
+            return fail(f"forbidden section '{s}' (Jake's template: no summary/objective)")
     return True
 
 
