@@ -47,10 +47,12 @@
 19. lob-transformer — Found and fixed a data-leakage bug in the standard FI-2010 setup (files silently concatenate 5 stocks; naive sliding windows cross stock boundaries), with segment detection and split hygiene enforced by construction and 33 unit tests
 20. lob-transformer — Ran seeded ablations (context length, feature-order control, depth) attributing the transformer's +25 F1 gain to sequence modeling rather than capacity; reported honest gap vs published DeepLOB results with reproducible per-run JSON artifacts
 
-# PROPOSED raft-kv bullets (2026-08-08). Source: raft-kv repo results/chaos_summary.json,
+# Bullets 21-24 approved 2026-08-08. Source: raft-kv repo results/chaos_summary.json,
 # mutation_summary.json, m1_deep_hunt.json, figure8_summary.json (all committed).
+# NOTE: 24 is a compact alternative to 21+23 — use 21+23 OR 24, never all three together.
+# 22 works as an optional third line alongside either choice.
 
-21. [PENDING] raft-kv — Implemented Raft consensus + linearizable KV store as a pure state machine verified by deterministic simulation: 1000 seeded chaos schedules (1,674 crash-restarts, 1,491 partitions, 10% msg loss, ~941k messages) with 5 safety invariants checked every tick and zero violations
-22. [PENDING] raft-kv — Built Wing-Gong linearizability checker validating 51k client operations across chaos schedules against a sequential put/get/CAS spec, with exactly-once client sessions; checker itself unit-tested to reject stale reads, lost updates, and lying CAS results
-23. [PENDING] raft-kv — Used mutation testing to measure test-suite power: 3 of 4 injected Raft bugs caught within 3 random schedules, but the Figure 8 commit bug (§5.4.2) survived 5,000 — closed the gap with a scripted adversarial interleaving that triggers state-machine divergence deterministically
-24. [PENDING] raft-kv (compact variant of 21+23) — Raft + linearizable KV verified by deterministic simulation: 1000 seeded chaos schedules, 5 invariants per tick, 0 violations; mutation testing exposed that random fault injection misses the Figure 8 bug in 5,000 schedules, fixed with a scripted adversarial scenario
+21. raft-kv — Implemented Raft consensus + linearizable KV store as a pure state machine verified by deterministic simulation: 1000 seeded chaos schedules (1,674 crash-restarts, 1,491 partitions, 10% msg loss, ~941k messages) with 5 safety invariants checked every tick and zero violations
+22. raft-kv — Built Wing-Gong linearizability checker validating 51k client operations across chaos schedules against a sequential put/get/CAS spec, with exactly-once client sessions; checker itself unit-tested to reject stale reads, lost updates, and lying CAS results
+23. raft-kv — Used mutation testing to measure test-suite power: 3 of 4 injected Raft bugs caught within 3 random schedules, but the Figure 8 commit bug (§5.4.2) survived 5,000 — closed the gap with a scripted adversarial interleaving that triggers state-machine divergence deterministically
+24. raft-kv (compact variant of 21+23) — Raft + linearizable KV verified by deterministic simulation: 1000 seeded chaos schedules, 5 invariants per tick, 0 violations; mutation testing exposed that random fault injection misses the Figure 8 bug in 5,000 schedules, fixed with a scripted adversarial scenario
