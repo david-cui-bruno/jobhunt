@@ -194,6 +194,19 @@ def apply_rippling(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) 
                 if clicked:
                     break
             if not clicked:
+                # Playwright click gets intercepted by an overlay on this board
+                # (recon 2026-08-08); a synthetic DOM click dispatches fine.
+                for scope in (frame, page):
+                    r = scope.evaluate("""() => {
+                        const b = [...document.querySelectorAll('button')]
+                            .find(x => /apply|submit/i.test(x.innerText || ''));
+                        if (b) { b.click(); return true; }
+                        return false;
+                    }""")
+                    if r:
+                        clicked = True
+                        break
+            if not clicked:
                 raise PWTimeout("no visible enabled Submit/Apply button")
             page.wait_for_timeout(6000)
             _shot(page, slug, "submitted")
