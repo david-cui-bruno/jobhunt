@@ -69,7 +69,7 @@ RULES:
 3. Execute the plan aggressively:
    - WORK EXPERIENCE ORDER IS FIXED reverse-chronological: Framewise Health, then Freya, then Sotatek. NEVER reorder employers; tailor each role's bullets instead.
    - Rewrite bullets to serve the ANGLE, using the VOCAB where truthful. Every MATCHES line must be visible in the final resume where the plan says. Expand what the plan emphasizes, compress what it doesn't. GAPS get adjacent-honest framing only.
-   - IMPACT FIRST, AND BOLD IT: every work/project bullet must contain a concrete outcome (metric, scale, or consequence) stated as impressively as the truth allows, and the impact phrase must be wrapped in \\textbf{...}. Exactly one bold phrase per bullet, covering just the outcome (e.g. \\textbf{cutting p99 turn latency $\\sim$35\\%}), never the whole bullet.
+   - IMPACT FIRST, AND BOLD IT: every work/project bullet must contain a concrete outcome (metric, scale, or consequence) stated as impressively as the truth allows, and the impact phrase must be wrapped in \\textbf{{...}}. Exactly one bold phrase per bullet, covering just the outcome (e.g. \\textbf{{cutting p99 turn latency $\\sim$35\\%}}), never the whole bullet.
    - PROJECTS in the plan's PROJECT_ORDER. Rewrite project bullets toward the angle too, from the same truthful facts.
    - SKILLS: every JD-named technology from MATCHES appears, placed FIRST on its line; drop the least relevant items. Never add anything not on the base resume or whitelist.
    - COURSEWORK: reorder so the plan-relevant courses come first.
