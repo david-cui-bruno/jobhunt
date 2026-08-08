@@ -44,6 +44,13 @@ EXTRACT_JS = """
       const wrap = el.closest('div[class*=question], fieldset, .field, [role=group]');
       t = wrap?.querySelector('label, legend, .label')?.innerText || '';
     }
+    if (!t) {
+      // Ashby: question text lives on the _fieldEntry wrapper (e.g. date pickers)
+      const fe = el.closest('[class*=_fieldEntry], [class*=fieldEntry]');
+      t = fe?.querySelector('label, [class*=_label], [class*=question-title]')?.innerText || '';
+      if (!t && fe) t = (fe.innerText || '').split('\\n')[0] || '';
+    }
+    if (!t) t = el.placeholder || '';
     return t.replace(/\\s+/g, ' ').trim().slice(0, 200);
   };
   const groupInfo = (el) => {
@@ -272,7 +279,15 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
         if not c:
             failed.append(a["id_or_name"])
             continue
-        sel = f"[id=\"{c['id']}\"]" if c["id"] else f"[name=\"{c['name']}\"]"
+        if c["id"]:
+            sel = f"[id=\"{c['id']}\"]"
+        elif c["name"]:
+            sel = f"[name=\"{c['name']}\"]"
+        else:
+            # no id/name (Ashby date pickers): find the input inside the field
+            # wrapper whose text contains the question label
+            lab = (c["label"] or "").replace('"', '\\"')[:80]
+            sel = f"[class*=fieldEntry]:has-text(\"{lab}\") input, [class*=_fieldEntry]:has-text(\"{lab}\") input"
         ans = str(a["answer"])
         ok = False
         try:

@@ -157,12 +157,23 @@ def apply_rippling(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) 
             return result
 
         try:
-            # consent radio (text-message updates): standing instruction = agree
+            # Consent radio gates the Apply button (recon 2026-08-08: SpreeAI).
+            # Radios have NO label association; find by nearby text via DOM walk.
             try:
-                consent = frame.locator("label:has-text('I consent to receiving text messages')").first
-                if consent.count():
-                    consent.click(timeout=2000)
-                    page.wait_for_timeout(300)
+                frame.evaluate("""() => {
+                    const radios = [...document.querySelectorAll('input[type=radio]')];
+                    for (const r of radios) {
+                        let n = r.parentElement, txt = '';
+                        for (let d = 0; d < 5 && n && !txt.trim(); d++, n = n.parentElement)
+                            txt = (n.innerText || '').trim();
+                        if (/yes.*consent/i.test(txt) && !/not consent/i.test(txt.split('\\n')[0])) {
+                            if (!r.checked) r.click();
+                            return txt.slice(0, 60);
+                        }
+                    }
+                    return null;
+                }""")
+                page.wait_for_timeout(1200)
             except Exception:
                 pass
             # The Apply/Submit button lives in the PARENT page's sticky header
