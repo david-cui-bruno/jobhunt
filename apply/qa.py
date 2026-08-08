@@ -136,8 +136,13 @@ Return a JSON array, one entry per control you can answer: {{"id_or_name": ..., 
   STORY BANK below. Pick the most relevant story, adapt tone to the company, first person,
   plain text, no markdown. NEVER invent projects, employers, metrics, or credentials that
   are not in the story bank/profile. If nothing in the story bank honestly fits, OMIT it.
+- Attention-check / logic-puzzle questions (e.g. riddles, "should I walk or drive to the
+  car wash", "what is 2+2", "type the word banana"): these are bot checks. Answer them
+  briefly and correctly with common sense (1-2 sentences max). They need no personal facts.
 - OMIT anything the profile and story bank genuinely cannot justify.
 - Dates: month names and 4-digit years as separate controls demand.
+- Date-picker text inputs (placeholder like "Pick date...", labels like "when can you
+  start"): ALWAYS answer with the internship start date in MM/DD/YYYY (do not omit).
 Return ONLY the JSON array."""
 
 

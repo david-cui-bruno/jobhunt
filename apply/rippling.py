@@ -157,13 +157,33 @@ def apply_rippling(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) 
             return result
 
         try:
+            # consent radio (text-message updates): standing instruction = agree
+            try:
+                consent = frame.locator("label:has-text('I consent to receiving text messages')").first
+                if consent.count():
+                    consent.click(timeout=2000)
+                    page.wait_for_timeout(300)
+            except Exception:
+                pass
             # The Apply/Submit button lives in the PARENT page's sticky header
             # (recon 2026-08-08: SpreeAI), not inside the application iframe.
-            # Try the frame first (older boards), then fall back to the page.
-            btn = frame.locator("button:has-text('Submit'), button:has-text('Apply')")
-            if not btn.count():
-                btn = page.locator("button:has-text('Submit'), button:has-text('Apply')")
-            btn.last.click(timeout=6000)
+            # Search frame then page; click the first VISIBLE, enabled match.
+            clicked = False
+            for scope in (frame, page):
+                cands = scope.locator("button:has-text('Submit'), button:has-text('Apply')")
+                for i in range(cands.count()):
+                    b = cands.nth(i)
+                    try:
+                        if b.is_visible() and b.is_enabled():
+                            b.click(timeout=6000)
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if clicked:
+                    break
+            if not clicked:
+                raise PWTimeout("no visible enabled Submit/Apply button")
             page.wait_for_timeout(6000)
             _shot(page, slug, "submitted")
             body = page.inner_text("body").lower()
