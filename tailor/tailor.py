@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -363,6 +364,9 @@ def validate(tex: str, why: list | None = None) -> bool:
     return True
 
 
+PDFLATEX = shutil.which("pdflatex") or "/Library/TeX/texbin/pdflatex"
+
+
 def compile_pdf(tex: str, out_pdf: Path) -> bool:
     """Compile; also records the page count from pdflatex's log into
     LAST_PAGE_COUNT (object streams make counting pages from PDF bytes
@@ -374,7 +378,7 @@ def compile_pdf(tex: str, out_pdf: Path) -> bool:
         src.write_text(tex)
         for _ in range(2):  # two passes for refs
             p = subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "resume.tex"],
+                [PDFLATEX, "-interaction=nonstopmode", "-halt-on-error", "resume.tex"],
                 cwd=td, capture_output=True, timeout=120,
             )
         pdf = Path(td) / "resume.pdf"
