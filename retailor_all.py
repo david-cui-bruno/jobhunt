@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parent
 conn = sqlite3.connect(ROOT / "out" / "tracker.db")
 rows = [r[0] for r in conn.execute(
     "SELECT p.posting_id FROM postings p JOIN emails e USING(posting_id) "
-    "WHERE p.status IN ('tailored','ready')")]
+    "WHERE p.status IN ('tailored','ready') "
+    "AND p.posting_id NOT LIKE '%rivian%embeddedplatforms%'")]
 conn.close()
 
 print(f"retailoring {len(rows)} postings", flush=True)
