@@ -374,9 +374,23 @@ def current_step(page) -> str:
     return ""
 
 
+def _account_scope(page):
+    """The account form can render in the main page or an iframe (Medtronic).
+    Return the frame that actually contains it, else the page itself."""
+    for f in page.frames:
+        try:
+            if f.locator("[data-automation-id='createAccountSubmitButton'], "
+                         "[data-automation-id='signInSubmitButton']").count():
+                return f
+        except Exception:
+            continue
+    return page
+
+
 def maybe_create_account(page, company_key: str) -> None:
     """Some tenants interpose account creation. Use profile email + stored password."""
-    if not page.locator("[data-automation-id='createAccountSubmitButton']").count():
+    scope = _account_scope(page)
+    if not scope.locator("[data-automation-id='createAccountSubmitButton']").count():
         return
     conn = sqlite3.connect(DB)
     conn.execute("CREATE TABLE IF NOT EXISTS wd_accounts (tenant TEXT PRIMARY KEY, email TEXT, password TEXT, created_at INTEGER)")
@@ -387,33 +401,34 @@ def maybe_create_account(page, company_key: str) -> None:
                      (company_key, PROFILE["email"], pw, int(time.time())))
         conn.commit()
     conn.close()
-    page.locator("input[data-automation-id='email']").fill(PROFILE["email"])
-    page.locator("input[data-automation-id='password']").fill(pw)
-    vp = page.locator("input[data-automation-id='verifyPassword']")
+    scope.locator("input[data-automation-id='email']").fill(PROFILE["email"])
+    scope.locator("input[data-automation-id='password']").fill(pw)
+    vp = scope.locator("input[data-automation-id='verifyPassword']")
     if vp.count():
         vp.fill(pw)
-    cb = page.locator("input[data-automation-id='createAccountCheckbox']")
+    cb = scope.locator("input[data-automation-id='createAccountCheckbox']")
     if cb.count():
         try:
             cb.check()
         except Exception:
             cb.evaluate("el => el.click()")
-    page.locator("[data-automation-id='createAccountSubmitButton']").click()
+    scope.locator("[data-automation-id='createAccountSubmitButton']").click()
     page.wait_for_timeout(4000)
 
 
 def maybe_sign_in(page, company_key: str) -> None:
     """If tenant bounces to sign-in (account exists), use stored credentials."""
-    if not page.locator("[data-automation-id='signInSubmitButton']").count():
+    scope = _account_scope(page)
+    if not scope.locator("[data-automation-id='signInSubmitButton']").count():
         return
     conn = sqlite3.connect(DB)
     row = conn.execute("SELECT email, password FROM wd_accounts WHERE tenant=?", (company_key,)).fetchone()
     conn.close()
     if not row:
         return
-    page.locator("input[data-automation-id='email']").fill(row[0])
-    page.locator("input[data-automation-id='password']").fill(row[1])
-    page.locator("[data-automation-id='signInSubmitButton']").click()
+    scope.locator("input[data-automation-id='email']").fill(row[0])
+    scope.locator("input[data-automation-id='password']").fill(row[1])
+    scope.locator("[data-automation-id='signInSubmitButton']").click()
     page.wait_for_timeout(4000)
 
 
@@ -487,8 +502,9 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                 page.wait_for_timeout(1000)
         # Some tenants (Medtronic) don't navigate on the Apply click: go directly
         # to the canonical autofill route, which surfaces the account gate.
+        # NOTE: the account form may live in an IFRAME (Medtronic), so check frames.
         if not (af.count() and af.is_visible()) and \
-                not page.locator("[data-automation-id='createAccountSubmitButton'], [data-automation-id='signInSubmitButton']").count():
+                _account_scope(page) is page:
             page.goto(url.rstrip("/") + "/apply/autofillWithResume",
                       wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(3500)

@@ -253,8 +253,15 @@ def _fetch_gh_code(timeout_s: int = 90) -> str | None:
             for m in data.get("messages", [])[:5]:
                 full = mailer._call(f"/messages/{m['id']}?format=full")
                 text = mailer.extract_plain(full) or full.get("snippet", "")
-                mm = _re.search(r"\b([A-Z0-9]{6})\b", text)
-                if mm and int(full.get("internalDate", 0)) / 1000 > _time.time() - 300:
+                # Real format (observed 2026-08-09): "paste this code into the
+                # security code field on your application: cIE2e3Yj" - 8 chars,
+                # MIXED case (old regex assumed 6-char uppercase and never matched).
+                mm = _re.search(r"security code field on your application:\s*([A-Za-z0-9]{4,12})", text)
+                if not mm:
+                    mm = _re.search(r"\bcode\b[^:]{0,60}:\s*([A-Za-z0-9]{6,12})\b", text)
+                if not mm:
+                    mm = _re.search(r"\b([A-Z0-9]{6})\b", text)  # legacy format
+                if mm and int(full.get("internalDate", 0)) / 1000 > _time.time() - 600:
                     return mm.group(1)
         except Exception:
             pass
