@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import datetime
 import urllib.request
 from pathlib import Path
@@ -193,7 +194,8 @@ def get_answers(controls: list[dict]) -> list[dict]:
         return []
     today = datetime.date.today().strftime("%m/%d/%Y")
     body = json.dumps({
-        "model": MODEL, "max_tokens": 4000,
+        "model": MODEL, "max_tokens": 20000,  # reasoning tokens count against this;
+        # 4000 truncated mid-array on 25-control forms (Zipline 2026-08-09)
         "messages": [{"role": "user", "content": ANSWER_PROMPT.format(
             profile=yaml.dump(PROFILE), controls=json.dumps(unanswered)[:20000],
             stories=_grounding(), today=today)}],
@@ -206,7 +208,20 @@ def get_answers(controls: list[dict]) -> list[dict]:
         resp = json.load(r)
     text = "".join(b.get("text", "") for b in resp["content"] if b.get("type") == "text")
     m = re.search(r"\[.*\]", text, re.S)
-    answers = json.loads(m.group(0)) if m else []
+    if m:
+        answers = json.loads(m.group(0))
+    else:
+        # truncated output: salvage every complete object so a long form
+        # degrades to partial fills instead of silently zero (fail-open)
+        objs = re.findall(r'\{"id_or_name":.*?\}', text, re.S)
+        answers = []
+        for o in objs:
+            try:
+                answers.append(json.loads(o))
+            except Exception:
+                continue
+        if answers:
+            print(f"[qa] output truncated; salvaged {len(answers)} answers", file=sys.stderr)
     # FULL-AUTO audit trail: every answer Claude gives is logged for review
     # (nightly summary points here; long essay answers especially).
     try:
