@@ -66,3 +66,23 @@
 26. zonal-ecu-sim — Implemented UDS (ISO 14229) diagnostics over ISO-TP on a zonal gateway: sessions with S3 timeout, seed/key security access, DTC read/clear derived from live fault flags, multi-frame transfers, plus allowlist routing and token-bucket rate limiting isolating the untrusted diag bus (verified by adversarial injection tests: zero frames leaked)
 27. zonal-ecu-sim — Verified fault handling end-to-end with live fault injection: thermal-runaway drill latches BMS contactors open and drops the VCU to limp mode with torque gated to zero; dead-sensor drill caps torque at 30% and recovers; diagnosed and fixed a head-of-line-blocking bus bug where one stalled client wedged the network (non-blocking fan-out, per-client queues, overrun drop)
 28. zonal-ecu-sim (compact variant of 25+26) — Four-ECU vehicle network in C11 over emulated CAN-FD: DBC-generated signal packing (cross-validated vs cantools), UDS/ISO-TP diagnostics with seed/key security, allowlist gateway isolating an untrusted diag bus, all behavior verified by live integration + adversarial injection tests
+
+# Bullets 29-32 approved 2026-08-09. Source: canary-operator repo
+# (github.com/david-cui-bruno/canary-operator): envtest suite (6 scenarios) +
+# real kind-cluster acceptance run documented in README.
+# NOTE: 31 is a compact variant of 29+30 — use 29+30 OR 31, never all three.
+
+29. canary-operator — Built a Kubernetes operator (Go, controller-runtime) for progressive canary rollouts: gated step schedule shifts replicas to a canary Deployment while holding total serving capacity invariant, with per-step progress deadlines and pod-restart budgets triggering automatic rollback
+30. canary-operator — Designed crash-safe reconciliation where CRD status + cluster state fully determine every decision (deterministic canary adoption, finalizer cleanup); verified with 6 integration scenarios against a real kube-apiserver plus an end-to-end kind-cluster run covering promotion and ImagePullBackOff rollback
+31. canary-operator (compact variant of 29+30) — Kubernetes operator (Go) for canary rollouts: capacity-invariant step schedule, health-gated auto-rollback, crash-safe state derivation; envtest-verified (6 scenarios vs real kube-apiserver) plus live kind-cluster promotion and rollback runs
+32. canary-operator — Integration test caught a real reconciler bug pre-release: health gates stopped firing while rollouts were parked at pause steps (pod restarts don't bump owned-Deployment generation); fixed with bounded requeues and locked in by the failing-then-passing test
+
+# Bullets 33-36 approved 2026-08-09. Source: metal-kernels repo
+# (github.com/david-cui-bruno/metal-kernels), results/*.json committed;
+# bench/verify_claims.py re-derives all 28 README numbers (28/28).
+# NOTE: 35 is a compact variant of 33+34 — use 33+34 OR 35, never all three.
+
+33. metal-kernels — Hand-wrote Metal compute kernels on Apple Silicon: matmul progression from naive (598 GF/s) to threadgroup-tiled (1,082) to simdgroup-matrix hardware (2,512 GF/s, 4.2x), reaching 42% of Apple's closed-source MPS GEMM; every output cross-validated byte-identically against torch.mm
+34. metal-kernels — Built a fused softmax kernel (per-row threadgroup parallel reductions, 3 memory trips vs 5) that beats torch.softmax on every tested shape (1.2-2.4x) and sustains 363 GB/s effective bandwidth at 16k columns, with overflow-range and small-shape numerics verified to <3e-8
+35. metal-kernels (compact variant of 33+34) — Metal GPU kernels on Apple Silicon: matmul naive->tiled->simdgroup (4.2x, 42% of MPS) and fused softmax beating torch.softmax up to 2.4x; outputs cross-validated against PyTorch, GPU-timestamp benchmarks with committed JSON artifacts
+36. metal-kernels — Benchmarked with GPU-side timestamps (median-of-5, warmup excluded) against PyTorch MPS baselines on identical shapes; automated claim verifier re-derives all 28 published numbers from committed artifacts and fails CI-style on drift
