@@ -23,7 +23,7 @@ sys.path[:0] = [str(ROOT / "apply"), str(ROOT / "notify")]
 DB = ROOT / "out" / "tracker.db"
 ET = ZoneInfo("America/New_York")
 HOURLY_CAP = 3
-POSTING_TIMEOUT_SECONDS = int(os.environ.get("JOBHUNT_POSTING_TIMEOUT_SECONDS", "180"))
+POSTING_TIMEOUT_SECONDS = int(os.environ.get("JOBHUNT_POSTING_TIMEOUT_SECONDS", "300"))
 PLAYWRIGHT_TIMEOUT_MS = int(os.environ.get("JOBHUNT_PLAYWRIGHT_TIMEOUT_MS", "30000"))
 
 

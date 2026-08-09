@@ -130,7 +130,10 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
         # code from Gmail and type it before the required-fields scan.
         sec = page.locator("input[id*=security-input], input[name*=security-input]")
         if sec.count():
-            code = _fetch_gh_code()
+            # Budget-aware: the submit worker kills the posting at 180s total, so
+            # the Gmail poll must fit inside what's left (bug: 240s poll > 180s cap
+            # made every inline-verification posting time out on 2026-08-09).
+            code = _fetch_gh_code(timeout_s=90)
             if code:
                 n = sec.count()
                 if n >= len(code):
@@ -237,7 +240,7 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
     return result
 
 
-def _fetch_gh_code(timeout_s: int = 240) -> str | None:
+def _fetch_gh_code(timeout_s: int = 90) -> str | None:
     """Poll Gmail for the newest Greenhouse verification code."""
     import re as _re
     import time as _time

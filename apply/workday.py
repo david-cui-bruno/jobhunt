@@ -485,8 +485,20 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                 break
             except Exception:
                 page.wait_for_timeout(1000)
+        # Some tenants (Medtronic) don't navigate on the Apply click: go directly
+        # to the canonical autofill route, which surfaces the account gate.
+        if not (af.count() and af.is_visible()) and \
+                not page.locator("[data-automation-id='createAccountSubmitButton'], [data-automation-id='signInSubmitButton']").count():
+            page.goto(url.rstrip("/") + "/apply/autofillWithResume",
+                      wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(3500)
         maybe_create_account(page, company_key)
         maybe_sign_in(page, company_key)
+        # after account creation/sign-in the autofill choice may render fresh
+        try:
+            af.wait_for(state="visible", timeout=8000)
+        except Exception:
+            pass
         if af.count() and af.is_visible():
             af.click(timeout=8000)
         up = page.locator("[data-automation-id='file-upload-input-ref']").first
