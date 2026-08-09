@@ -125,12 +125,35 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
         result["qa_failed"] = failed_qa
         page.wait_for_timeout(1000)
 
+        # NEW Greenhouse flow (recon 2026-08-09, The Nuclear Company): the email
+        # verification code boxes render INLINE on the form pre-submit. Fetch the
+        # code from Gmail and type it before the required-fields scan.
+        sec = page.locator("input[id*=security-input], input[name*=security-input]")
+        if sec.count():
+            code = _fetch_gh_code()
+            if code:
+                n = sec.count()
+                if n >= len(code):
+                    for i, ch in enumerate(code[:n]):
+                        sec.nth(i).fill(ch)
+                        page.wait_for_timeout(120)
+                else:
+                    sec.first.fill(code)
+                page.wait_for_timeout(600)
+            else:
+                result["reason"] = "inline verification code email not found"
+                _shot(page, slug, "fail_code")
+                browser.close()
+                return result
+
         required_empty = page.evaluate("""
             () => {
                 const bad = [];
                 document.querySelectorAll('[aria-required="true"], [required]').forEach(el => {
                     // react-select hidden decoy inputs: not user-facing
                     if (el.getAttribute('aria-hidden') === 'true') return;
+                    // inline verification code boxes: handled by the code-fetch flow
+                    if (/security|verification/i.test(el.id || el.name || '')) return;
                     // file upload group: satisfied when a filename chip is rendered
                     if (el.classList?.contains('file-upload')) {
                         if (el.innerText.includes('.pdf') || el.querySelector('[class*=chip], [class*=file-name]')) return;
@@ -149,6 +172,9 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
                     const shell = (el.parentElement || el).closest('.select-shell, .select__container, [class*=select-shell]');
                     const chosen = shell?.querySelector('.select__single-value, [class*=singleValue], [class*=single-value]');
                     if (chosen && chosen.innerText.trim()) return;
+                    // multi-selects render chips instead of a single-value span
+                    const chips = shell?.querySelector('.select__multi-value, [class*=multiValue], [class*=multi-value]');
+                    if (chips) return;
                     if (el.type === 'checkbox' || el.type === 'radio') {
                         if ([...document.querySelectorAll('input')].filter(x => x.name === el.name).some(x => x.checked)) return;
                     }
