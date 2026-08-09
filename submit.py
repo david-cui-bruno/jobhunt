@@ -167,9 +167,8 @@ def _outcome(result: dict) -> str:
 
 
 def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
-    now = datetime.datetime.now(ET)
-    if not (9 <= now.hour < 21):
-        return []
+    # 24/7 (David 2026-08-09): ATS forms don't care what hour they're submitted
+    # and speed-to-apply wins. Human-ish pacing between submissions retained.
     if _user_is_gaming():
         print("[submit] deferring: game/fullscreen app active")
         return []
