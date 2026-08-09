@@ -376,14 +376,17 @@ def current_step(page) -> str:
 
 def _account_scope(page):
     """The account form can render in the main page or an iframe (Medtronic).
-    Return the frame that actually contains it, else the page itself."""
-    for f in page.frames:
-        try:
-            if f.locator("[data-automation-id='createAccountSubmitButton'], "
-                         "[data-automation-id='signInSubmitButton']").count():
-                return f
-        except Exception:
-            continue
+    Return the frame that actually contains it, else the page itself.
+    Polls briefly: the iframe often loads AFTER domcontentloaded."""
+    for _ in range(6):  # up to ~12s
+        for f in page.frames:
+            try:
+                if f.locator("[data-automation-id='createAccountSubmitButton'], "
+                             "[data-automation-id='signInSubmitButton']").count():
+                    return f
+            except Exception:
+                continue
+        page.wait_for_timeout(2000)
     return page
 
 

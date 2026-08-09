@@ -217,16 +217,26 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
                     browser.close()
                     return result
                 boxes = page.locator("input[autocomplete='one-time-code'], input[maxlength='1']")
-                if boxes.count() >= 6:
-                    for i, ch in enumerate(code[:6]):
+                nb = boxes.count()
+                if nb >= 4:
+                    # fill EVERY box (codes are 8 chars now; old code[:6] left the
+                    # last boxes empty so Submit stayed disabled - Scale 2026-08-09)
+                    for i, ch in enumerate(code[:nb]):
                         boxes.nth(i).fill(ch)
                 else:
                     page.locator("input[name*=code i], input[id*=code i], input[type=text]:below(:text('code'))").first.fill(code)
                 page.wait_for_timeout(800)
                 _shot(page, slug, "code_entered")
-                sub = page.locator("button:has-text('Submit application'), button:has-text('Verify'), input[type=submit]").first
-                if sub.count():
-                    sub.click(timeout=5000)
+                sub = page.locator("button:has-text('Submit application'), button:has-text('Verify'), input[type=submit]").last
+                try:
+                    if sub.count() and sub.is_enabled():
+                        sub.click(timeout=5000)
+                    else:
+                        # enabled-state race: JS click as fallback
+                        page.evaluate("""() => { const b=[...document.querySelectorAll('button, input[type=submit]')]
+                            .find(x => /submit application|verify/i.test(x.innerText || x.value || '')); if (b) b.click(); }""")
+                except Exception:
+                    pass
                 page.wait_for_timeout(4000)
             _shot(page, slug, "submitted")
             body = page.inner_text("body").lower()
