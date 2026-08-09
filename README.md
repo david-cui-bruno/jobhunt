@@ -32,6 +32,7 @@ GitHub repos (Summer2027 listings)
 
 ## Layout
 - `watcher/`  poll + diff listing repos, filtering rules
+- `sprint.py` fast lane: every 4 min, brand-new postings are tailored + submitted immediately (speed-to-apply)
 - `tailor/`   LaTeX resume tailoring + PDF compile
 - `apply/`    per-ATS Playwright adapters
 - `resume/`   your base LaTeX resume (source of truth)
