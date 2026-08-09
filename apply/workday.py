@@ -415,7 +415,13 @@ def maybe_create_account(page, company_key: str) -> None:
             cb.check()
         except Exception:
             cb.evaluate("el => el.click()")
-    scope.locator("[data-automation-id='createAccountSubmitButton']").click()
+    # Workday overlays the real button with a click_filter div that intercepts
+    # pointer events (Medtronic trace 2026-08-09): click the overlay if present.
+    overlay = scope.locator("[data-automation-id='click_filter'][aria-label='Create Account']")
+    if overlay.count():
+        overlay.first.click()
+    else:
+        scope.locator("[data-automation-id='createAccountSubmitButton']").click()
     page.wait_for_timeout(4000)
 
 
@@ -431,7 +437,11 @@ def maybe_sign_in(page, company_key: str) -> None:
         return
     scope.locator("input[data-automation-id='email']").fill(row[0])
     scope.locator("input[data-automation-id='password']").fill(row[1])
-    scope.locator("[data-automation-id='signInSubmitButton']").click()
+    overlay = scope.locator("[data-automation-id='click_filter'][aria-label='Sign In']")
+    if overlay.count():
+        overlay.first.click()
+    else:
+        scope.locator("[data-automation-id='signInSubmitButton']").click()
     page.wait_for_timeout(4000)
 
 
@@ -520,9 +530,15 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
             pass
         if af.count() and af.is_visible():
             af.click(timeout=8000)
+            page.wait_for_timeout(3000)
+            # Medtronic ordering: the Create Account gate appears AFTER choosing
+            # autofill (debug trace 2026-08-09). Re-check it before expecting
+            # the upload zone.
+            maybe_create_account(page, company_key)
+            maybe_sign_in(page, company_key)
         up = page.locator("[data-automation-id='file-upload-input-ref']").first
         try:
-            up.wait_for(state="attached", timeout=10000)
+            up.wait_for(state="attached", timeout=20000)
             up.set_input_files(str(resume_pdf))
             page.wait_for_timeout(5000)
         except Exception:
