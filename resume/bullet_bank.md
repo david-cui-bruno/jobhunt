@@ -86,3 +86,11 @@
 34. metal-kernels — Built a fused softmax kernel (per-row threadgroup parallel reductions, 3 memory trips vs 5) that beats torch.softmax on every tested shape (1.2-2.4x) and sustains 363 GB/s effective bandwidth at 16k columns, with overflow-range and small-shape numerics verified to <3e-8
 35. metal-kernels (compact variant of 33+34) — Metal GPU kernels on Apple Silicon: matmul naive->tiled->simdgroup (4.2x, 42% of MPS) and fused softmax beating torch.softmax up to 2.4x; outputs cross-validated against PyTorch, GPU-timestamp benchmarks with committed JSON artifacts
 36. metal-kernels — Benchmarked with GPU-side timestamps (median-of-5, warmup excluded) against PyTorch MPS baselines on identical shapes; automated claim verifier re-derives all 28 published numbers from committed artifacts and fails CI-style on drift
+
+# Bullets 37-39 approved 2026-08-09. Source: metal-kernels repo results/attention.json,
+# results/sdpa.json (committed); bench/verify_claims.py re-derives all 45 numbers.
+# NOTE: 39 is a compact variant of 37+38 — use 37+38 OR 39, never all three.
+
+37. metal-kernels (flash attention) — Implemented flash attention in Metal (online-softmax running max/sum with accumulator rescaling, K/V streamed through threadgroup memory): O(N) memory per head lets N=8192 sequences run where the unfused pipeline's 2.1 GB attention matrix is infeasible, and beats the unfused baseline 1.25-1.6x at equal shapes
+38. metal-kernels (flash attention) — Debugged and optimized the kernel through a measured ladder (4.5x total at N=2048): caught an undefined-behavior divergent simd_shuffle via non-aligned-shape verification, then fixed threadgroup-memory bank conflicts (+2x), replaced shuffles with uniform-address broadcasts (+1.5x), vectorized dot products with float4 (+1.5x); output matches torch scaled_dot_product_attention to 1.2e-6
+39. metal-kernels (flash attention, compact variant of 37+38) — Flash attention in Metal: online softmax, O(N) memory (runs N=8192 where unfused needs an infeasible 2.1 GB), 1.6x vs unfused after a measured optimization ladder (bank conflicts, broadcast vs shuffle, float4); validated against torch SDPA to 1.2e-6
