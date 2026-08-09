@@ -138,10 +138,12 @@ def run():
 
     # 4) FULL AUTO (David ratified 2026-08-08): ALL tailored postings go ready
     # after a 1h reply window (one drip cycle, so a quick 'skip' reply still
-    # wins). Unknown-ATS postings just settle 'manual' at submit time as before.
+    # wins). Revised postings re-enter the same flow: sent_at resets on each
+    # revision, so the 1h window restarts from the latest revision reply.
+    # Unknown-ATS postings just settle 'manual' at submit time as before.
     cutoff = time.time() - 1 * 3600
     for r in conn.execute("SELECT e.*, p.url, p.company FROM emails e JOIN postings p USING(posting_id) "
-                          "WHERE p.status='tailored' AND e.sent_at < ? AND e.revision=0", (cutoff,)).fetchall():
+                          "WHERE p.status='tailored' AND e.sent_at < ?", (cutoff,)).fetchall():
         conn.execute("UPDATE postings SET status='ready' WHERE posting_id=?", (r["posting_id"],))
         print(f"[drip] auto-approved: {r['company']}")
     conn.commit()
