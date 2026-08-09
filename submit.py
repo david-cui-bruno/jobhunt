@@ -202,12 +202,20 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
             "dry_run": dry_run,
         })
         outcome = _outcome(res)
-        status_for_outcome = {
-            "submitted": "submitted",
-            "manual": "manual",
-            "retryable_failure": "failed",
-            "failed": "failed",
-        }.get(outcome, "failed")
+        # retryable (timeouts, network blips): stay 'ready' so the next hourly
+        # sweep retries automatically, up to 3 attempts, then settle failed.
+        # (Before this, retryable_failure settled 'failed' and was never retried;
+        # Kastle and Scale both needed manual requeues on 2026-08-08.)
+        attempts = (r["attempt_count"] or 0) if "attempt_count" in r.keys() else 0
+        if outcome == "retryable_failure" and attempts < 2:
+            status_for_outcome = "ready"
+        else:
+            status_for_outcome = {
+                "submitted": "submitted",
+                "manual": "manual",
+                "retryable_failure": "failed",
+                "failed": "failed",
+            }.get(outcome, "failed")
         reason = str(res.get("reason", ""))
         _mark_outcome(conn, r["posting_id"], status_for_outcome, outcome, reason, dry_run)
         if outcome == "submitted" and not dry_run:
@@ -232,6 +240,15 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
 
 
 if __name__ == "__main__":
+    # rotate old screenshots (14d) so out/ doesn't grow unbounded (32MB after day 1)
+    try:
+        shots = ROOT / "out" / "screenshots"
+        cutoff_ts = time.time() - 14 * 86400
+        for f in shots.glob("*.png"):
+            if f.stat().st_mtime < cutoff_ts:
+                f.unlink()
+    except Exception:
+        pass
     dry = "--dry" in sys.argv
     for r in submit_ready(dry_run=dry):
         print(r)
