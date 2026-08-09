@@ -38,10 +38,15 @@ Rules:
 - <=140 words, plain text. No flattery, no "I hope this finds you well".
 - Lead with the 1-2 most relevant facts for THIS posting.
 - Mention the resume is attached.
+- THE ONLY ATTACHMENT IS THE RESUME PDF. NEVER claim to include anything else
+  (video, portfolio, code sample, cover letter). If the posting REQUIRES extra
+  material we cannot attach, do not pretend: return {{"needs_manual": true}}
+  instead of a draft so a human can prepare it.
 - If the posting names a person, address them; else "Hi <Company> team".
 - Sign off: David Cui, davidcui824@gmail.com, github.com/david-cui-bruno
 
-Return ONLY JSON: {{"to": "email found in posting or ''", "subject": str, "body": str}}"""
+Return ONLY JSON: {{"to": "email found in posting or ''", "subject": str, "body": str}}
+or {{"needs_manual": true, "reason": str}} when required materials exceed a resume."""
 
 
 def _claude(prompt: str) -> dict | None:
@@ -89,6 +94,15 @@ def compose_ready_email_postings(limit: int = 3) -> list[str]:
         if not text:
             continue
         d = _claude(DRAFT_PROMPT.format(text=text[:3000]))
+        if d and d.get("needs_manual"):
+            # posting requires materials beyond a resume (video demo etc.):
+            # never fake it; park for David with the reason (Tasklet lesson 2026-08-09)
+            conn.execute("UPDATE postings SET status='manual', outcome='manual', last_error=? "
+                         "WHERE posting_id=?",
+                         (f"email app needs extra materials: {str(d.get('reason'))[:200]}",
+                          r["posting_id"]))
+            conn.commit()
+            continue
         if not d or not d.get("body"):
             continue
         to_addr = (d.get("to") or "").strip()
