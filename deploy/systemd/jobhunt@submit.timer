@@ -1,0 +1,13 @@
+[Unit]
+Description=Run jobhunt submit queue
+
+[Timer]
+OnBootSec=8min
+OnUnitActiveSec=65min
+AccuracySec=1min
+RandomizedDelaySec=2min
+Persistent=true
+Unit=jobhunt@submit.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Run jobhunt sprint lane
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=4min
+AccuracySec=30s
+RandomizedDelaySec=20s
+Persistent=true
+Unit=jobhunt@sprint.service
+
+[Install]
+WantedBy=timers.target

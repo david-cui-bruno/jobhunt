@@ -1,0 +1,13 @@
+[Unit]
+Description=Run jobhunt Kith queue synchronization
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=15min
+AccuracySec=1min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=jobhunt-queue-sync.service
+
+[Install]
+WantedBy=timers.target

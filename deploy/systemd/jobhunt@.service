@@ -1,0 +1,23 @@
+[Unit]
+Description=Jobhunt %i worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=jobhunt
+Group=jobhunt
+WorkingDirectory=/opt/jobhunt
+EnvironmentFile=-/etc/jobhunt/jobhunt.env
+Environment=PYTHONUNBUFFERED=1
+Environment=JOBHUNT_HEADLESS=1
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/jobhunt/.cache/ms-playwright
+StateDirectory=jobhunt
+ExecStart=/usr/bin/flock -n /var/lib/jobhunt/%i.lock /opt/jobhunt/.venv/bin/python /opt/jobhunt/%i.py
+TimeoutStartSec=1h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/jobhunt/out /opt/jobhunt/resume /opt/jobhunt/secrets
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

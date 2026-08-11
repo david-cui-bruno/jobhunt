@@ -1,0 +1,21 @@
+[Unit]
+Description=Jobhunt Kith queue synchronization
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=jobhunt
+Group=jobhunt
+WorkingDirectory=/opt/jobhunt
+EnvironmentFile=-/etc/jobhunt/jobhunt.env
+Environment=PYTHONUNBUFFERED=1
+StateDirectory=jobhunt
+ExecStart=/usr/bin/flock -n /var/lib/jobhunt/queue-sync.lock /opt/jobhunt/.venv/bin/python /opt/jobhunt/sync_queue.py --env-file /etc/jobhunt/kith.env
+TimeoutStartSec=10min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/jobhunt/out
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

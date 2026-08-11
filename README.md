@@ -15,20 +15,26 @@ GitHub repos (Summer2027 listings)
           (reword-only, never fabricate) -> compile PDF
         |
         v
-  Apply: Playwright via Browserbase (residential proxy, stealth)
-         Adapters: Greenhouse, Lever, Ashby, Workday, iCIMS
+  Apply: Playwright via local Chromium (headless on VPS)
+         Adapters: Greenhouse, Lever, Ashby, Workday, Rippling, SmartRecruiters
         |
         v
   Approval queue (email w/ one-click approve) -> submit -> tracker
 ```
 
 ## Decisions log
-- Cloud-first: GitHub Actions orchestration, Browserbase for browser sessions
+- Original cloud-first design: GitHub Actions orchestration, Browserbase for browser sessions
 - Approval-queue mode first, full-auto later once trusted
 - Tailoring: reword/reorder existing content only
 - LLM: Anthropic API
 - Notifications: email (no dashboard)
 - State: SQLite tracker DB committed as artifact / S3
+
+The original cloud-first design is not the current runtime. The checked-in code
+uses local Chromium, a local SQLite database, and macOS `launchd` today. The VPS
+runbook below replaces `launchd` with `systemd` while keeping the same local
+browser and SQLite model. Browserbase and GitHub Actions are not wired into this
+checkout.
 
 ## Layout
 - `watcher/`  poll + diff listing repos, filtering rules
@@ -38,6 +44,15 @@ GitHub repos (Summer2027 listings)
 - `resume/`   your base LaTeX resume (source of truth)
 - `profile/`  application answers (copy profile.example.yaml -> profile.yaml)
 - `notify/`   email digests + approval links
+
+## VPS deployment
+
+The current checkout can run continuously on an Ubuntu VPS with local
+Playwright Chromium, SQLite, and systemd timers. See [`deploy/VPS.md`](deploy/VPS.md)
+for provisioning, Gmail reauthentication, staged enablement, monitoring, and
+rollback. Timers are intentionally installed disabled so the migration cannot
+send or submit anything before the operator verifies the queue and credentials.
+
 ## Kith referral queue sync
 
 `sync_queue.py` mirrors only the current `queued`, `ready`, and `failed` postings

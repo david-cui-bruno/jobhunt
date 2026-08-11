@@ -29,7 +29,15 @@ LIST_URL = "https://www.workatastartup.com/companies?jobType=intern&sortBy=creat
 
 
 def _browser(pw):
-    b = pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled", "--window-position=-3200,-3200"])
+    # Local macOS runs keep this browser hidden off-screen. A VPS has no
+    # desktop session, so allow deployment to opt into true headless mode.
+    headless = os.environ.get("JOBHUNT_HEADLESS", "0").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    args = ["--disable-blink-features=AutomationControlled"]
+    if not headless:
+        args.append("--window-position=-3200,-3200")
+    b = pw.chromium.launch(headless=headless, args=args)
     ctx = b.new_context(storage_state=str(STATE), viewport={"width": 1280, "height": 1200})
     return b, ctx
 
