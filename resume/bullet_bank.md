@@ -95,27 +95,28 @@
 38. metal-kernels (flash attention) — Debugged and optimized the kernel through a measured ladder (4.5x total at N=2048): caught an undefined-behavior divergent simd_shuffle via non-aligned-shape verification, then fixed threadgroup-memory bank conflicts (+2x), replaced shuffles with uniform-address broadcasts (+1.5x), vectorized dot products with float4 (+1.5x); output matches torch scaled_dot_product_attention to 1.2e-6
 39. metal-kernels (flash attention, compact variant of 37+38) — Flash attention in Metal: online softmax, O(N) memory (runs N=8192 where unfused needs an infeasible 2.1 GB), 1.6x vs unfused after a measured optimization ladder (bank conflicts, broadcast vs shuffle, float4); validated against torch SDPA to 1.2e-6
 
-# PROPOSED batchserve bullets (2026-08-11). Source: batchserve repo results/bench.json
+# Bullets 40-41 approved 2026-08-11. Source: batchserve repo results/bench.json
 # (committed), 5 tests pass. M5 Pro CPU, 48 ragged requests.
 
-40. [PENDING] batchserve — Built a miniature LLM inference engine implementing vLLM-style continuous batching and a paged KV cache (block pool + per-sequence block tables, O(1) allocation): iteration-level scheduler cuts TTFT p50 40% vs sequential (1.31s vs 2.20s) at 1.28x throughput on 48 ragged requests, with all three schedulers proven to emit byte-identical outputs
-41. [PENDING] batchserve — Designed reservation-based admission control making mid-flight KV-cache OOM impossible by construction (worst-case remaining growth reserved at admit time), tested against a deliberately undersized pool; documented honestly why static batching wins raw throughput on closed-loop workloads and continuous wins latency
+40. batchserve — Built a miniature LLM inference engine implementing vLLM-style continuous batching and a paged KV cache (block pool + per-sequence block tables, O(1) allocation): iteration-level scheduler cuts TTFT p50 40% vs sequential (1.31s vs 2.20s) at 1.28x throughput on 48 ragged requests, with all three schedulers proven to emit byte-identical outputs
+41. batchserve — Designed reservation-based admission control making mid-flight KV-cache OOM impossible by construction (worst-case remaining growth reserved at admit time), tested against a deliberately undersized pool; documented honestly why static batching wins raw throughput on closed-loop workloads and continuous wins latency
 
-# PROPOSED lsmdb bullets (2026-08-11). Source: lsmdb repo results/crash.log,
+# Bullets 42-43 approved 2026-08-11. Source: lsmdb repo results/crash.log,
 # results/bench.json (committed). M5 Pro, 100-byte values.
 
-42. [PENDING] lsmdb — Wrote a C++20 LSM-tree storage engine (WAL + memtable + leveled SSTables) whose durability contract is enforced by a kill -9 harness: 30/30 rounds SIGKILLing a live writer mid-flush/mid-compaction, 179k acked ops, zero lost or corrupted writes; CRC-bounded WAL replay and atomic rename+dir-fsync manifest commits
-43. [PENDING] lsmdb — Benchmarked the real cost of durability: 42K puts/s with per-write fsync vs 659K without (the 16x gap that motivates group commit), 6.9M/s memtable reads, 2.9M records/s WAL recovery; every number from committed artifacts with limitations (no block cache, single-level compaction) documented
+42. lsmdb — Wrote a C++20 LSM-tree storage engine (WAL + memtable + leveled SSTables) whose durability contract is enforced by a kill -9 harness: 30/30 rounds SIGKILLing a live writer mid-flush/mid-compaction, 179k acked ops, zero lost or corrupted writes; CRC-bounded WAL replay and atomic rename+dir-fsync manifest commits
+43. lsmdb — Benchmarked the real cost of durability: 42K puts/s with per-write fsync vs 659K without (the 16x gap that motivates group commit), 6.9M/s memtable reads, 2.9M records/s WAL recovery; every number from committed artifacts with limitations (no block cache, single-level compaction) documented
 
-# PROPOSED shardkv bullets (2026-08-11). Source: shardkv repo results/chaos_60s.log
+# Bullets 44-45 approved 2026-08-11. Source: shardkv repo results/chaos_60s.log
 # (committed), README chaos results.
 
-44. [PENDING] shardkv — Built a sharded 3-replica KV store (consistent-hash router, quorum-ack primary-backup replication, per-replica WAL) surviving randomized kill/restart chaos: 0 acked writes lost, 0 stale reads or phantoms across all runs, verified by a per-key linearizability checker that distinguishes true loss from legal indeterminate timeouts
-45. [PENDING] shardkv — Debugged split-brain to a working fencing protocol: monotonic per-shard epochs, stale-epoch replication rejection, zombie-primary self-demotion, and an adopt-or-failover client that repairs its view before promoting; measured the availability cost honestly (66-96%, failover-window dominated) and documented the lease-based fix
+44. shardkv — Built a sharded 3-replica KV store (consistent-hash router, quorum-ack primary-backup replication, per-replica WAL) surviving randomized kill/restart chaos: 0 acked writes lost, 0 stale reads or phantoms across all runs, verified by a per-key linearizability checker that distinguishes true loss from legal indeterminate timeouts
+45. shardkv — Debugged split-brain to a working fencing protocol: monotonic per-shard epochs, stale-epoch replication rejection, zombie-primary self-demotion, and an adopt-or-failover client that repairs its view before promoting; measured the availability cost honestly (66-96%, failover-window dominated) and documented the lease-based fix
 
-# PROPOSED minijit bullets (2026-08-11). Source: minijit repo results/bench.json,
+# Bullets 46-48 approved 2026-08-11. Source: minijit repo results/bench.json,
 # tests (committed). Apple Silicon, clang -O2, best-of-5 after warmup.
+# NOTE: 48 is a compact alternative to 46+47 — use 46+47 OR 48, never all three together.
 
-46. [PENDING] minijit — Wrote an ARM64 JIT compiler for a C-like integer language in ~740 lines of dependency-free C++20 (lexer, recursive-descent parser, stack-machine codegen, macOS W^X JIT-page mechanics): 13-21x measured speedup over the tree-walking interpreter with microsecond-scale (5-15us) compile times, harness asserts identical results before timing
-47. [PENDING] minijit — Differential-tested the JIT against its own interpreter as oracle: 300 randomly generated programs (nested control flow, recursion, division-by-zero edge cases) x 5 inputs with zero divergences, catching frame-corruption and instruction-encoding bug classes hand-written tests cannot reach
-48. [PENDING] minijit (compact variant of 46+47) — ARM64 JIT for a tiny language (~740 lines C++20): 13-21x vs interpreter at microsecond compile cost, differential-fuzzed against the interpreter as oracle (300 programs, 0 divergences), explicit W^X page management on Apple Silicon
+46. minijit — Wrote an ARM64 JIT compiler for a C-like integer language in ~740 lines of dependency-free C++20 (lexer, recursive-descent parser, stack-machine codegen, macOS W^X JIT-page mechanics): 13-21x measured speedup over the tree-walking interpreter with microsecond-scale (5-15us) compile times, harness asserts identical results before timing
+47. minijit — Differential-tested the JIT against its own interpreter as oracle: 300 randomly generated programs (nested control flow, recursion, division-by-zero edge cases) x 5 inputs with zero divergences, catching frame-corruption and instruction-encoding bug classes hand-written tests cannot reach
+48. minijit (compact variant of 46+47) — ARM64 JIT for a tiny language (~740 lines C++20): 13-21x vs interpreter at microsecond compile cost, differential-fuzzed against the interpreter as oracle (300 programs, 0 divergences), explicit W^X page management on Apple Silicon
