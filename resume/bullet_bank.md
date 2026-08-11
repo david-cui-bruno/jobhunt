@@ -116,6 +116,6 @@
 # PROPOSED minijit bullets (2026-08-11). Source: minijit repo results/bench.json,
 # tests (committed). Apple Silicon, clang -O2, best-of-5 after warmup.
 
-46. [PENDING] minijit — Wrote an ARM64 JIT compiler for a C-like integer language in ~740 lines of dependency-free C++20 (lexer, recursive-descent parser, stack-machine codegen, macOS W^X JIT-page mechanics): 13-21x measured speedup over the tree-walking interpreter with ~7 microsecond compile times, harness asserts identical results before timing
+46. [PENDING] minijit — Wrote an ARM64 JIT compiler for a C-like integer language in ~740 lines of dependency-free C++20 (lexer, recursive-descent parser, stack-machine codegen, macOS W^X JIT-page mechanics): 13-21x measured speedup over the tree-walking interpreter with microsecond-scale (5-15us) compile times, harness asserts identical results before timing
 47. [PENDING] minijit — Differential-tested the JIT against its own interpreter as oracle: 300 randomly generated programs (nested control flow, recursion, division-by-zero edge cases) x 5 inputs with zero divergences, catching frame-corruption and instruction-encoding bug classes hand-written tests cannot reach
-48. [PENDING] minijit (compact variant of 46+47) — ARM64 JIT for a tiny language (~740 lines C++20): 13-21x vs interpreter at ~7us compile cost, differential-fuzzed against the interpreter as oracle (300 programs, 0 divergences), explicit W^X page management on Apple Silicon
+48. [PENDING] minijit (compact variant of 46+47) — ARM64 JIT for a tiny language (~740 lines C++20): 13-21x vs interpreter at microsecond compile cost, differential-fuzzed against the interpreter as oracle (300 programs, 0 divergences), explicit W^X page management on Apple Silicon
