@@ -74,6 +74,13 @@ class AwsDeploymentTests(unittest.TestCase):
         self.assertNotIn('--value "${ANTHROPIC_API_KEY}"', script)
         self.assertIn("--cli-input-json", script)
 
+    def test_instance_reads_only_explicit_jobhunt_parameters(self) -> None:
+        iam = (AWS / "iam.tf").read_text()
+        policy = hcl_block(iam, 'data "aws_iam_policy_document" "instance_state"')
+        self.assertIn("parameter/${var.project_name}/anthropic_api_key", policy)
+        self.assertIn("parameter/${var.project_name}/kith_env", policy)
+        self.assertNotIn("parameter/${var.project_name}/*", policy)
+
     def test_sqlite_staging_is_consistent_and_removes_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

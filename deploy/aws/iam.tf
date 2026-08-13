@@ -52,9 +52,12 @@ data "aws_iam_policy_document" "instance_state" {
   }
 
   statement {
-    sid       = "ReadAnthropicParameter"
-    actions   = ["ssm:GetParameter"]
-    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/anthropic_api_key"]
+    sid     = "ReadJobhuntParameters"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/anthropic_api_key",
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/kith_env",
+    ]
   }
 
   statement {
