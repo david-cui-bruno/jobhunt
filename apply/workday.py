@@ -33,6 +33,14 @@ SHOTS = ROOT / "out" / "screenshots"
 DB = ROOT / "out" / "tracker.db"
 
 MAX_PAGES = 12  # wizard safety bound
+CREATE_ACCOUNT_OVERLAY = (
+    "[data-automation-id='click_filter'][aria-label*='Create Account'], "
+    "[data-automation-id='click_filter'][aria-label*='CreateAccount']"
+)
+SIGN_IN_OVERLAY = (
+    "[data-automation-id='click_filter'][aria-label*='Sign In'], "
+    "[data-automation-id='click_filter'][aria-label*='SignIn']"
+)
 
 
 class UnsafePrefilledAnswers(RuntimeError):
@@ -514,7 +522,7 @@ def maybe_create_account(page, company_key: str) -> None:
             cb.evaluate("el => el.click()")
     # Workday overlays the real button with a click_filter div that intercepts
     # pointer events (Medtronic trace 2026-08-09): click the overlay if present.
-    overlay = scope.locator("[data-automation-id='click_filter'][aria-label='Create Account']")
+    overlay = scope.locator(CREATE_ACCOUNT_OVERLAY)
     if overlay.count():
         overlay.first.click()
     else:
@@ -534,7 +542,7 @@ def maybe_sign_in(page, company_key: str) -> None:
         return
     scope.locator("input[data-automation-id='email']").fill(row[0])
     scope.locator("input[data-automation-id='password']").fill(row[1])
-    overlay = scope.locator("[data-automation-id='click_filter'][aria-label='Sign In']")
+    overlay = scope.locator(SIGN_IN_OVERLAY)
     if overlay.count():
         overlay.first.click()
     else:

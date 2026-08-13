@@ -14,6 +14,10 @@ import workday
 
 
 class WorkdayAnswerTests(unittest.TestCase):
+    def test_localized_workday_click_filters_are_supported(self) -> None:
+        self.assertIn("CreateAccount", workday.CREATE_ACCOUNT_OVERLAY)
+        self.assertIn("SignIn", workday.SIGN_IN_OVERLAY)
+
     def test_prompt_includes_grounding_without_missing_stories_placeholder(self) -> None:
         response = io.StringIO(json.dumps({"content": [{"type": "text", "text": "[]"}]}))
         fields = [
