@@ -165,7 +165,11 @@ chmod 600 /etc/jobhunt/jobhunt.env
 cd /opt/jobhunt
 systemctl disable --now jobhunt@drip.timer jobhunt@revise.timer jobhunt@submit.timer jobhunt@sprint.timer jobhunt@inbox.timer jobhunt-queue-sync.timer || true
 sudo -u jobhunt env PYTHONDONTWRITEBYTECODE=1 /opt/jobhunt/.venv/bin/python -m unittest discover -v -s /opt/jobhunt -p 'test*.py'
-sudo -u jobhunt env PYTHONDONTWRITEBYTECODE=1 /opt/jobhunt/.venv/bin/python -c 'from sync_queue import read_active_postings; from submit import submit_ready; print("active_rows:", len(read_active_postings())); print("submit_dry_run:", submit_ready(limit=1, dry_run=True))'
+set -a
+. /etc/jobhunt/jobhunt.env
+set +a
+sudo -u jobhunt --preserve-env=ANTHROPIC_API_KEY env PYTHONDONTWRITEBYTECODE=1 /opt/jobhunt/.venv/bin/python -c 'from sync_queue import read_active_postings; from submit import submit_ready; print("active_rows:", len(read_active_postings())); print("submit_dry_run:", submit_ready(limit=1, dry_run=True))'
+unset ANTHROPIC_API_KEY
 aws cloudwatch put-metric-data --region ${region} --namespace Jobhunt --metric-data MetricName=BootstrapSuccess,Value=1,Unit=Count
 rm -f /tmp/jobhunt-app.tar.gz /tmp/jobhunt-state.tar.gz /tmp/jobhunt-secrets.tar.gz
 echo BOOTSTRAP_OK

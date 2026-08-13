@@ -25,7 +25,11 @@ test -x /opt/jobhunt/.venv/bin/python
 cd /opt/jobhunt
 systemd-analyze verify /etc/systemd/system/jobhunt@.service /etc/systemd/system/jobhunt-queue-sync.service /etc/systemd/system/jobhunt@drip.timer /etc/systemd/system/jobhunt@revise.timer /etc/systemd/system/jobhunt@submit.timer /etc/systemd/system/jobhunt@sprint.timer /etc/systemd/system/jobhunt@inbox.timer /etc/systemd/system/jobhunt-queue-sync.timer
 sudo -u jobhunt env PYTHONDONTWRITEBYTECODE=1 /opt/jobhunt/.venv/bin/python -m unittest discover -v -s /opt/jobhunt -p 'test*.py'
-sudo -u jobhunt env PYTHONDONTWRITEBYTECODE=1 /opt/jobhunt/.venv/bin/python -c 'from sync_queue import read_active_postings; from submit import submit_ready; print("active_rows:", len(read_active_postings())); print("submit_dry_run:", submit_ready(limit=1, dry_run=True))'
+set -a
+. /etc/jobhunt/jobhunt.env
+set +a
+sudo -u jobhunt --preserve-env=ANTHROPIC_API_KEY env PYTHONDONTWRITEBYTECODE=1 /opt/jobhunt/.venv/bin/python -c 'from sync_queue import read_active_postings; from submit import submit_ready; print("active_rows:", len(read_active_postings())); print("submit_dry_run:", submit_ready(limit=1, dry_run=True))'
+unset ANTHROPIC_API_KEY
 sudo -u jobhunt env PLAYWRIGHT_BROWSERS_PATH=/opt/jobhunt/.cache/ms-playwright JOBHUNT_HEADLESS=1 /opt/jobhunt/.venv/bin/python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True); page=b.new_page(); page.set_content("<title>jobhunt smoke</title><p>ok</p>"); assert page.title()=="jobhunt smoke"; b.close(); p.stop(); print("chromium_smoke: ok")'
 pdflatex --version | head -1
 for timer in jobhunt@drip.timer jobhunt@revise.timer jobhunt@submit.timer jobhunt@sprint.timer jobhunt@inbox.timer jobhunt-queue-sync.timer; do
