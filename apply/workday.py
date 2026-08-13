@@ -35,6 +35,12 @@ DB = ROOT / "out" / "tracker.db"
 MAX_PAGES = 12  # wizard safety bound
 
 
+class UnsafePrefilledAnswers(RuntimeError):
+    def __init__(self, labels: list[str]):
+        self.labels = labels
+        super().__init__(f"unsafe prefilled answers: {labels}")
+
+
 def _shot(page, slug, stage):
     SHOTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(SHOTS / f"{slug}_{stage}.png"), full_page=True)
@@ -367,6 +373,28 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
     return answers
 
 
+def unsafe_prefilled_fields(fields: list[dict], company: str,
+                            approved_answers: dict | None = None) -> list[str]:
+    """Find sensitive answers already present in a saved draft or resume parse.
+
+    Workday persists drafts and can prefill answers before this worker runs. Those
+    values need the same approval and consistency checks as model-generated ones.
+    """
+    unsafe = []
+    for field in fields:
+        value = field.get("value")
+        if not value:
+            continue
+        policy_field = dict(field, company_context=company)
+        if qa.answer_requires_manual(
+            policy_field,
+            value,
+            approved_answers=approved_answers,
+        ):
+            unsafe.append(field.get("label") or field.get("faid") or "unknown field")
+    return unsafe
+
+
 def wd_page_errors(page) -> list[str]:
     errs = page.locator(
         "[data-automation-id='errorMessage'], [data-automation-id='errorBanner'], "
@@ -490,6 +518,9 @@ def fill_current_page(page, company_key: str, slug: str) -> None:
     fields = page.evaluate(WD_EXTRACT_JS)
     force_identity(page, fields)
     fields = page.evaluate(WD_EXTRACT_JS)
+    unsafe = unsafe_prefilled_fields(fields, company_key)
+    if unsafe:
+        raise UnsafePrefilledAnswers(unsafe)
     for f in fields:
         if f["kind"] == "dropdown" and not f["value"]:
             try:
@@ -612,7 +643,17 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
             # appear after earlier answers, so each pass re-extracts + re-harvests.
             advanced = False
             for fill_pass in range(3):
-                fill_current_page(page, company_key, slug)
+                try:
+                    fill_current_page(page, company_key, slug)
+                except UnsafePrefilledAnswers as exc:
+                    result.update(
+                        ok=True,
+                        reason=f"needs correction: unsafe prefilled answers: {exc.labels}",
+                        unanswered=exc.labels,
+                    )
+                    _shot(page, slug, "unsafe_prefilled")
+                    browser.close()
+                    return result
                 if fill_pass == 0:
                     _shot(page, slug, f"page{page_no}_{step[:20].replace(' ', '_')}")
                     result["pages"].append(step or f"page{page_no}")

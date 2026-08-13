@@ -29,6 +29,46 @@ class WorkdayAnswerTests(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", return_value=response):
             self.assertEqual(workday.wd_answers(fields, "Example", "Engineer"), [])
 
+    def test_saved_draft_answers_are_checked_against_approved_facts(self) -> None:
+        approved = {
+            "education": {
+                "expected_graduation_month": "June",
+                "expected_graduation_year": "2028",
+                "exact_graduation_date": None,
+            },
+            "company_facts": {
+                "LPL Financial": {"referral": False},
+            },
+        }
+        fields = [
+            {
+                "faid": "referral-right",
+                "label": "Were you referred by a current employee?",
+                "value": "No",
+            },
+            {
+                "faid": "referral-wrong",
+                "label": "Were you referred by a current employee?",
+                "value": "Yes",
+            },
+            {
+                "faid": "grad-day",
+                "label": "Graduation date",
+                "kind": "date",
+                "hasDay": True,
+                "value": "05/15/2028",
+            },
+        ]
+
+        self.assertEqual(
+            ["Were you referred by a current employee?", "Graduation date"],
+            workday.unsafe_prefilled_fields(
+                fields,
+                "lplfinancial",
+                approved_answers=approved,
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
