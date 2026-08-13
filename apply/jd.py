@@ -23,7 +23,24 @@ def _strip_html(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def canonical_application_url(url: str) -> str:
+    """Resolve supported ATS wrappers to the application URL the adapter expects.
+
+    Several employers keep their public careers URL while embedding a Greenhouse
+    application identified by ``gh_jid``.  The numeric token is sufficient to use
+    Greenhouse's official embedded application endpoint without guessing a board
+    slug or scraping employer-specific markup.
+    """
+    parsed = urllib.parse.urlparse(url)
+    greenhouse_ids = urllib.parse.parse_qs(parsed.query).get("gh_jid", [])
+    if greenhouse_ids and re.fullmatch(r"\d+", greenhouse_ids[0]):
+        token = urllib.parse.quote(greenhouse_ids[0], safe="")
+        return f"https://boards.greenhouse.io/embed/job_app?token={token}"
+    return url
+
+
 def detect_ats(url: str) -> str:
+    url = canonical_application_url(url)
     host = urllib.parse.urlparse(url).netloc.lower()
     if "greenhouse.io" in host: return "greenhouse"
     if "lever.co" in host: return "lever"
@@ -85,6 +102,7 @@ def _workday(url: str) -> str:
 
 def fetch_jd(url: str) -> str:
     """Best-effort JD text. Returns '' on total failure (tailor still works, generic)."""
+    url = canonical_application_url(url)
     ats = detect_ats(url)
     try:
         if ats == "greenhouse": return _greenhouse(url)[:12000]

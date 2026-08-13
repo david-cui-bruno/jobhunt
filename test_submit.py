@@ -7,9 +7,35 @@ from pathlib import Path
 from unittest import mock
 
 import submit
+import submit_worker
+from apply.jd import canonical_application_url, detect_ats
 
 
 class SubmitSafetyTests(unittest.TestCase):
+    def test_greenhouse_wrapper_urls_are_canonicalized_and_routed(self) -> None:
+        for url, token in (
+            ("https://www.hudsonrivertrading.com/careers/job/?gh_jid=8052083", "8052083"),
+            ("https://www.trlm.com/apply/5207089007?gh_jid=5207089007", "5207089007"),
+        ):
+            with self.subTest(url=url):
+                expected = f"https://boards.greenhouse.io/embed/job_app?token={token}"
+                self.assertEqual(canonical_application_url(url), expected)
+                self.assertEqual(detect_ats(url), "greenhouse")
+                adapter, waas, detected, target = submit_worker._adapter("other", url)
+                self.assertEqual(adapter.__name__, "apply_greenhouse")
+                self.assertFalse(waas)
+                self.assertEqual(detected, "greenhouse")
+                self.assertEqual(target, expected)
+
+    def test_unrecognized_careers_url_remains_manual(self) -> None:
+        url = "https://www.oracle.com/careers/"
+        self.assertEqual(canonical_application_url(url), url)
+        adapter, waas, detected, target = submit_worker._adapter("other", url)
+        self.assertIsNone(adapter)
+        self.assertFalse(waas)
+        self.assertEqual(detected, "other")
+        self.assertEqual(target, url)
+
     def test_both_dry_run_spellings_are_safe(self) -> None:
         self.assertTrue(submit._dry_run_requested(["submit.py", "--dry"]))
         self.assertTrue(submit._dry_run_requested(["submit.py", "--dry-run"]))

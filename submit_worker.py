@@ -16,31 +16,32 @@ sys.path[:0] = [str(ROOT / "apply"), str(ROOT / "notify"), str(ROOT / "watcher")
 
 
 def _adapter(ats: str, url: str):
-    from jd import detect_ats
+    from jd import canonical_application_url, detect_ats
 
-    detected = ats or detect_ats(url)
+    target_url = canonical_application_url(url)
+    detected = ats if ats and ats != "other" else detect_ats(target_url)
     if detected == "greenhouse":
         from greenhouse import apply_greenhouse
-        return apply_greenhouse, False, detected
+        return apply_greenhouse, False, detected, target_url
     if detected == "lever":
         from lever import apply_lever
-        return apply_lever, False, detected
+        return apply_lever, False, detected, target_url
     if detected == "ashby":
         from ashby import apply_ashby
-        return apply_ashby, False, detected
+        return apply_ashby, False, detected, target_url
     if detected == "workday":
         from workday import apply_workday
-        return apply_workday, False, detected
+        return apply_workday, False, detected, target_url
     if detected == "smartrecruiters":
         from smartrecruiters import apply_smartrecruiters
-        return apply_smartrecruiters, False, detected
+        return apply_smartrecruiters, False, detected, target_url
     if detected == "rippling":
         from rippling import apply_rippling
-        return apply_rippling, False, detected
+        return apply_rippling, False, detected, target_url
     if "workatastartup.com" in url:
         from waas import apply_waas
-        return apply_waas, True, "waas"
-    return None, False, detected
+        return apply_waas, True, "waas", target_url
+    return None, False, detected, target_url
 
 
 def main() -> int:
@@ -50,7 +51,7 @@ def main() -> int:
     slug = str(payload["slug"])
     pdf = Path(str(payload["resume_pdf"]))
     dry_run = bool(payload.get("dry_run", False))
-    fn, waas, detected = _adapter(ats, url)
+    fn, waas, detected, target_url = _adapter(ats, url)
     if fn is None:
         print(json.dumps({"outcome": "manual", "ok": False, "submitted": False,
                           "reason": f"no adapter for {detected}"}))
@@ -61,9 +62,9 @@ def main() -> int:
         # for the parent process to parse reliably.
         with contextlib.redirect_stdout(sys.stderr), contextlib.redirect_stderr(sys.stderr):
             if waas:
-                result = fn(url, slug, dry_run=dry_run)
+                result = fn(target_url, slug, dry_run=dry_run)
             else:
-                result = fn(url, pdf, slug, dry_run=dry_run)
+                result = fn(target_url, pdf, slug, dry_run=dry_run)
         result = dict(result or {})
         result.setdefault("ok", False)
         result.setdefault("submitted", False)
