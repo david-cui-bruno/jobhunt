@@ -16,6 +16,7 @@ traps, JD-skill coverage check with mechanical insert, compile gate, base fallba
 from __future__ import annotations
 
 import json
+import datetime
 import os
 import re
 import shutil
@@ -409,7 +410,7 @@ def compile_pdf(tex: str, out_pdf: Path) -> bool:
 LAST_PAGE_COUNT = 0
 
 
-def measure_fill(pdf: Path) -> float:
+def measure_fill(pdf: Path) -> float | None:
     """Fraction of the page height actually used (0..1): renders page 1 and
     finds the lowest row with ink. Pure stdlib: pdftoppm -> PGM bytes."""
     try:
@@ -418,7 +419,7 @@ def measure_fill(pdf: Path) -> float:
                             str(pdf), f"{td}/pg"], capture_output=True, timeout=60)
             pgms = sorted(Path(td).glob("pg*.pgm"))
             if not pgms:
-                return 1.0
+                return None
             data = pgms[0].read_bytes()
             # P5 header: magic, width height, maxval, then raw bytes
             parts = data.split(b"\n", 3)
@@ -431,7 +432,7 @@ def measure_fill(pdf: Path) -> float:
                     last_ink = row
             return last_ink / h
     except Exception:
-        return 1.0  # measurement failure must never block a resume
+        return None
 
 
 EXPAND_PROMPT = """This LaTeX resume leaves too much blank space: content ends at {fill_pct}% of the page. Make it fill the page (while staying EXACTLY 1 page):
@@ -531,14 +532,47 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
     out_pdf = OUT_DIR / f"{safe}.pdf"
     out_tex = OUT_DIR / f"{safe}.tex"
     out_plan = OUT_DIR / f"{safe}.plan.txt"
+    out_quality = OUT_DIR / f"{safe}.quality.json"
 
     plan = ""
+    plan_error = ""
+    critique_verdict = "not_run"
     if jd.strip():
         try:
             plan = make_plan(company, title, jd)
             out_plan.write_text(plan)  # auditable: why the resume looks how it looks
-        except Exception:
+        except Exception as exc:
             plan = ""
+            plan_error = f"{type(exc).__name__}: {exc}"[:500]
+
+    def write_quality(tex: str, source: str, review_required: bool, reason: str = "") -> None:
+        why: list[str] = []
+        structurally_valid = validate(tex, why)
+        covered, missing_skills = jd_skills_covered(tex, jd)
+        measured_fill = measure_fill(out_pdf)
+        if measured_fill is None:
+            review_required = True
+            reason = "; ".join(x for x in (reason, "page fill could not be measured") if x)
+        out_quality.write_text(json.dumps({
+            "version": 1,
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "posting_id": posting_id,
+            "company": company,
+            "title": title,
+            "source": source,
+            "review_required": review_required,
+            "reason": reason,
+            "plan_generated": bool(plan),
+            "plan_error": plan_error,
+            "critique_verdict": critique_verdict,
+            "structural_validation": "passed" if structurally_valid else "failed",
+            "validation_errors": why,
+            "page_count": LAST_PAGE_COUNT,
+            "fill_ratio": round(measured_fill, 4) if measured_fill is not None else None,
+            "jd_skill_coverage": "passed" if covered else "failed",
+            "missing_claimable_skills": missing_skills,
+            "expected_grad_date": GRAD_INTERN if re.search(r"\bintern|co[- ]?op\b", title, re.I) else GRAD_FULLTIME,
+        }, indent=2) + "\n")
 
     def finish(tex: str) -> Path | None:
         tex = sanitize(tex)
@@ -579,6 +613,9 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
         if jd.strip():
             for _ in range(2):
                 fill = measure_fill(out_pdf)
+                if fill is None:
+                    print("[tailor] page fill measurement unavailable; marking for review", file=sys.stderr)
+                    break
                 if fill >= 0.88:
                     break
                 print(f"[tailor] page only {fill:.0%} full; expanding", file=sys.stderr)
@@ -596,6 +633,12 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
                 tex = bigger
         out_tex.write_text(tex)
         log_skill_gaps(posting_id, company, plan)
+        write_quality(
+            tex,
+            source="tailored",
+            review_required=bool(jd.strip() and not plan),
+            reason="tailoring plan unavailable" if jd.strip() and not plan else "",
+        )
         return out_pdf
 
     for attempt in range(2):
@@ -609,7 +652,9 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
             for _ in range(2):
                 try:
                     strong, crit = critique(company, title, jd, tex)
+                    critique_verdict = "strong" if strong else "weak"
                 except Exception:
+                    critique_verdict = "error"
                     break
                 if strong:
                     break
@@ -625,9 +670,17 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
         result = finish(tex)
         if result:
             return result
-    # fallback: compile the base resume
-    if compile_pdf(BASE_TEX, out_pdf):
-        out_tex.write_text(BASE_TEX)
+    # Fallbacks are usable but must be visibly distinguishable from successful
+    # tailoring. Apply the role-dependent grad date even on this path.
+    fallback_tex = apply_grad_date(BASE_TEX, title)
+    if compile_pdf(fallback_tex, out_pdf):
+        out_tex.write_text(fallback_tex)
+        write_quality(
+            fallback_tex,
+            source="base_fallback",
+            review_required=True,
+            reason="tailored candidates failed validation or compilation",
+        )
         return out_pdf
     return None
 
