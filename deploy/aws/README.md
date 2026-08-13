@@ -122,6 +122,8 @@ The script:
 2. Copies `out/` and non-log files from `secrets/` while writers are stopped.
 3. Stores the Anthropic key as an SSM SecureString, not Terraform state or a
    process-list argument.
+   Approved sensitive application answers use the same pattern at
+   `/jobhunt/application_answers`; their value is never stored in Terraform or Git.
 4. Uses the private S3 bucket as an encrypted bootstrap staging area and purges
    every staged object version on either success or failure.
 5. Runs the existing Ubuntu installer through SSM.

@@ -1,0 +1,38 @@
+# Copy to a root-owned file outside the repository and set
+# JOBHUNT_APPLICATION_ANSWERS_FILE to its path. On AWS the populated value is
+# stored as an SSM SecureString and restored to /etc/jobhunt/application_answers.yaml.
+version: 1
+identity:
+  date_of_birth: null
+  pronouns: null
+  gender: null
+  disability:
+    current: null
+    history: null
+preferences:
+  hybrid: null
+  travel: null
+  future_contact: null
+  compensation_policy: null
+availability:
+  summer_2027:
+    pursue: true
+    start: null
+    end: null
+  fall_2026:
+    pursue: false
+    start: null
+    end: null
+  spring_2027:
+    pursue: false
+    start: null
+    end: null
+current_offers: []
+legal:
+  non_compete_or_conflict: null
+  security_clearance: null
+company_facts:
+  Example Company:
+    used_product: null
+    prior_employment: null
+    referral: null

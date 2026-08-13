@@ -11,6 +11,24 @@ import smartrecruiters  # noqa: E402
 
 
 class QaManualPolicyTest(unittest.TestCase):
+    APPROVED = {
+        "version": 1,
+        "identity": {
+            "date_of_birth": "06/01/2006",
+            "pronouns": "He/Him",
+            "disability": {"current": False, "history": False},
+        },
+        "preferences": {
+            "hybrid": True,
+            "compensation_policy": "Use an employer-published range; otherwise open / market rate.",
+        },
+        "current_offers": [{"company": "Soren", "deadline": None}],
+        "company_facts": {
+            "Sentry": {"used_product": True},
+            "LPL Financial": {"prior_employment": False},
+        },
+    }
+
     def test_smartrecruiters_intro_does_not_hardcode_a_grad_year(self):
         message = smartrecruiters._hiring_team_message(qa.PROFILE)
         self.assertNotIn("'27", message)
@@ -46,6 +64,47 @@ class QaManualPolicyTest(unittest.TestCase):
         control = {"id": "dis", "label": "Voluntary disability status", "value": ""}
         self.assertTrue(qa.answer_requires_manual(control, "No", profile_text=""))
         self.assertFalse(qa.answer_requires_manual(control, "No", profile_text="disability: no"))
+
+    def test_user_approved_answers_are_allowed_but_missing_deadlines_stay_manual(self):
+        controls = [
+            {"id": "dob", "label": "Date of birth", "value": ""},
+            {"id": "pronouns", "label": "Preferred pronouns", "value": ""},
+            {"id": "product", "label": "Have you ever used Sentry before?", "value": ""},
+            {"id": "prior", "label": "Have you worked for LPL Financial as an employee?", "value": ""},
+            {"id": "hybrid", "label": "Can you work in-office 3 days a week?", "value": ""},
+            {"id": "offer", "label": "Do you have an outstanding offer?", "value": ""},
+            {"id": "deadline", "label": "What is your offer deadline?", "value": ""},
+            {"id": "comp", "label": "Desired compensation", "value": "", "options": []},
+        ]
+        answers = [
+            {"id_or_name": "dob", "answer": "06/01/2006"},
+            {"id_or_name": "pronouns", "answer": "He/Him"},
+            {"id_or_name": "product", "answer": "Yes"},
+            {"id_or_name": "prior", "answer": "No"},
+            {"id_or_name": "hybrid", "answer": "Yes"},
+            {"id_or_name": "offer", "answer": "Yes, Soren"},
+            {"id_or_name": "deadline", "answer": "No deadline"},
+            {"id_or_name": "comp", "answer": "$50/hour"},
+        ]
+        allowed, blocked = qa.filter_manual_answers(
+            controls, answers, approved_answers=self.APPROVED
+        )
+        self.assertEqual(
+            {"dob", "pronouns", "product", "prior", "hybrid", "offer"},
+            {answer["id_or_name"] for answer in allowed},
+        )
+        self.assertEqual(
+            {"deadline", "comp"},
+            {answer["id_or_name"] for answer in blocked},
+        )
+
+    def test_only_relevant_sensitive_answers_enter_the_model_prompt(self):
+        context = qa.relevant_application_answers(
+            [{"label": "Preferred pronouns"}], approved=self.APPROVED
+        )
+        self.assertEqual("He/Him", context["identity"]["pronouns"])
+        self.assertNotIn("date_of_birth", context["identity"])
+        self.assertNotIn("current_offers", context)
 
     def test_get_answers_logs_allowed_and_blocked_with_context_without_api(self):
         controls = [

@@ -79,6 +79,7 @@ class AwsDeploymentTests(unittest.TestCase):
         policy = hcl_block(iam, 'data "aws_iam_policy_document" "instance_state"')
         self.assertIn("parameter/${var.project_name}/anthropic_api_key", policy)
         self.assertIn("parameter/${var.project_name}/kith_env", policy)
+        self.assertIn("parameter/${var.project_name}/application_answers", policy)
         self.assertNotIn("parameter/${var.project_name}/*", policy)
 
     def test_kith_config_is_restored_with_worker_read_access(self) -> None:
@@ -88,6 +89,13 @@ class AwsDeploymentTests(unittest.TestCase):
         self.assertIn("--name ${kith_parameter_name} --with-decryption", bootstrap)
         self.assertIn("chown root:jobhunt /etc/jobhunt/kith.env", bootstrap)
         self.assertIn("chmod 640 /etc/jobhunt/kith.env", bootstrap)
+
+    def test_application_answers_are_restored_with_worker_read_access(self) -> None:
+        bootstrap = (AWS / "stage-and-bootstrap.sh").read_text()
+        self.assertIn("--name ${application_answers_parameter_name} --with-decryption", bootstrap)
+        self.assertIn("chown root:jobhunt /etc/jobhunt/application_answers.yaml", bootstrap)
+        self.assertIn("chmod 640 /etc/jobhunt/application_answers.yaml", bootstrap)
+        self.assertIn("JOBHUNT_APPLICATION_ANSWERS_FILE=/etc/jobhunt/application_answers.yaml", bootstrap)
 
     def test_sqlite_staging_is_consistent_and_removes_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

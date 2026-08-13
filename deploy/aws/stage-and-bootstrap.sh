@@ -50,6 +50,7 @@ region="$(terraform -chdir="${TF_DIR}" output -raw aws_region)"
 bucket="$(terraform -chdir="${TF_DIR}" output -raw state_bucket)"
 parameter_name="$(terraform -chdir="${TF_DIR}" output -raw anthropic_parameter_name)"
 kith_parameter_name="${parameter_name%/*}/kith_env"
+application_answers_parameter_name="${parameter_name%/*}/application_answers"
 
 workdir="$(mktemp -d)"
 uploaded_prefix=""
@@ -159,7 +160,7 @@ chmod +x /opt/jobhunt/deploy/install-ubuntu.sh
 /opt/jobhunt/deploy/install-ubuntu.sh
 secret=\$(aws ssm get-parameter --region ${region} --name ${parameter_name} --with-decryption --query Parameter.Value --output text)
 umask 077
-printf 'ANTHROPIC_API_KEY=%s\nJOBHUNT_HEADLESS=1\nJOBHUNT_POSTING_TIMEOUT_SECONDS=300\nJOBHUNT_PLAYWRIGHT_TIMEOUT_MS=30000\n' "\$secret" > /etc/jobhunt/jobhunt.env
+printf 'ANTHROPIC_API_KEY=%s\nJOBHUNT_HEADLESS=1\nJOBHUNT_POSTING_TIMEOUT_SECONDS=300\nJOBHUNT_PLAYWRIGHT_TIMEOUT_MS=30000\nJOBHUNT_APPLICATION_ANSWERS_FILE=/etc/jobhunt/application_answers.yaml\n' "\$secret" > /etc/jobhunt/jobhunt.env
 unset secret
 chown root:root /etc/jobhunt/jobhunt.env
 chmod 600 /etc/jobhunt/jobhunt.env
@@ -171,6 +172,13 @@ if aws ssm get-parameter --region ${region} --name ${kith_parameter_name} --with
   chmod 640 /etc/jobhunt/kith.env
 else
   rm -f /etc/jobhunt/kith.env.tmp
+fi
+if aws ssm get-parameter --region ${region} --name ${application_answers_parameter_name} --with-decryption --query Parameter.Value --output text > /etc/jobhunt/application_answers.yaml.tmp 2>/dev/null; then
+  mv /etc/jobhunt/application_answers.yaml.tmp /etc/jobhunt/application_answers.yaml
+  chown root:jobhunt /etc/jobhunt/application_answers.yaml
+  chmod 640 /etc/jobhunt/application_answers.yaml
+else
+  rm -f /etc/jobhunt/application_answers.yaml.tmp
 fi
 cd /opt/jobhunt
 systemctl disable --now jobhunt@drip.timer jobhunt@revise.timer jobhunt@submit.timer jobhunt@sprint.timer jobhunt@inbox.timer jobhunt-queue-sync.timer || true

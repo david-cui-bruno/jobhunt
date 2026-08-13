@@ -311,6 +311,7 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
     today = datetime.date.today().strftime("%m/%d/%Y")
     prompt = qa.ANSWER_PROMPT.format(
         profile=yaml.dump(PROFILE),
+        application_answers=yaml.safe_dump(qa.relevant_application_answers(unanswered)),
         controls=json.dumps(unanswered)[:20000],
         stories=qa._grounding(),
         today=today,

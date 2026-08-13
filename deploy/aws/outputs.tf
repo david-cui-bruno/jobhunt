@@ -23,6 +23,11 @@ output "anthropic_parameter_name" {
   value       = "/${var.project_name}/anthropic_api_key"
 }
 
+output "application_answers_parameter_name" {
+  description = "SecureString containing approved personal application answers, populated outside Terraform state."
+  value       = "/${var.project_name}/application_answers"
+}
+
 output "backup_vault" {
   description = "AWS Backup vault containing daily EC2 recovery points."
   value       = aws_backup_vault.jobhunt.name

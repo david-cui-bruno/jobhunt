@@ -17,6 +17,68 @@ ROOT = Path(__file__).resolve().parent.parent
 PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
 
 
+def _load_application_answers() -> dict:
+    """Load user-approved sensitive answers outside the source tree when configured."""
+    configured = os.environ.get("JOBHUNT_APPLICATION_ANSWERS_FILE", "").strip()
+    candidates = [Path(configured)] if configured else []
+    candidates.append(ROOT / "profile" / "application_answers.yaml")
+    for path in candidates:
+        try:
+            if path.is_file():
+                value = yaml.safe_load(path.read_text()) or {}
+                if isinstance(value, dict):
+                    return value
+        except OSError:
+            continue
+    return {}
+
+
+APPLICATION_ANSWERS = _load_application_answers()
+
+
+def relevant_application_answers(controls: list[dict], approved: dict | None = None) -> dict:
+    """Expose only answer-bank sections relevant to controls on this form."""
+    source = APPLICATION_ANSWERS if approved is None else approved
+    question = " ".join(_control_question_text(control).lower() for control in controls)
+    result: dict = {"version": source.get("version", 1)}
+    identity = source.get("identity") or {}
+    selected_identity = {}
+    if re.search(r"\b(date of birth|dob|birth date|birthday|age)\b", question):
+        selected_identity["date_of_birth"] = identity.get("date_of_birth")
+    if re.search(r"\bpronouns?\b", question):
+        selected_identity["pronouns"] = identity.get("pronouns")
+    if re.search(r"\b(disability|disabled|impairment|medical condition|health condition)\b", question):
+        selected_identity["disability"] = identity.get("disability")
+    if selected_identity:
+        result["identity"] = selected_identity
+    preferences = source.get("preferences") or {}
+    selected_preferences = {}
+    for key, pattern in {
+        "hybrid": r"\b(hybrid|onsite|in[- ]?office|days? (?:a|per) week|work schedule)\b",
+        "travel": r"\btravel\b",
+        "future_contact": r"\b(future contact|marketing|talent community)\b",
+        "compensation_policy": r"\b(compensation|salary|pay|hourly rate|bonus|equity)\b",
+    }.items():
+        if re.search(pattern, question):
+            selected_preferences[key] = preferences.get(key)
+    if selected_preferences:
+        result["preferences"] = selected_preferences
+    if re.search(r"\b(offer|deadline)\b", question):
+        result["current_offers"] = source.get("current_offers") or []
+    if re.search(r"\b(start|end|availability|available|internship dates|season)\b", question):
+        result["availability"] = source.get("availability") or {}
+    legal = source.get("legal") or {}
+    if re.search(r"\b(non[- ]?compete|conflict|clearance|public trust)\b", question):
+        result["legal"] = legal
+    companies = {}
+    for company, facts in (source.get("company_facts") or {}).items():
+        if str(company).lower() in question:
+            companies[company] = facts
+    if companies:
+        result["company_facts"] = companies
+    return result
+
+
 def _grounding() -> str:
     """Truthful long-form material: STAR story bank + approved bullet bank.
     Used ONLY as source facts for essay-style answers; never fabricated beyond."""
@@ -118,17 +180,20 @@ ANSWER_PROMPT = """You fill job application forms for this candidate. Profile (s
 
 {profile}
 
+APPROVED APPLICATION ANSWERS AND POLICIES (source of truth; omit a personal answer if absent):
+{application_answers}
+
 Additional standing instructions:
-- Compensation expectation questions: answer "Open / market rate" or pick the no-preference option; if a number is required, use market-rate intern comp for the role's industry.
-- Outstanding offers/deadlines: No.
+- Compensation expectation questions: follow the approved compensation policy. Prefer an employer-published range or no-preference option. Never invent a numeric amount.
+- Outstanding offers/deadlines: report only the approved current offers and deadlines. Never default to No.
 - Willing to relocate: Yes. Open to any listed office location; prefer SF then NYC if ranked. If preferred cities are not offered, choose any offered US city over non-US.
 - If a select's options are provided, your answer MUST be copied verbatim from the options list (character for character). Pick the option most consistent with the profile.
 - How did you hear about us: "Company website" or closest option.
 - Signature blocks: "Name"/"Signature" = the candidate's full legal name; "Date" = today's date {today} (use the format the field implies, default MM/DD/YYYY).
 - Internship availability dates: start "05/25/2027", end "08/20/2027" (Summer 2027). For Fall 2026 roles: start "09/08/2026", end "12/18/2026". Infer season from the job title/context.
 - Consent/acknowledgment checkboxes (privacy policy, accurate-info attestations, future contact): Yes/agree.
-- Previous employment at this company / referral: No.
-- Non-compete / can you work legally: consistent with profile (US citizen, no sponsorship needed).
+- Previous employment at this company / referrals: use only a matching company-specific approved answer; otherwise omit.
+- Non-compete and conflicts: use only an explicit approved answer. Work authorization remains governed by the profile.
 - Internship history: yes, completed software engineering internships (see resume); none at a hedge fund/prop firm unless resume says otherwise.
 
 Form controls (JSON): {controls}
@@ -176,7 +241,59 @@ def _control_question_text(control: dict) -> str:
     return " ".join(str(control.get(k) or "") for k in ("label", "id", "name", "placeholder")).strip()
 
 
-def answer_requires_manual(control: dict, answer: object, profile_text: str | None = None) -> bool:
+def _company_answer_is_approved(question: str, field: str, answers: dict) -> bool:
+    for company, facts in (answers.get("company_facts") or {}).items():
+        if str(company).lower() in question and isinstance(facts, dict) and facts.get(field) is not None:
+            return True
+    return False
+
+
+def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -> bool:
+    """Whether a normally-manual category has an explicit user-approved source."""
+    question = _control_question_text(control).lower()
+    identity = approved.get("identity") or {}
+    preferences = approved.get("preferences") or {}
+    legal = approved.get("legal") or {}
+    offers = approved.get("current_offers") or []
+    answer_text = str(answer or "")
+    if re.search(r"\b(date of birth|dob|birth date|birthday|age)\b", question):
+        return bool(identity.get("date_of_birth"))
+    if re.search(r"\b(preferred pronouns?|pronouns?)\b", question):
+        return bool(identity.get("pronouns"))
+    if re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
+        disability = identity.get("disability") or {}
+        return disability.get("current") is not None and disability.get("history") is not None
+    if re.search(r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary))\b", question):
+        if not preferences.get("compensation_policy"):
+            return False
+        numeric = bool(re.search(r"\$|\b\d+(?:\.\d+)?\b", answer_text))
+        offered_options = [str(option) for option in control.get("options") or []]
+        return not numeric or answer_text in offered_options
+    if re.search(r"\b(offer deadline|exploding offer|deadline to accept)\b", question):
+        return any(isinstance(offer, dict) and offer.get("deadline") for offer in offers)
+    if re.search(r"\b(outstanding offer|competing offer|pending offer)\b", question):
+        return bool(offers)
+    if re.search(r"\bhave you (?:ever )?used\b.*\bbefore\b|\b(used|use|customer of|experience with|familiar with|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b", question):
+        return _company_answer_is_approved(question, "used_product", approved)
+    if re.search(r"\b(previously employed|prior employment|worked (?:at|for)|former employee)\b", question):
+        return _company_answer_is_approved(question, "prior_employment", approved)
+    if re.search(r"\b(referral|referred|refer you|know anyone|current employee)\b", question):
+        return _company_answer_is_approved(question, "referral", approved)
+    if re.search(r"\b(non[- ]?compete|conflict of interest|conflicts?|restrictive covenant|moonlighting|outside employment)\b", question):
+        return legal.get("non_compete_or_conflict") is not None
+    if re.search(r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b", question):
+        return legal.get("security_clearance") is not None
+    if re.search(r"\btravel\b", question):
+        return preferences.get("travel") is not None
+    if re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|onsite|hybrid)\b", question):
+        return preferences.get("hybrid") is not None
+    if re.search(r"\b(future contact|marketing (?:email|communication|consent)|talent community)\b", question):
+        return preferences.get("future_contact") is not None
+    return False
+
+
+def answer_requires_manual(control: dict, answer: object, profile_text: str | None = None,
+                           approved_answers: dict | None = None) -> bool:
     """Pure fail-closed policy for questions needing explicit user facts/preferences.
 
     Returns True when a model answer must be dropped so optional fields remain blank
@@ -185,6 +302,9 @@ def answer_requires_manual(control: dict, answer: object, profile_text: str | No
     question = _control_question_text(control).lower()
     if not question:
         return False
+    approved = APPLICATION_ANSWERS if approved_answers is None else approved_answers
+    if _blocked_answer_is_approved(control, answer, approved):
+        return False
     if re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
         if profile_text and re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation)\b", profile_text, re.I):
             return False
@@ -192,7 +312,7 @@ def answer_requires_manual(control: dict, answer: object, profile_text: str | No
 
 
 def filter_manual_answers(controls: list[dict], answers: list[dict], profile_text: str | None = None,
-                          key_field: str = "id_or_name") -> tuple[list[dict], list[dict]]:
+                          key_field: str = "id_or_name", approved_answers: dict | None = None) -> tuple[list[dict], list[dict]]:
     """Return (allowed, blocked) answers using only inputs, with no side effects."""
     by_key = {}
     for c in controls:
@@ -203,7 +323,7 @@ def filter_manual_answers(controls: list[dict], answers: list[dict], profile_tex
     for a in answers:
         answer_key = a.get(key_field)
         c = by_key.get(answer_key, {"label": answer_key or ""})
-        (blocked if answer_requires_manual(c, a.get("answer"), profile_text) else allowed).append(a)
+        (blocked if answer_requires_manual(c, a.get("answer"), profile_text, approved_answers) else allowed).append(a)
     return allowed, blocked
 
 
@@ -227,6 +347,8 @@ def log_answer_decisions(controls: list[dict], allowed: list[dict], blocked: lis
                         "question": label_by_key.get(answer_key, answer_key),
                         "answer": answer.get("answer"),
                     }
+                    if re.search(r"\b(date of birth|dob|birth date|birthday|disability|medical condition)\b", str(rec["question"]), re.I):
+                        rec["answer"] = "[redacted approved sensitive answer]"
                     if context:
                         rec.update({k: v for k, v in context.items() if v})
                     f.write(json.dumps(rec) + "\n")
@@ -278,6 +400,7 @@ def get_answers(controls: list[dict], context: dict | None = None) -> list[dict]
         # 4000 truncated mid-array on 25-control forms (Zipline 2026-08-09)
         "messages": [{"role": "user", "content": ANSWER_PROMPT.format(
             profile=yaml.dump(PROFILE), controls=json.dumps(unanswered)[:20000],
+            application_answers=yaml.safe_dump(relevant_application_answers(unanswered)),
             stories=_grounding(), today=today)}],
     }).encode()
     req = urllib.request.Request(
