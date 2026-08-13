@@ -302,6 +302,7 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
     prompt = qa.ANSWER_PROMPT.format(
         profile=yaml.dump(PROFILE),
         controls=json.dumps(unanswered)[:20000],
+        stories=qa._grounding(),
         today=today,
     ).replace('"id_or_name"', '"faid"') + (
         f"\nContext: applying to {company} — {title} via Workday. "
