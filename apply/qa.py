@@ -224,7 +224,8 @@ Additional standing instructions:
 - How did you hear about us: "Company website" or closest option.
 - Signature blocks: "Name"/"Signature" = the candidate's full legal name; "Date" = today's date {today} (use the format the field implies, default MM/DD/YYYY).
 - Internship availability dates: start "05/25/2027", end "08/20/2027" (Summer 2027). For Fall 2026 roles: start "09/08/2026", end "12/18/2026". Infer season from the job title/context.
-- Consent/acknowledgment checkboxes (privacy policy, accurate-info attestations, future contact): Yes/agree.
+- Required privacy-policy and accurate-information attestations: Yes/agree.
+- Optional future contact, recruiting marketing, and talent-community enrollment: No/decline.
 - Previous employment at this company / referrals: use only a matching company-specific approved answer; otherwise omit.
 - Non-compete and conflicts: use only an explicit approved answer. Work authorization remains governed by the profile.
 - Internship history: yes, completed software engineering internships (see resume); none at a hedge fund/prop firm unless resume says otherwise.
@@ -271,7 +272,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(days? (?:a|per) week|in[- ]?office|onsite schedule|hybrid schedule|willing to (?:come|work|join).*(?:office|onsite))\b",
     r"\b(local to the area|relocation assistance)\b",
     r"\b(high school|secondary school)\b",
-    r"\b(future contact|marketing (?:email|communication|consent)|talent community)\b",
+    r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b",
     r"\b(what (?:are you|do you) (?:reading|watching|listening)|favorite (?:book|movie|podcast|show|song|artist|media)|last (?:book|movie|show|podcast)|reading list|media (?:you consume|consumption))\b",
 ]
 
@@ -505,6 +506,13 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             expected = preferences.get("relocation_assistance_required")
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
+        elif re.search(r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b", question):
+            # Optional recruiting marketing is not required to apply.  Default
+            # to the privacy-preserving choice unless David explicitly opts in.
+            expected = preferences.get("future_contact")
+            if not isinstance(expected, bool):
+                expected = False
+            answer = _render_boolean(expected, options)
         elif (re.search(r"\bwhich location\(s\).*open to working\b", question)
               and control.get("kind") == "checkgroup"
               and (PROFILE.get("preferences") or {}).get("relocate_ok")):
@@ -641,8 +649,11 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     if re.search(r"\brelocation assistance\b", question):
         expected = preferences.get("relocation_assistance_required")
         return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
-    if re.search(r"\b(future contact|marketing (?:email|communication|consent)|talent community)\b", question):
-        return preferences.get("future_contact") is not None
+    if re.search(r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b", question):
+        expected = preferences.get("future_contact")
+        if not isinstance(expected, bool):
+            expected = False
+        return _answer_boolean(answer_text) is expected
     return False
 
 

@@ -7,6 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apply"))
 import qa  # noqa: E402
+import greenhouse  # noqa: E402
 import smartrecruiters  # noqa: E402
 import workday  # noqa: E402
 
@@ -79,6 +80,38 @@ class QaManualPolicyTest(unittest.TestCase):
 
         self.assertEqual(["allowed"], [a["id_or_name"] for a in allowed])
         self.assertEqual({c["id"] for c in controls if c["id"] != "allowed"}, {a["id_or_name"] for a in blocked})
+
+    def test_optional_recruiting_marketing_defaults_to_no(self):
+        control = {
+            "id": "marketing",
+            "label": "Receive recruitment marketing communications?",
+            "options": ["Yes", "No"],
+            "value": "",
+        }
+
+        rendered = qa.explicit_approved_answers(
+            [control], approved_answers=self.APPROVED,
+        )
+        self.assertEqual(
+            [{"id_or_name": "marketing", "answer": "No"}],
+            rendered,
+        )
+        self.assertFalse(
+            qa.answer_requires_manual(
+                control, "No", approved_answers=self.APPROVED,
+            )
+        )
+        self.assertTrue(
+            qa.answer_requires_manual(
+                control, "Yes", approved_answers=self.APPROVED,
+            )
+        )
+
+    def test_greenhouse_required_scan_ignores_hidden_conditional_controls(self):
+        source = Path(greenhouse.__file__).read_text()
+        self.assertIn("el.offsetParent === null", source)
+        self.assertIn("el.getClientRects().length === 0", source)
+        self.assertIn("el.closest('[hidden], [aria-hidden=\"true\"]')", source)
 
     def test_disability_allowed_when_profile_has_explicit_text(self):
         control = {"id": "dis", "label": "Voluntary disability status", "value": ""}

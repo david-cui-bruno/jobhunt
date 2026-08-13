@@ -153,6 +153,12 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
             () => {
                 const bad = [];
                 document.querySelectorAll('[aria-required="true"], [required]').forEach(el => {
+                    // Conditional Greenhouse controls remain required in the DOM
+                    // even while their parent question is hidden.  They are not
+                    // actionable unless Greenhouse makes them visible.
+                    if (el.type === 'hidden' || el.disabled) return;
+                    if (el.closest('[hidden], [aria-hidden="true"]')) return;
+                    if (el.offsetParent === null || el.getClientRects().length === 0) return;
                     // react-select hidden decoy inputs: not user-facing
                     if (el.getAttribute('aria-hidden') === 'true') return;
                     // inline verification code boxes: handled by the code-fetch flow
