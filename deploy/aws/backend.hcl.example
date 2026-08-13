@@ -1,0 +1,5 @@
+bucket       = "jobhunt-AWS_ACCOUNT_ID-us-east-1"
+key          = "terraform/jobhunt.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

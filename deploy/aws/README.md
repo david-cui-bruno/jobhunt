@@ -53,7 +53,8 @@ inside this repository.
 cd deploy/aws
 cp terraform.tfvars.example terraform.tfvars
 # Add alert_email if budget/alarm email notifications are desired.
-terraform init
+# Before the first apply, the state bucket does not exist yet.
+terraform init -backend=false
 terraform fmt -check
 terraform validate
 terraform plan -out=jobhunt.tfplan
@@ -78,6 +79,22 @@ terraform output
 Wait until the instance appears as an online managed node in Systems Manager.
 Cloud-init installs monitoring and swap, but it does not copy application state
 or enable workers.
+
+### Move Terraform state off the laptop
+
+The first apply necessarily uses local state because it creates the private
+state bucket. Migrate immediately after that apply:
+
+```bash
+cp backend.hcl.example backend.hcl
+# Replace AWS_ACCOUNT_ID in backend.hcl.
+terraform init -migrate-state -force-copy -backend-config=backend.hcl
+terraform state list
+```
+
+The S3 backend uses the bucket's versioning and encryption plus Terraform's
+native S3 lock file. `backend.hcl` contains no secret, but is machine/account
+specific and should not be committed.
 
 ## 3. Stop laptop workers and bootstrap
 
