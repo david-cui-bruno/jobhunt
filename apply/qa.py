@@ -66,16 +66,21 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
         selected_identity["disability"] = identity.get("disability")
     if selected_identity:
         result["identity"] = selected_identity
-    if re.search(r"\b(graduation|graduate)\s+(?:date|month|year)\b", question):
+    if re.search(r"\b(graduation|graduate)\s+(?:date|month|year)|\b(high school|secondary school)\b", question):
         education = source.get("education") or {}
         profile_education = PROFILE.get("education") or {}
-        result["education"] = {
-            "expected_graduation_month": education.get("expected_graduation_month")
-                or profile_education.get("grad_month"),
-            "expected_graduation_year": education.get("expected_graduation_year")
-                or profile_education.get("grad_year"),
-            "exact_graduation_date": education.get("exact_graduation_date"),
-        }
+        selected_education = {}
+        if re.search(r"\b(graduation|graduate)\s+(?:date|month|year)\b", question):
+            selected_education.update({
+                "expected_graduation_month": education.get("expected_graduation_month")
+                    or profile_education.get("grad_month"),
+                "expected_graduation_year": education.get("expected_graduation_year")
+                    or profile_education.get("grad_year"),
+                "exact_graduation_date": education.get("exact_graduation_date"),
+            })
+        if re.search(r"\b(high school|secondary school)\b", question):
+            selected_education["high_school"] = education.get("high_school")
+        result["education"] = selected_education
     preferences = source.get("preferences") or {}
     selected_preferences = {}
     for key, pattern in {
@@ -213,6 +218,7 @@ Additional standing instructions:
 - Compensation expectation questions: follow the approved compensation policy. Prefer an employer-published range or no-preference option. Never invent a numeric amount.
 - Outstanding offers/deadlines: report only the approved current offers and deadlines. Never default to No.
 - Graduation: June 2028 for every role. When a form requires an exact day, use the user-approved estimate 06/01/2028. Never change the date based on role type.
+- High school/secondary school: use only the approved answer-bank value. Omit the answer when it is absent; never infer a school or region.
 - Willing to relocate: Yes, without employer relocation assistance. Open to any listed office location; prefer SF then NYC if ranked. If preferred cities are not offered, choose any offered US city over non-US.
 - If a select's options are provided, your answer MUST be copied verbatim from the options list (character for character). Pick the option most consistent with the profile.
 - How did you hear about us: "Company website" or closest option.
@@ -264,6 +270,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\bhave you (?:ever )?used\b.*\bbefore\b",
     r"\b(days? (?:a|per) week|in[- ]?office|onsite schedule|hybrid schedule|willing to (?:come|work|join).*(?:office|onsite))\b",
     r"\b(local to the area|relocation assistance)\b",
+    r"\b(high school|secondary school)\b",
     r"\b(future contact|marketing (?:email|communication|consent)|talent community)\b",
     r"\b(what (?:are you|do you) (?:reading|watching|listening)|favorite (?:book|movie|podcast|show|song|artist|media)|last (?:book|movie|show|podcast)|reading list|media (?:you consume|consumption))\b",
 ]
@@ -393,6 +400,8 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = f"{parsed[0]:02d}/{year}" if parsed else None
             elif month and year:
                 answer = f"{month} {year}"
+        elif re.search(r"\b(high school|secondary school)\b", question):
+            answer = education.get("high_school")
         elif re.search(r"\bhighest level of education\b", question):
             # David is currently pursuing a BS. Prefer an in-progress/some-college
             # label over a completed Bachelor's claim when the form offers one.
@@ -537,6 +546,9 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         if re.fullmatch(r"\s*\d{4}\s*", answer_text):
             return answer_text.strip() == expected_year
         return str(expected_month or "").lower() == answer_text.strip().lower()
+    if re.search(r"\b(high school|secondary school)\b", question):
+        expected = str((approved.get("education") or {}).get("high_school") or "").strip()
+        return bool(expected and expected.lower() == answer_text.strip().lower())
     if re.search(r"\b(preferred pronouns?|pronouns?)\b", question):
         expected = str(identity.get("pronouns") or "").strip().lower()
         return bool(expected and expected in answer_text.strip().lower())

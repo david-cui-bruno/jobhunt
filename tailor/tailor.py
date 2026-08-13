@@ -235,7 +235,8 @@ def apply_course_variant(tex: str, role_type: str) -> str:
 
 
 # Graduation is an education fact, not a per-role marketing choice. David
-# confirmed June 2028 on 2026-08-13; the exact day remains unknown.
+# Confirmed June 2028 on 2026-08-13. Day-level application fields use the
+# separately approved 06/01/2028 estimate; resumes remain month/year only.
 GRAD_DATE = "June 2028"
 
 

@@ -66,6 +66,7 @@ class QaManualPolicyTest(unittest.TestCase):
             {"id": "used", "name": "", "label": "Have you ever used Sentry before?", "value": ""},
             {"id": "hybrid", "name": "", "label": "Are you willing to join us in office 3 days a week?", "value": ""},
             {"id": "grad", "name": "", "label": "Anticipated graduation date", "kind": "date", "hasDay": True, "value": ""},
+            {"id": "high-school", "name": "", "label": "Where did you attend high school?", "value": ""},
             {"id": "interview", "name": "", "label": "Have you previously interviewed at LPL?", "value": ""},
             {"id": "finra", "name": "", "label": "Do you hold any FINRA licenses?", "value": ""},
             {"id": "household", "name": "", "label": "Was a member of your household employed by Deloitte?", "value": ""},
@@ -381,6 +382,31 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertEqual("He/Him", context["identity"]["pronouns"])
         self.assertNotIn("date_of_birth", context["identity"])
         self.assertNotIn("current_offers", context)
+
+    def test_high_school_is_blocked_until_explicitly_approved(self):
+        control = {"id": "school", "label": "Where did you attend high school?", "value": ""}
+        self.assertTrue(
+            qa.answer_requires_manual(
+                control,
+                "North America",
+                approved_answers=self.APPROVED,
+            )
+        )
+
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["education"]["high_school"] = "Example High School, Example City"
+        rendered = qa.explicit_approved_answers([control], approved_answers=approved)
+        self.assertEqual(
+            [{"id_or_name": "school", "answer": "Example High School, Example City"}],
+            rendered,
+        )
+        self.assertFalse(
+            qa.answer_requires_manual(
+                control,
+                "Example High School, Example City",
+                approved_answers=approved,
+            )
+        )
 
     def test_get_answers_logs_allowed_and_blocked_with_context_without_api(self):
         controls = [

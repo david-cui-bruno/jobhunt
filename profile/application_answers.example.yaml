@@ -10,6 +10,7 @@ identity:
     current: null
     history: null
 education:
+  high_school: null
   expected_graduation_month: null
   expected_graduation_year: null
   # An explicitly approved estimate is allowed when a form requires a day.

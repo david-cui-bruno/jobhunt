@@ -21,7 +21,7 @@ education:
   gpa_ok_to_share: true
   grad_month: "June"
   grad_year: "2028"
-  grad_date_rule: "Expected graduation is June 2028 for every application. Graduation is an education fact, not role-dependent. The exact day is unknown and must never be invented; day-level fields require manual confirmation."
+  grad_date_rule: "Expected graduation is June 2028 for every application. Graduation is an education fact, not role-dependent. When a form requires an exact day, use the approved estimate 06/01/2028."
 work_authorization:
   us_citizen: true
   authorized_us: true
