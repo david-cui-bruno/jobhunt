@@ -21,6 +21,16 @@ PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
 SHOTS = ROOT / "out" / "screenshots"
 
 
+def _hiring_team_message(profile: dict) -> str:
+    """Build a short factual intro without duplicating role-dependent grad dates."""
+    education = profile["education"]
+    return (
+        f"{education['school']} {education['major']} student "
+        f"(GPA {education['gpa']}) with production backend/ML internship experience "
+        "(YC startups Framewise, Freya) and USACO background. Resume attached."
+    )
+
+
 def _shot(page, slug, stage):
     SHOTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(SHOTS / f"{slug}_{stage}.png"), full_page=True)
@@ -114,8 +124,7 @@ def apply_smartrecruiters(url: str, resume_pdf: Path, slug: str, dry_run: bool =
         try:
             msg_box = page.locator("textarea").first
             if msg_box.count() and msg_box.is_visible() and not msg_box.input_value():
-                msg_box.fill("Brown CS '27 (4.0) with production backend/ML internship experience "
-                             "(YC startups Framewise, Freya) and USACO background. Resume attached.")
+                msg_box.fill(_hiring_team_message(p))
         except Exception:
             pass
         # multi-step: click Next through screening pages, running QA each page

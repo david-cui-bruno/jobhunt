@@ -7,9 +7,17 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apply"))
 import qa  # noqa: E402
+import smartrecruiters  # noqa: E402
 
 
 class QaManualPolicyTest(unittest.TestCase):
+    def test_smartrecruiters_intro_does_not_hardcode_a_grad_year(self):
+        message = smartrecruiters._hiring_team_message(qa.PROFILE)
+        self.assertNotIn("'27", message)
+        self.assertNotIn("May 2027", message)
+        self.assertNotIn("May 2028", message)
+        self.assertIn("Brown University", message)
+
     def test_filter_blocks_explicit_user_fact_preferences(self):
         controls = [
             {"id": "dob", "name": "", "label": "Date of birth", "value": ""},
