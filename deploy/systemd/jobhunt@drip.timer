@@ -2,7 +2,7 @@
 Description=Run jobhunt drip hourly
 
 [Timer]
-OnBootSec=5min
+OnActiveSec=5min
 OnUnitActiveSec=1h
 AccuracySec=1min
 RandomizedDelaySec=30s

@@ -64,6 +64,17 @@ class AwsDeploymentTests(unittest.TestCase):
         self.assertIn("systemctl disable --now", script)
         self.assertNotIn("systemctl enable --now", script)
 
+    def test_timers_schedule_when_enabled_after_boot(self) -> None:
+        timer_directory = ROOT / "deploy" / "systemd"
+        timers = sorted(timer_directory.glob("*.timer"))
+        self.assertEqual(6, len(timers))
+        for timer in timers:
+            text = timer.read_text()
+            with self.subTest(timer=timer.name):
+                self.assertIn("OnActiveSec=", text)
+                self.assertIn("OnUnitActiveSec=", text)
+                self.assertNotIn("OnBootSec=", text)
+
     def test_ssm_scripts_run_remote_checks_in_bash(self) -> None:
         for name in ("stage-and-bootstrap.sh", "verify-instance.sh"):
             script = (AWS / name).read_text()

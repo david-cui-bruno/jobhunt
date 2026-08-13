@@ -2,7 +2,7 @@
 Description=Poll jobhunt resume revisions
 
 [Timer]
-OnBootSec=3min
+OnActiveSec=3min
 OnUnitActiveSec=5min
 AccuracySec=30s
 RandomizedDelaySec=20s

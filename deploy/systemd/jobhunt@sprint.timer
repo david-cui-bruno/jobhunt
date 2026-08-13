@@ -2,7 +2,7 @@
 Description=Run jobhunt sprint lane
 
 [Timer]
-OnBootSec=10min
+OnActiveSec=10min
 OnUnitActiveSec=4min
 AccuracySec=30s
 RandomizedDelaySec=20s
