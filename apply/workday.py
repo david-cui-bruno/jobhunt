@@ -109,8 +109,8 @@ def _claude_pick(question: str, answer_intent: str, options: list[str]) -> str |
             f"Candidate profile intent: {answer_intent}\n"
             f"Application question: {question}\n"
             f"Options: {json.dumps(options)}\n"
-            "Candidate facts: Brown University BS; for INTERNSHIP roles graduating May 2028, for full-time May 2027; US citizen; "
-            "born 2005; no prior employment at this company.\n"
+            "Candidate facts: Brown University BS; for INTERNSHIP roles graduating May 2028, for full-time May 2027; US citizen. "
+            "Do not infer birth date, prior employment, referrals, or other facts not present in the answer intent.\n"
             "Reply with EXACTLY one option, verbatim, nothing else."}],
     }).encode()
     req = urllib.request.Request(
@@ -124,6 +124,28 @@ def _claude_pick(question: str, answer_intent: str, options: list[str]) -> str |
         return text if text in options else qa._best_option(text, options)
     except Exception:
         return None
+
+
+def _workday_date_parts(answer: str, has_day: bool) -> tuple[str, str, str] | None:
+    """Parse only dates actually supplied by the grounded answer.
+
+    Workday date widgets must fail closed. Substituting today's date for an
+    unknown birth/start/end date silently turns missing profile data into a
+    false application answer.
+    """
+    value = str(answer)
+    full = re.search(r"(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})", value)
+    month_year = re.search(r"(\d{1,2})\s*/\s*(\d{4})", value)
+    if has_day:
+        if not full:
+            return None
+        return full.group(1).zfill(2), full.group(2).zfill(2), full.group(3)
+    if month_year:
+        return month_year.group(1).zfill(2), "", month_year.group(2)
+    year = re.search(r"(\d{4})", value)
+    if not year:
+        return None
+    return "05", "", year.group(1)
 
 
 def wd_fill(page, field: dict, answer: str) -> bool:
@@ -144,25 +166,10 @@ def wd_fill(page, field: dict, answer: str) -> bool:
     kind = field["kind"]
     try:
         if kind == "date":
-            import datetime as _dt
-            ans_s = str(answer)
-            m3 = re.search(r"(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})", ans_s)
-            m2 = re.search(r"(\d{1,2})\s*/\s*(\d{4})", ans_s)
-            if field.get("hasDay"):
-                if m3:
-                    mm, dd, yyyy = m3.group(1), m3.group(2), m3.group(3)
-                else:
-                    t = _dt.date.today()
-                    mm, dd, yyyy = str(t.month), str(t.day), str(t.year)
-            else:
-                dd = ""
-                if m2:
-                    mm, yyyy = m2.group(1), m2.group(2)
-                else:
-                    y = re.search(r"(\d{4})", ans_s)
-                    if not y:
-                        return False
-                    mm, yyyy = "05", y.group(1)
+            parts = _workday_date_parts(str(answer), bool(field.get("hasDay")))
+            if parts is None:
+                return False
+            mm, dd, yyyy = parts
             mi = ff.locator("[data-automation-id='dateSectionMonth-input']").first
             di = ff.locator("[data-automation-id='dateSectionDay-input']").first
             yi = ff.locator("[data-automation-id='dateSectionYear-input']").first
@@ -280,7 +287,10 @@ def wd_fill(page, field: dict, answer: str) -> bool:
                     if ff.locator("[data-automation-id='selectedItem']").count():
                         return True
                 opts = [o.strip() for o in opt.all_inner_texts()]
-                target = qa._best_option(str(answer), opts) or (opts[0] if opts else None)
+                # Never choose an arbitrary first option. An unmatched answer
+                # must remain empty so the required-field gate routes it to
+                # manual input instead of submitting a false value.
+                target = qa._best_option(str(answer), opts)
             if target:
                 page.locator(f"[data-automation-id='promptOption']:has-text(\"{target[:40]}\"), [role=option]:has-text(\"{target[:40]}\")").first.click(timeout=4000)
                 page.wait_for_timeout(600)

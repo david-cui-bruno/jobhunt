@@ -122,7 +122,8 @@ def poll_once(verbose: bool = True) -> dict:
             new_tex = sanitize(call_claude_revise(tex, text))
             pdf_path = _runtime_path(r["resume_pdf"])
             rev = r["revision"] + 1
-            if validate(new_tex) or True:  # user-driven edits may change length; compile is the gate
+            validation_errors = []
+            if validate(new_tex, validation_errors):
                 if compile_pdf(new_tex, pdf_path):
                     tex_path.write_text(new_tex)
                     resp = mailer.send(
@@ -143,6 +144,8 @@ def poll_once(verbose: bool = True) -> dict:
                         "Try different wording?", [], thread_id=r["thread_id"])
                     conn.execute("INSERT OR IGNORE INTO sent_messages VALUES (?)",
                                  (resp.get("id"),))
+            elif verbose:
+                print(f"revision rejected for {name}: {', '.join(validation_errors)}")
         conn.commit()
     conn.close()
     return actions
