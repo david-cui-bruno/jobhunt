@@ -109,7 +109,7 @@ def _claude_pick(question: str, answer_intent: str, options: list[str]) -> str |
             f"Candidate profile intent: {answer_intent}\n"
             f"Application question: {question}\n"
             f"Options: {json.dumps(options)}\n"
-            "Candidate facts: Brown University BS; for INTERNSHIP roles graduating May 2028, for full-time May 2027; US citizen. "
+            "Candidate facts: Brown University BS, expected graduation June 2028 for every role; US citizen. "
             "Do not infer birth date, prior employment, referrals, or other facts not present in the answer intent.\n"
             "Reply with EXACTLY one option, verbatim, nothing else."}],
     }).encode()
@@ -141,11 +141,25 @@ def _workday_date_parts(answer: str, has_day: bool) -> tuple[str, str, str] | No
             return None
         return full.group(1).zfill(2), full.group(2).zfill(2), full.group(3)
     if month_year:
-        return month_year.group(1).zfill(2), "", month_year.group(2)
-    year = re.search(r"(\d{4})", value)
-    if not year:
-        return None
-    return "05", "", year.group(1)
+        month = int(month_year.group(1))
+        return (str(month).zfill(2), "", month_year.group(2)) if 1 <= month <= 12 else None
+    month_names = {
+        name.lower(): str(index).zfill(2)
+        for index, name in enumerate(
+            ("January", "February", "March", "April", "May", "June", "July",
+             "August", "September", "October", "November", "December"),
+            start=1,
+        )
+    }
+    named = re.search(
+        r"\b(" + "|".join(month_names) + r")\s+(\d{4})\b",
+        value,
+        re.I,
+    )
+    if named:
+        return month_names[named.group(1).lower()], "", named.group(2)
+    # A bare year cannot truthfully populate a month/year widget.
+    return None
 
 
 def wd_fill(page, field: dict, answer: str) -> bool:
@@ -308,10 +322,13 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
     unanswered = [f for f in fields if not f["value"]]
     if not unanswered:
         return []
+    policy_fields = [dict(field, company_context=company) for field in unanswered]
     today = datetime.date.today().strftime("%m/%d/%Y")
     prompt = qa.ANSWER_PROMPT.format(
         profile=yaml.dump(PROFILE),
-        application_answers=yaml.safe_dump(qa.relevant_application_answers(unanswered)),
+        application_answers=yaml.safe_dump(
+            qa.relevant_application_answers(unanswered, company_context=company)
+        ),
         controls=json.dumps(unanswered)[:20000],
         stories=qa._grounding(),
         today=today,
@@ -321,7 +338,7 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
         "For 'How Did You Hear About Us': prefer company website/careers site options. "
         "For source dropdowns with many options, answer with the best guess text; matching is fuzzy. "
         "Date fields (kind='date') expect MM/YYYY. Work experience dates come from the resume in the profile's work_history_summary. "
-        "Education From/To: 09/2024 to 05/2028 for internship roles, 09/2024 to 05/2027 for full-time roles (this posting's type decides). Degree dropdown: 'Bachelor of Science (B.S.)' or closest BS option. "
+        "Education From/To: 09/2024 to 06/2028 for every role. The exact graduation day is unknown, so omit day-level graduation fields. Degree dropdown: 'Bachelor of Science (B.S.)' or closest BS option. "
         "If a 'To' date field pairs with an 'I currently work here' checkbox, give the real end date instead of checking it."
     )
     body = json.dumps({
@@ -338,10 +355,10 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
     m = re.search(r"\[.*\]", text, re.S)
     model_answers = json.loads(m.group(0)) if m else []
     answers, blocked = qa.filter_manual_answers(
-        unanswered, model_answers, key_field="faid"
+        policy_fields, model_answers, key_field="faid"
     )
     qa.log_answer_decisions(
-        unanswered,
+        policy_fields,
         answers,
         blocked,
         context={"company": company, "title": title, "ats": "workday"},

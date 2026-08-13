@@ -36,7 +36,22 @@ def _load_application_answers() -> dict:
 APPLICATION_ANSWERS = _load_application_answers()
 
 
-def relevant_application_answers(controls: list[dict], approved: dict | None = None) -> dict:
+def _company_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _company_matches(company: object, question: str, company_context: str = "") -> bool:
+    key = _company_key(company)
+    question_key = _company_key(question)
+    context_key = _company_key(company_context)
+    return bool(key and (
+        key in question_key
+        or (context_key and (key in context_key or context_key in key))
+    ))
+
+
+def relevant_application_answers(controls: list[dict], approved: dict | None = None,
+                                 company_context: str = "") -> dict:
     """Expose only answer-bank sections relevant to controls on this form."""
     source = APPLICATION_ANSWERS if approved is None else approved
     question = " ".join(_control_question_text(control).lower() for control in controls)
@@ -51,9 +66,15 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
         selected_identity["disability"] = identity.get("disability")
     if selected_identity:
         result["identity"] = selected_identity
-    if re.search(r"\b(graduation date|graduate date)\b", question):
+    if re.search(r"\b(graduation|graduate)\s+(?:date|month|year)\b", question):
+        education = source.get("education") or {}
+        profile_education = PROFILE.get("education") or {}
         result["education"] = {
-            "exact_graduation_date": (source.get("education") or {}).get("exact_graduation_date")
+            "expected_graduation_month": education.get("expected_graduation_month")
+                or profile_education.get("grad_month"),
+            "expected_graduation_year": education.get("expected_graduation_year")
+                or profile_education.get("grad_year"),
+            "exact_graduation_date": education.get("exact_graduation_date"),
         }
     preferences = source.get("preferences") or {}
     selected_preferences = {}
@@ -76,7 +97,7 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
         result["legal"] = legal
     companies = {}
     for company, facts in (source.get("company_facts") or {}).items():
-        if str(company).lower() in question:
+        if _company_matches(company, question, company_context):
             companies[company] = facts
     if companies:
         result["company_facts"] = companies
@@ -190,6 +211,7 @@ APPROVED APPLICATION ANSWERS AND POLICIES (source of truth; omit a personal answ
 Additional standing instructions:
 - Compensation expectation questions: follow the approved compensation policy. Prefer an employer-published range or no-preference option. Never invent a numeric amount.
 - Outstanding offers/deadlines: report only the approved current offers and deadlines. Never default to No.
+- Graduation: June 2028 for every role. Never change the year based on role type and never invent an exact day.
 - Willing to relocate: Yes. Open to any listed office location; prefer SF then NYC if ranked. If preferred cities are not offered, choose any offered US city over non-US.
 - If a select's options are provided, your answer MUST be copied verbatim from the options list (character for character). Pick the option most consistent with the profile.
 - How did you hear about us: "Company website" or closest option.
@@ -225,7 +247,7 @@ Return ONLY the JSON array."""
 
 BLOCKED_QUESTION_PATTERNS = [
     r"\b(date of birth|dob|birth date|birthday|age)\b",
-    r"\b(18 or older|at least 18|graduation date|graduate date)\b",
+    r"\b(18 or older|at least 18|(?:graduation|graduate) (?:date|month|year))\b",
     r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary))\b",
     r"\b(offer deadline|exploding offer|outstanding offer|competing offer|pending offer|deadline to accept)\b",
     r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b",
@@ -249,10 +271,49 @@ def _control_question_text(control: dict) -> str:
     return " ".join(str(control.get(k) or "") for k in ("label", "id", "name", "placeholder")).strip()
 
 
-def _company_answer_is_approved(question: str, field: str, answers: dict) -> bool:
+def _answer_boolean(value: object) -> bool | None:
+    text = str(value or "").strip().lower()
+    if re.search(r"\b(no|false|never|none|not disabled|do not|don't|have not|haven't)\b", text):
+        return False
+    if re.search(r"\b(yes|true|willing|i have|currently have)\b", text):
+        return True
+    return None
+
+
+def _date_parts(value: object) -> tuple[int, int | None, int] | None:
+    text = str(value or "").strip()
+    full = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", text)
+    if full:
+        return int(full.group(1)), int(full.group(2)), int(full.group(3))
+    numeric = re.search(r"\b(\d{1,2})[/-](\d{4})\b", text)
+    if numeric:
+        return int(numeric.group(1)), None, int(numeric.group(2))
+    months = {
+        name.lower(): index for index, name in enumerate(
+            ("January", "February", "March", "April", "May", "June", "July",
+             "August", "September", "October", "November", "December"),
+            start=1,
+        )
+    }
+    named = re.search(r"\b(" + "|".join(months) + r")\s+(\d{4})\b", text, re.I)
+    if named:
+        return months[named.group(1).lower()], None, int(named.group(2))
+    return None
+
+
+def _company_answer_is_approved(control: dict, field: str, answers: dict,
+                                answer: object) -> bool:
+    question = _control_question_text(control).lower()
+    company_context = str(control.get("company_context") or "")
     for company, facts in (answers.get("company_facts") or {}).items():
-        if str(company).lower() in question and isinstance(facts, dict) and facts.get(field) is not None:
-            return True
+        if not _company_matches(company, question, company_context) or not isinstance(facts, dict):
+            continue
+        expected = facts.get(field)
+        if expected is None:
+            continue
+        if isinstance(expected, bool):
+            return _answer_boolean(answer) is expected
+        return str(expected).strip().lower() in str(answer or "").strip().lower()
     return False
 
 
@@ -264,20 +325,40 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     legal = approved.get("legal") or {}
     offers = approved.get("current_offers") or []
     answer_text = str(answer or "")
+    if re.search(r"\b(18 or older|at least (?:age )?18)\b", question):
+        birth = _date_parts(identity.get("date_of_birth"))
+        actual = _answer_boolean(answer_text)
+        if not birth or actual is None:
+            return False
+        today = datetime.date.today()
+        age = today.year - birth[2] - ((today.month, today.day) < (birth[0], birth[1] or 1))
+        return actual is (age >= 18)
     if re.search(r"\b(date of birth|dob|birth date|birthday|age)\b", question):
-        return bool(identity.get("date_of_birth"))
-    if re.search(r"\b(18 or older|at least 18)\b", question):
-        return bool(identity.get("date_of_birth"))
-    if re.search(r"\b(graduation date|graduate date)\b", question):
+        expected = identity.get("date_of_birth")
+        return bool(expected and _date_parts(expected) == _date_parts(answer_text))
+    if re.search(r"\b(graduation|graduate)\s+(?:date|month|year)\b", question):
+        education = approved.get("education") or {}
         if control.get("hasDay") or re.search(r"\d{1,2}/\d{1,2}/\d{4}", answer_text):
-            return bool((approved.get("education") or {}).get("exact_graduation_date"))
-        return bool((PROFILE.get("education") or {}).get("grad_month") and
-                    (PROFILE.get("education") or {}).get("grad_year"))
+            exact = education.get("exact_graduation_date")
+            return bool(exact and _date_parts(exact) == _date_parts(answer_text))
+        profile_education = PROFILE.get("education") or {}
+        expected_month = education.get("expected_graduation_month") or profile_education.get("grad_month")
+        expected_year = str(education.get("expected_graduation_year") or profile_education.get("grad_year") or "")
+        supplied = _date_parts(answer_text)
+        if supplied:
+            month, day, year = supplied
+            expected = _date_parts(f"{expected_month} {expected_year}")
+            return bool(day is None and expected and (month, year) == (expected[0], expected[2]))
+        if re.fullmatch(r"\s*\d{4}\s*", answer_text):
+            return answer_text.strip() == expected_year
+        return str(expected_month or "").lower() == answer_text.strip().lower()
     if re.search(r"\b(preferred pronouns?|pronouns?)\b", question):
-        return bool(identity.get("pronouns"))
+        expected = str(identity.get("pronouns") or "").strip().lower()
+        return bool(expected and expected in answer_text.strip().lower())
     if re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
         disability = identity.get("disability") or {}
-        return disability.get("current") is not None and disability.get("history") is not None
+        expected = disability.get("history") if "history" in question else disability.get("current")
+        return expected is not None and _answer_boolean(answer_text) is expected
     if re.search(r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary))\b", question):
         if not preferences.get("compensation_policy"):
             return False
@@ -285,21 +366,37 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         offered_options = [str(option) for option in control.get("options") or []]
         return not numeric or answer_text in offered_options
     if re.search(r"\b(offer deadline|exploding offer|deadline to accept)\b", question):
-        return any(isinstance(offer, dict) and offer.get("deadline") for offer in offers)
+        for offer in offers:
+            if not isinstance(offer, dict):
+                continue
+            exact = offer.get("deadline")
+            month = offer.get("deadline_month")
+            if control.get("hasDay") or re.search(r"\d{1,2}/\d{1,2}/\d{4}", answer_text):
+                if exact and _date_parts(exact) == _date_parts(answer_text):
+                    return True
+            elif (exact or month) and _date_parts(exact or month) == _date_parts(answer_text):
+                return True
+        return False
     if re.search(r"\b(outstanding offer|competing offer|pending offer)\b", question):
-        return bool(offers)
+        parsed = _answer_boolean(answer_text)
+        if parsed is not None:
+            return parsed is bool(offers)
+        return bool(offers) and any(
+            str(offer.get("company") or "").lower() in answer_text.lower()
+            for offer in offers if isinstance(offer, dict)
+        )
     if re.search(r"\bhave you (?:ever )?used\b.*\bbefore\b|\b(used|use|customer of|experience with|familiar with|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b", question):
-        return _company_answer_is_approved(question, "used_product", approved)
+        return _company_answer_is_approved(control, "used_product", approved, answer)
     if re.search(r"\b(previously employed|prior employment|worked (?:at|for)|former employee)\b", question):
-        return _company_answer_is_approved(question, "prior_employment", approved)
+        return _company_answer_is_approved(control, "prior_employment", approved, answer)
     if re.search(r"\b(referral|referred|refer you|know anyone|current employee)\b", question):
-        return _company_answer_is_approved(question, "referral", approved)
+        return _company_answer_is_approved(control, "referral", approved, answer)
     if re.search(r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|prior application|previous application)\b", question):
-        return _company_answer_is_approved(question, "prior_interview_or_application", approved)
+        return _company_answer_is_approved(control, "prior_interview_or_application", approved, answer)
     if re.search(r"\b(FINRA|SIE|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b", question):
-        return _company_answer_is_approved(question, "licenses_or_exams", approved)
+        return _company_answer_is_approved(control, "licenses_or_exams", approved, answer)
     if re.search(r"\b(member of your household|household member|family member|relative)\b", question):
-        return _company_answer_is_approved(question, "household_employment", approved)
+        return _company_answer_is_approved(control, "household_employment", approved, answer)
     if re.search(r"\b(non[- ]?compete|conflict of interest|conflicts?|restrictive covenant|moonlighting|outside employment)\b", question):
         return legal.get("non_compete_or_conflict") is not None
     if re.search(r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b", question):
@@ -307,7 +404,8 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     if re.search(r"\btravel\b", question):
         return preferences.get("travel") is not None
     if re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|onsite|hybrid)\b", question):
-        return preferences.get("hybrid") is not None
+        expected = preferences.get("hybrid")
+        return expected is not None and _answer_boolean(answer_text) is expected
     if re.search(r"\b(future contact|marketing (?:email|communication|consent)|talent community)\b", question):
         return preferences.get("future_contact") is not None
     return False
@@ -415,13 +513,18 @@ def get_answers(controls: list[dict], context: dict | None = None) -> list[dict]
     unanswered = [c for c in controls if not c["value"]]
     if not unanswered:
         return []
+    context = context or {}
+    company_context = str(context.get("company") or context.get("slug") or "")
+    policy_controls = [dict(control, company_context=company_context) for control in unanswered]
     today = datetime.date.today().strftime("%m/%d/%Y")
     body = json.dumps({
         "model": MODEL, "max_tokens": 20000,  # reasoning tokens count against this;
         # 4000 truncated mid-array on 25-control forms (Zipline 2026-08-09)
         "messages": [{"role": "user", "content": ANSWER_PROMPT.format(
             profile=yaml.dump(PROFILE), controls=json.dumps(unanswered)[:20000],
-            application_answers=yaml.safe_dump(relevant_application_answers(unanswered)),
+            application_answers=yaml.safe_dump(
+                relevant_application_answers(unanswered, company_context=company_context)
+            ),
             stories=_grounding(), today=today)}],
     }).encode()
     req = urllib.request.Request(
@@ -446,9 +549,9 @@ def get_answers(controls: list[dict], context: dict | None = None) -> list[dict]
                 continue
         if answers:
             print(f"[qa] output truncated; salvaged {len(answers)} answers", file=sys.stderr)
-    answers, blocked = filter_manual_answers(unanswered, answers)
+    answers, blocked = filter_manual_answers(policy_controls, answers)
     # FULL-AUTO audit trail: every answer Claude gives is logged for review.
-    log_answer_decisions(unanswered, answers, blocked, context=context)
+    log_answer_decisions(policy_controls, answers, blocked, context=context)
     return answers
 
 

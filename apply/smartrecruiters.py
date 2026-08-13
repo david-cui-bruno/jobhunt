@@ -22,7 +22,7 @@ SHOTS = ROOT / "out" / "screenshots"
 
 
 def _hiring_team_message(profile: dict) -> str:
-    """Build a short factual intro without duplicating role-dependent grad dates."""
+    """Build a short factual intro without duplicating the resume graduation date."""
     education = profile["education"]
     return (
         f"{education['school']} {education['major']} student "

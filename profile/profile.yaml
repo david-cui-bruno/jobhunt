@@ -19,9 +19,9 @@ education:
   major: "Computer Science & Economics"
   gpa: "4.0"
   gpa_ok_to_share: true
-  grad_month: "May"
+  grad_month: "June"
   grad_year: "2028"
-  grad_date_rule: "INTERNSHIP applications: graduating May 2028 (returning to school after the internship). FULL-TIME applications: graduating May 2027. Resume PDFs are generated per-role with the matching date; form answers must match the attached resume."
+  grad_date_rule: "Expected graduation is June 2028 for every application. Graduation is an education fact, not role-dependent. The exact day is unknown and must never be invented; day-level fields require manual confirmation."
 work_authorization:
   us_citizen: true
   authorized_us: true
@@ -43,7 +43,7 @@ preferences:
   one_application_per_company: true   # one app per company, ever; intern beats full-time (see filter.py)
 resume:
   base: "resume/resume.tex"
-  note: "Grad date on resume is role-dependent: May 2028 for internships, May 2027 for full-time (rule from David 2026-08-08)"
+  note: "Grad date is June 2028 on every resume. Never change it to make a role appear eligible."
 competitions:
   usaco: true          # participated in USACO
   aime: true           # qualified for AIME

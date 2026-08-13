@@ -10,6 +10,8 @@ identity:
     current: null
     history: null
 education:
+  expected_graduation_month: null
+  expected_graduation_year: null
   exact_graduation_date: null
 preferences:
   hybrid: null
@@ -29,7 +31,12 @@ availability:
     pursue: false
     start: null
     end: null
-current_offers: []
+current_offers:
+  # deadline_month supports truthful month-only answers. Keep deadline null until
+  # the exact contractual date is verified; day-level fields will remain manual.
+  - company: null
+    deadline_month: null
+    deadline: null
 legal:
   non_compete_or_conflict: null
   security_clearance: null

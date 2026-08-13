@@ -20,15 +20,16 @@ class WorkdayQualityTests(unittest.TestCase):
             ("05", "17", "2005"),
         )
 
-    def test_month_year_accepts_grounded_month_or_year(self) -> None:
+    def test_month_year_accepts_numeric_or_named_month_but_not_bare_year(self) -> None:
         self.assertEqual(
             workday._workday_date_parts("09/2024", has_day=False),
             ("09", "", "2024"),
         )
         self.assertEqual(
-            workday._workday_date_parts("graduating 2028", has_day=False),
-            ("05", "", "2028"),
+            workday._workday_date_parts("June 2028", has_day=False),
+            ("06", "", "2028"),
         )
+        self.assertIsNone(workday._workday_date_parts("graduating 2028", has_day=False))
 
 
 if __name__ == "__main__":

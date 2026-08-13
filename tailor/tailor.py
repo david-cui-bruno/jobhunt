@@ -234,16 +234,19 @@ def apply_course_variant(tex: str, role_type: str) -> str:
     return tex
 
 
-# Grad date is role-dependent (David 2026-08-08): internship applications say
-# May 2028 (returning to school after), full-time say May 2027. Base tex has 2027.
-GRAD_INTERN = "May 2028"
-GRAD_FULLTIME = "May 2027"
+# Graduation is an education fact, not a per-role marketing choice. David
+# confirmed June 2028 on 2026-08-13; the exact day remains unknown.
+GRAD_DATE = "June 2028"
 
 
 def apply_grad_date(tex: str, title: str) -> str:
-    is_intern = bool(re.search(r"\bintern|co[- ]?op\b", title, re.I))
-    target = GRAD_INTERN if is_intern else GRAD_FULLTIME
-    return re.sub(r"Aug 2024 -- May 202[0-9]", f"Aug 2024 -- {target}", tex, count=1)
+    del title  # kept in the public API because callers still pass the role title
+    return re.sub(
+        r"Aug 2024 -- (?:January|February|March|April|May|June|July|August|September|October|November|December) 202[0-9]",
+        f"Aug 2024 -- {GRAD_DATE}",
+        tex,
+        count=1,
+    )
 
 
 def parse_role_type(plan: str) -> str:
@@ -571,7 +574,7 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
             "fill_ratio": round(measured_fill, 4) if measured_fill is not None else None,
             "jd_skill_coverage": "passed" if covered else "failed",
             "missing_claimable_skills": missing_skills,
-            "expected_grad_date": GRAD_INTERN if re.search(r"\bintern|co[- ]?op\b", title, re.I) else GRAD_FULLTIME,
+            "expected_grad_date": GRAD_DATE,
         }, indent=2) + "\n")
 
     def finish(tex: str) -> Path | None:
@@ -671,7 +674,7 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
         if result:
             return result
     # Fallbacks are usable but must be visibly distinguishable from successful
-    # tailoring. Apply the role-dependent grad date even on this path.
+    # tailoring. Apply the truthful graduation date even on this path.
     fallback_tex = apply_grad_date(BASE_TEX, title)
     if compile_pdf(fallback_tex, out_pdf):
         out_tex.write_text(fallback_tex)

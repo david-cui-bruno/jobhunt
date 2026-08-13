@@ -22,10 +22,23 @@ class QaManualPolicyTest(unittest.TestCase):
             "hybrid": True,
             "compensation_policy": "Use an employer-published range; otherwise open / market rate.",
         },
-        "current_offers": [{"company": "Soren", "deadline": None}],
+        "education": {
+            "expected_graduation_month": "June",
+            "expected_graduation_year": "2028",
+            "exact_graduation_date": None,
+        },
+        "current_offers": [
+            {"company": "Soren", "deadline_month": "September 2026", "deadline": None}
+        ],
         "company_facts": {
             "Sentry": {"used_product": True},
-            "LPL Financial": {"prior_employment": False},
+            "LPL Financial": {
+                "prior_employment": False,
+                "referral": False,
+                "prior_interview_or_application": False,
+                "licenses_or_exams": False,
+            },
+            "Deloitte": {"household_employment": False},
         },
     }
 
@@ -99,6 +112,88 @@ class QaManualPolicyTest(unittest.TestCase):
         )
         self.assertEqual(
             {"deadline", "comp"},
+            {answer["id_or_name"] for answer in blocked},
+        )
+
+    def test_month_only_offer_deadline_is_allowed_but_day_is_not_invented(self):
+        controls = [
+            {"id": "month", "label": "What is your offer deadline?", "value": ""},
+            {
+                "id": "exact",
+                "label": "What is your offer deadline?",
+                "kind": "date",
+                "hasDay": True,
+                "value": "",
+            },
+        ]
+        answers = [
+            {"id_or_name": "month", "answer": "September 2026"},
+            {"id_or_name": "exact", "answer": "09/15/2026"},
+        ]
+
+        allowed, blocked = qa.filter_manual_answers(
+            controls, answers, approved_answers=self.APPROVED
+        )
+
+        self.assertEqual(["month"], [answer["id_or_name"] for answer in allowed])
+        self.assertEqual(["exact"], [answer["id_or_name"] for answer in blocked])
+
+    def test_approved_boolean_must_match_and_company_context_is_supported(self):
+        controls = [
+            {
+                "id": "referral-no",
+                "label": "Were you referred by a current employee?",
+                "company_context": "lplfinancial",
+                "value": "",
+            },
+            {
+                "id": "referral-wrong",
+                "label": "Were you referred by a current employee?",
+                "company_context": "lplfinancial",
+                "value": "",
+            },
+            {
+                "id": "household",
+                "label": "Was a member of your household employed by Deloitte?",
+                "company_context": "lplfinancial",
+                "value": "",
+            },
+        ]
+        answers = [
+            {"id_or_name": "referral-no", "answer": "No"},
+            {"id_or_name": "referral-wrong", "answer": "Yes"},
+            {"id_or_name": "household", "answer": "No"},
+        ]
+
+        allowed, blocked = qa.filter_manual_answers(
+            controls, answers, approved_answers=self.APPROVED
+        )
+
+        self.assertEqual(
+            {"referral-no", "household"},
+            {answer["id_or_name"] for answer in allowed},
+        )
+        self.assertEqual(["referral-wrong"], [answer["id_or_name"] for answer in blocked])
+
+    def test_graduation_month_year_must_match_and_exact_day_stays_manual(self):
+        controls = [
+            {"id": "right", "label": "Graduation date", "value": ""},
+            {"id": "wrong", "label": "Graduation date", "value": ""},
+            {"id": "day", "label": "Graduation date", "hasDay": True, "value": ""},
+        ]
+        answers = [
+            {"id_or_name": "right", "answer": "June 2028"},
+            {"id_or_name": "wrong", "answer": "May 2027"},
+            {"id_or_name": "day", "answer": "06/01/2028"},
+        ]
+
+        allowed, blocked = qa.filter_manual_answers(
+            controls, answers, approved_answers=self.APPROVED
+        )
+
+        self.assertEqual(["right"], [answer["id_or_name"] for answer in allowed])
+        self.assertEqual(
+            {"wrong", "day"},
             {answer["id_or_name"] for answer in blocked},
         )
 
