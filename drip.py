@@ -1,6 +1,7 @@
-"""Drip scheduler: run by launchd hourly 9am-9pm ET; sends ~1 tailored email per run
-(12/day max), prioritized by location > freshness > easy ATS. Also runs the revise poller
-and a nightly summary at 21h.
+"""Drip scheduler: discover postings and prepare a small resume batch each hour.
+
+Tailoring is not user-facing and runs around the clock.  It prioritizes ATSs the
+system can actually submit before spending model calls on unsupported forms.
 """
 from __future__ import annotations
 
@@ -16,11 +17,12 @@ sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT /
 
 DB = ROOT / "out" / "tracker.db"
 ET = ZoneInfo("America/New_York")
-DAILY_CAP = 20
+DAILY_CAP = 50
+TAILOR_PER_RUN = 5
 
 LOC_PRIORITY = ["san francisco", "sf", "bay area", "palo alto", "mountain view", "menlo",
                 "new york", "nyc", "manhattan", "brooklyn", "remote"]
-EASY_ATS = ("greenhouse", "lever", "ashby")
+SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workday", "smartrecruiters", "rippling")
 
 
 def loc_score(locations: str) -> int:
@@ -31,14 +33,16 @@ def loc_score(locations: str) -> int:
     return len(LOC_PRIORITY)
 
 
-def pick_next(conn: sqlite3.Connection):
+def pick_next(conn: sqlite3.Connection, excluded: set[str] | None = None):
     from jd import detect_ats
     rows = conn.execute("SELECT * FROM postings WHERE status='queued'").fetchall()
+    excluded = excluded or set()
+    rows = [r for r in rows if r["posting_id"] not in excluded]
     if not rows:
         return None
     def key(r):
         ats = detect_ats(r["url"])
-        return (loc_score(r["locations"]), 0 if ats in EASY_ATS else 1, -r["first_seen"])
+        return (0 if ats in SUPPORTED_ATS else 1, loc_score(r["locations"]), -r["first_seen"])
     return sorted(rows, key=key)[0]
 
 
@@ -84,24 +88,33 @@ def run():
     except Exception as e:
         print(f"[drip] email apps failed: {e}")
 
-    # 3) tailor one posting and queue it directly, with no approval email.
-    if 9 <= now.hour < 21 and sent_today(conn) < DAILY_CAP:
-        row = pick_next(conn)
+    # 3) Tailor a bounded batch and queue it directly, with no approval email.
+    # This used to prepare one resume per hour only between 9am and 9pm, leaving
+    # a nine-day backlog despite ample submission capacity.
+    attempts = min(TAILOR_PER_RUN, max(0, DAILY_CAP - sent_today(conn)))
+    excluded: set[str] = set()
+    for _ in range(attempts):
+        row = pick_next(conn, excluded)
         if row:
-            import batch
-            from jd import fetch_jd
-            from tailor import tailor
-            batch.ensure_email_table(conn)
-            jd_text = fetch_jd(row["url"])
-            pdf = tailor(row["posting_id"], row["company"], row["title"], jd_text)
-            if pdf:
-                conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
-                             (row["posting_id"], None, None,
-                              str(pdf), str(pdf.with_suffix('.tex')), int(time.time())))
-                conn.execute("UPDATE postings SET status='ready' WHERE posting_id=?",
-                             (row["posting_id"],))
-                conn.commit()
-                print(f"[drip] tailored and queued: {row['company']} — {row['title']}")
+            excluded.add(row["posting_id"])
+            try:
+                import batch
+                from jd import fetch_jd
+                from tailor import tailor
+                batch.ensure_email_table(conn)
+                jd_text = fetch_jd(row["url"])
+                pdf = tailor(row["posting_id"], row["company"], row["title"], jd_text)
+                if pdf:
+                    conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
+                                 (row["posting_id"], None, None,
+                                  str(pdf), str(pdf.with_suffix('.tex')), int(time.time())))
+                    conn.execute("UPDATE postings SET status='ready' WHERE posting_id=?",
+                                 (row["posting_id"],))
+                    conn.commit()
+                    print(f"[drip] tailored and queued: {row['company']} — {row['title']}")
+            except Exception as e:
+                # One bad JD or model call must not block the other four slots.
+                print(f"[drip] tailoring failed for {row['company']}: {type(e).__name__}: {e}")
 
     # 4) Drain legacy tailored rows immediately. New rows enter ready directly.
     for r in conn.execute("SELECT posting_id, company FROM postings WHERE status='tailored'").fetchall():

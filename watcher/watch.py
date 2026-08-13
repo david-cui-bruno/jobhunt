@@ -1,9 +1,11 @@
-"""Watcher: polls Summer 2027 listing repos, diffs against tracker DB, emits new postings.
+"""Watcher: polls target-season listing repos and emits new postings.
 
 Sources:
-  - SimplifyJobs/Summer2027-Internships (structured listings.json)
+  - SimplifyJobs/Summer2027-Internships (structured Summer/Fall/Spring listings)
   - vanshb03/Summer2027-Internships (README markdown table)
   - speedyapply/2027-SWE-College-Jobs (README markdown tables)
+  - speedyapply/2027-AI-College-Jobs (README markdown tables)
+  - vanshb03/Summer2027-Internships off-season list
 """
 from __future__ import annotations
 
@@ -21,6 +23,13 @@ DB_PATH = ROOT / "out" / "tracker.db"
 SIMPLIFY_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json"
 VANSH_URL = "https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/main/README.md"
 SPEEDY_URL = "https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/README.md"
+SPEEDY_AI_URL = "https://raw.githubusercontent.com/speedyapply/2027-AI-College-Jobs/main/README.md"
+VANSH_OFFSEASON_URL = "https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/main/OFFSEASON_README.md"
+
+# David explicitly wants Fall 2026, Spring 2027, and Summer 2027 roles.  The
+# Simplify JSON contains all three, but the old watcher discarded everything
+# except Summer 2027.
+TARGET_TERMS = {"Fall 2026", "Spring 2027", "Summer 2027"}
 
 
 @dataclass
@@ -53,7 +62,7 @@ def fetch_simplify() -> list[Posting]:
     for d in data:
         if not d.get("is_visible") or not d.get("active", True):
             continue
-        if "Summer 2027" not in (d.get("terms") or []):
+        if not TARGET_TERMS.intersection(d.get("terms") or []):
             continue
         out.append(Posting(
             source="simplify",
@@ -111,6 +120,24 @@ def fetch_speedy() -> list[Posting]:
     return _parse_md_table(md, "speedy")
 
 
+def fetch_speedy_ai() -> list[Posting]:
+    md = _fetch(SPEEDY_AI_URL)  # USA internships page only (no new grad, no intl)
+    return _parse_md_table(md, "speedy-ai")
+
+
+def fetch_vansh_offseason() -> list[Posting]:
+    return _parse_md_table(_fetch(VANSH_OFFSEASON_URL), "vansh-offseason")
+
+
+WATCH_SOURCES = (
+    ("simplify", fetch_simplify),
+    ("vansh", fetch_vansh),
+    ("speedy", fetch_speedy),
+    ("speedy-ai", fetch_speedy_ai),
+    ("vansh-offseason", fetch_vansh_offseason),
+)
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS postings (
@@ -164,15 +191,19 @@ def run() -> dict:
     init_db(conn)
     all_new: list[Posting] = []
     errors = {}
-    for name, fn in [("simplify", fetch_simplify), ("vansh", fetch_vansh), ("speedy", fetch_speedy)]:
+    source_counts = {}
+    for name, fn in WATCH_SOURCES:
         try:
-            all_new += upsert(conn, fn())
+            postings = fn()
+            source_counts[name] = len(postings)
+            all_new += upsert(conn, postings)
         except Exception as e:  # keep other sources alive
             errors[name] = str(e)
     summary = {
         "new_count": len(all_new),
         "new": [asdict(p) for p in all_new],
         "errors": errors,
+        "source_counts": source_counts,
         "total_tracked": conn.execute("SELECT COUNT(*) FROM postings").fetchone()[0],
     }
     conn.close()

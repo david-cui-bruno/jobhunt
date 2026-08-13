@@ -198,7 +198,7 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
     _ensure_outcome_columns(conn)
     rows = conn.execute(
         "SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING(posting_id) "
-        "WHERE p.status='ready'").fetchall()
+        "WHERE p.status='ready' ORDER BY p.rowid DESC").fetchall()
     results = []
     done = 0
     for r in rows:

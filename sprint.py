@@ -1,6 +1,6 @@
 """Sprint lane: near-instant apply for NEWLY-appearing postings.
 
-Polls the three GitHub listing sources every few minutes (launchd). Any posting
+Polls the target-season GitHub listing sources every few minutes. Any posting
 that appears AND passes the filter is immediately tailored and submitted in the
 same run - no veto window, no business-hours gate, no drip queue. Speed is the
 point: early applicants get seen; postings close after a few hundred apps.
@@ -11,7 +11,7 @@ Safety properties (FULL AUTO, David ratified 2026-08-09):
   - same adapter machinery as submit.py (isolated worker, timeouts)
   - FYI email with the submitted PDF after each sprint submission (audit trail;
     also counts into drip's daily-cap accounting via the emails table)
-  - lockfile prevents overlapping runs; per-run cap prevents batch-update storms
+  - lockfile prevents overlapping runs; attempted-row cap prevents batch-update storms
   - unknown ATS / adapter failure -> posting falls back into the normal queue
     ('tailored', so drip's auto-approve picks it up within the hour)
 """
@@ -58,14 +58,16 @@ def run() -> list[dict]:
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
     done = 0
+    attempted = 0
     for pid in new_ids:
-        if done >= PER_RUN_CAP or _sprint_submitted_today(conn) >= SPRINT_DAILY_CAP:
+        if attempted >= PER_RUN_CAP or _sprint_submitted_today(conn) >= SPRINT_DAILY_CAP:
             break
         r = conn.execute("SELECT * FROM postings WHERE posting_id=? AND status='queued'",
                          (pid,)).fetchone()
         if not r:
             continue  # filtered out, closed, or deduped
         print(f"[sprint] NEW: {r['company']} — {r['title']}", flush=True)
+        attempted += 1
         try:
             jd_text = fetch_jd(r["url"]) or ""
             pdf = tailor(r["posting_id"], r["company"], r["title"], jd_text)

@@ -27,7 +27,8 @@ EXCLUDE_COMPANIES = {c.lower() for c in PROFILE["preferences"]["exclude_companie
 HARD_EXCLUDE = [
     "mechanical", "civil engineer", "electrical engineer", "chemical engineer",
     "accounting", "tax ", "audit", "hr intern", "marketing", "sales intern",
-    "supply chain", "finance intern", "actuar",
+    "supply chain", "finance intern", "actuar", "phd", "doctoral", "doctorate",
+    "master's", "master’s", "masters degree", "ms/phd", "mba intern",
 ]
 
 
@@ -58,7 +59,7 @@ def run(verbose: bool = False) -> dict:
             # is a not-yet-submitted full-time role, swap: intern wins.)
             dup = conn.execute(
                 "SELECT posting_id, title, status FROM postings WHERE lower(company)=lower(?) "
-                "AND status IN ('queued','tailored','ready','submitted') LIMIT 1",
+                "AND status IN ('queued','tailored','ready','manual','failed','submitted') LIMIT 1",
                 (r["company"],),
             ).fetchone()
             if dup:
