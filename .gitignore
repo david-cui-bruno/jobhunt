@@ -7,3 +7,10 @@ out/
 *.log
 .DS_Store
 __pycache__/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+crash.log
+crash.*.log

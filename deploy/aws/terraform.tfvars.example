@@ -1,0 +1,10 @@
+aws_region           = "us-east-1"
+instance_type         = "t3a.medium"
+instance_architecture = "x86_64"
+root_volume_size_gb   = 40
+backup_retention_days = 14
+monthly_budget_usd    = 50
+
+# Adding an email creates an SNS subscription and AWS Budget notifications.
+# AWS sends a confirmation link for the SNS subscription after apply.
+alert_email = ""

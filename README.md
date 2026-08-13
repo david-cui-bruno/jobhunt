@@ -53,6 +53,12 @@ for provisioning, Gmail reauthentication, staged enablement, monitoring, and
 rollback. Timers are intentionally installed disabled so the migration cannot
 send or submit anything before the operator verifies the queue and credentials.
 
+The selected AWS path is documented in [`deploy/aws/README.md`](deploy/aws/README.md).
+It provisions EC2, encrypted EBS, a stable Elastic IP, SSM-only administration,
+CloudWatch monitoring, budget alerts, private S3 staging, and daily AWS Backup
+recovery points through Terraform. No AWS resource is created until an explicit
+`terraform apply`.
+
 ## Kith referral queue sync
 
 `sync_queue.py` mirrors only the current `queued`, `ready`, and `failed` postings
