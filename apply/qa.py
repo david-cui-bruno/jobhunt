@@ -154,6 +154,53 @@ Return a JSON array, one entry per control you can answer: {{"id_or_name": ..., 
 Return ONLY the JSON array."""
 
 
+BLOCKED_QUESTION_PATTERNS = [
+    r"\b(date of birth|dob|birth date|birthday|age)\b",
+    r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary))\b",
+    r"\b(offer deadline|exploding offer|outstanding offer|competing offer|pending offer|deadline to accept)\b",
+    r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b",
+    r"\b(referral|referred|refer you|know anyone|previously employed|prior employment|worked (?:at|for)|former employee|current employee)\b",
+    r"\b(non[- ]?compete|conflict of interest|conflicts?|restrictive covenant|moonlighting|outside employment)\b",
+    r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b",
+    r"\b(exact|specific)\b.*\b(schedule|hours|availability|travel)\b|\b(work schedule|travel schedule|travel percentage|% travel|days per week|hours per week|available hours)\b",
+    r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b",
+    r"\b(what (?:are you|do you) (?:reading|watching|listening)|favorite (?:book|movie|podcast|show|song|artist|media)|last (?:book|movie|show|podcast)|reading list|media (?:you consume|consumption))\b",
+]
+
+
+def _control_question_text(control: dict) -> str:
+    return " ".join(str(control.get(k) or "") for k in ("label", "id", "name", "placeholder")).strip()
+
+
+def answer_requires_manual(control: dict, answer: object, profile_text: str | None = None) -> bool:
+    """Pure fail-closed policy for questions needing explicit user facts/preferences.
+
+    Returns True when a model answer must be dropped so optional fields remain blank
+    and required fields naturally surface for manual completion.
+    """
+    question = _control_question_text(control).lower()
+    if not question:
+        return False
+    if re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
+        if profile_text and re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation)\b", profile_text, re.I):
+            return False
+    return any(re.search(p, question, re.I) for p in BLOCKED_QUESTION_PATTERNS)
+
+
+def filter_manual_answers(controls: list[dict], answers: list[dict], profile_text: str | None = None) -> tuple[list[dict], list[dict]]:
+    """Return (allowed, blocked) answers using only inputs, with no side effects."""
+    by_key = {}
+    for c in controls:
+        for k in (c.get("id"), c.get("name"), c.get("label")):
+            if k:
+                by_key.setdefault(k, c)
+    allowed, blocked = [], []
+    for a in answers:
+        c = by_key.get(a.get("id_or_name"), {"label": a.get("id_or_name", "")})
+        (blocked if answer_requires_manual(c, a.get("answer"), profile_text) else allowed).append(a)
+    return allowed, blocked
+
+
 def harvest_select_options(page, controls: list[dict]) -> None:
     """React-select options only exist in the DOM while the menu is open.
     Open each combobox briefly to capture its options so Claude can answer exactly."""
@@ -187,7 +234,7 @@ def harvest_select_options(page, controls: list[dict]) -> None:
             page.mouse.click(5, 5)
 
 
-def get_answers(controls: list[dict]) -> list[dict]:
+def get_answers(controls: list[dict], context: dict | None = None) -> list[dict]:
     import datetime
     unanswered = [c for c in controls if not c["value"]]
     if not unanswered:
@@ -222,6 +269,7 @@ def get_answers(controls: list[dict]) -> list[dict]:
                 continue
         if answers:
             print(f"[qa] output truncated; salvaged {len(answers)} answers", file=sys.stderr)
+    answers, blocked = filter_manual_answers(unanswered, answers)
     # FULL-AUTO audit trail: every answer Claude gives is logged for review
     # (nightly summary points here; long essay answers especially).
     try:
@@ -231,12 +279,17 @@ def get_answers(controls: list[dict]) -> list[dict]:
                 if k:
                     label_by_key.setdefault(k, c.get("label", ""))
         with open(ROOT / "out" / "qa_answers.log", "a") as f:
-            for a in answers:
-                f.write(json.dumps({
-                    "ts": datetime.datetime.now().isoformat(timespec="seconds"),
-                    "question": label_by_key.get(a.get("id_or_name"), a.get("id_or_name")),
-                    "answer": a.get("answer"),
-                }) + "\n")
+            for decision, batch in (("allowed", answers), ("blocked_manual", blocked)):
+                for a in batch:
+                    rec = {
+                        "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+                        "decision": decision,
+                        "question": label_by_key.get(a.get("id_or_name"), a.get("id_or_name")),
+                        "answer": a.get("answer"),
+                    }
+                    if context:
+                        rec.update({k: v for k, v in context.items() if v})
+                    f.write(json.dumps(rec) + "\n")
     except Exception:
         pass
     return answers

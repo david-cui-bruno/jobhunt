@@ -67,7 +67,7 @@ def apply_ashby(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
             controls = page.evaluate(qa.EXTRACT_JS)
             if answers is None:
                 qa.harvest_select_options(page, controls)
-                answers = qa.get_answers(controls)
+                answers = qa.get_answers(controls, context={"slug": slug, "url": apply_url})
             live = {c["id"] or c["name"] for c in controls if not c["value"] and not c.get("chosen")}
             todo = [a for a in answers if a["id_or_name"] in live] if qa_pass else answers
             if qa_pass and not todo:
