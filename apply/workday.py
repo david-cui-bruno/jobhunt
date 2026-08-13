@@ -66,7 +66,7 @@ WD_EXTRACT_JS = """
     const entry = {faid: (ff.getAttribute('data-fkit-id') || 'x') + '|' + idx,
                    label, kind: 'unknown',
                    value: '', required: !!ff.querySelector('[aria-required="true"], [required]')
-                            || /\\*/.test(ff.querySelector('label')?.innerText || '')};
+                            || /\\*/.test(label)};
     const dateWrap = ff.querySelector('[data-automation-id="dateInputWrapper"]');
     const txt = ff.querySelector('input[type=text], input[type=email], input[type=tel], input:not([type]), textarea');
     const btn = ff.querySelector('button[aria-haspopup="listbox"]');
@@ -176,7 +176,20 @@ def _workday_date_parts(answer: str, has_day: bool) -> tuple[str, str, str] | No
     return None
 
 
-def wd_fill(page, field: dict, answer: str) -> bool:
+def _checkgroup_targets(answer: object, labels: list[str]) -> list[str]:
+    """Resolve one or more requested checkbox labels without arbitrary choices."""
+    requested = answer if isinstance(answer, list) else [answer]
+    targets = []
+    for value in requested:
+        pick = qa._best_option(str(value), [label for label in labels if label])
+        if pick is None:
+            return []
+        if pick not in targets:
+            targets.append(pick)
+    return targets
+
+
+def wd_fill(page, field: dict, answer: object) -> bool:
     """Fill one Workday formField. Address by fkit id when unique (index shifts as
     the DOM mutates), else fall back to extraction index."""
     fkit, _, idx_s = field["faid"].partition("|")
@@ -267,15 +280,16 @@ def wd_fill(page, field: dict, answer: str) -> bool:
             checks = ff.locator("input[type=checkbox]")
             labels = [checks.nth(i).evaluate("el => el.labels?.[0]?.innerText || el.value || ''").strip()
                       for i in range(checks.count())]
-            pick = qa._best_option(str(answer), [l for l in labels if l])
-            if pick is None:
+            targets = _checkgroup_targets(answer, labels)
+            if not targets:
                 return False
-            i = labels.index(pick)
-            try:
-                checks.nth(i).check(timeout=3000)
-            except Exception:
-                checks.nth(i).evaluate("el => el.labels?.[0]?.click() || el.click()")
-            return True
+            for target in targets:
+                i = labels.index(target)
+                try:
+                    checks.nth(i).check(timeout=3000)
+                except Exception:
+                    checks.nth(i).evaluate("el => el.labels?.[0]?.click() || el.click()")
+            return all(checks.nth(labels.index(target)).is_checked() for target in targets)
         if kind == "checkbox":
             box = ff.locator("input[type=checkbox]").first
             if str(answer).lower() in ("yes", "true", "1", "on", "checked", "agree"):
@@ -575,6 +589,30 @@ def fill_current_page(page, company_key: str, slug: str) -> None:
                 page.wait_for_timeout(200)
             except Exception:
                 page.keyboard.press("Escape")
+    # Re-apply deterministic facts even when Workday resumed a saved draft.
+    # This corrects stale parser/model values such as a completed Bachelor's
+    # claim and ensures list-valued checkbox answers select every approved item.
+    grounded = qa.explicit_approved_answers(
+        fields,
+        key_field="faid",
+        company_context=company_key,
+    )
+    grounded, _ = qa.filter_manual_answers(
+        [dict(field, company_context=company_key) for field in fields],
+        grounded,
+        key_field="faid",
+    )
+    by_faid = {field["faid"]: field for field in fields}
+    for item in grounded:
+        field = by_faid.get(item.get("faid"))
+        if not field:
+            continue
+        answer = item.get("answer")
+        current = str(field.get("value") or "").strip().lower()
+        if isinstance(answer, list) or current != str(answer or "").strip().lower():
+            wd_fill(page, field, answer)
+            page.wait_for_timeout(250)
+    fields = page.evaluate(WD_EXTRACT_JS)
     todo = [f for f in fields if not f["value"]]
     if not todo:
         return
@@ -582,7 +620,7 @@ def fill_current_page(page, company_key: str, slug: str) -> None:
     amap = {a["faid"]: a["answer"] for a in answers if "faid" in a}
     for f in todo:
         if f["faid"] in amap:
-            wd_fill(page, f, str(amap[f["faid"]]))
+            wd_fill(page, f, amap[f["faid"]])
             page.wait_for_timeout(250)
 
 

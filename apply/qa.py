@@ -251,7 +251,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary))\b",
     r"\b(offer deadline|exploding offer|outstanding offer|competing offer|pending offer|deadline to accept)\b",
     r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b",
-    r"\b(referral|referred|refer you|know anyone|previously employed|prior employment|worked (?:at|for)|former employee|current employee)\b",
+    r"\b(referral|referred|refer you|know anyone|previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker)|current employee)\b",
     r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|prior application|previous application)\b",
     r"\b(FINRA|SIE|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b",
     r"\b(member of your household|household member|family member|relative)\b.*\b(employed|worked|employee)\b",
@@ -262,6 +262,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(preferred pronouns?|pronouns?)\b",
     r"\bhave you (?:ever )?used\b.*\bbefore\b",
     r"\b(days? (?:a|per) week|in[- ]?office|onsite schedule|hybrid schedule|willing to (?:come|work|join).*(?:office|onsite))\b",
+    r"\b(local to the area|relocation assistance)\b",
     r"\b(future contact|marketing (?:email|communication|consent)|talent community)\b",
     r"\b(what (?:are you|do you) (?:reading|watching|listening)|favorite (?:book|movie|podcast|show|song|artist|media)|last (?:book|movie|show|podcast)|reading list|media (?:you consume|consumption))\b",
 ]
@@ -324,6 +325,20 @@ def _render_boolean(expected: bool, options: list[str]) -> str | None:
     return next((option for option in options if _answer_boolean(option) is expected), None)
 
 
+def _first_matching_option(candidates: list[str], options: list[str]) -> str | None:
+    """Return the first candidate with a credible option match.
+
+    Candidate ordering is meaningful. It lets factual profile data prefer the
+    most precise truthful label without ever falling back to an arbitrary first
+    option.
+    """
+    for candidate in candidates:
+        match = _best_option(candidate, options)
+        if match:
+            return match
+    return None
+
+
 def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name",
                               company_context: str = "",
                               approved_answers: dict | None = None) -> list[dict]:
@@ -343,7 +358,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
         control = dict(original, company_context=company_context)
         question = _control_question_text(control).lower()
         options = [str(option) for option in control.get("options") or []]
-        answer: str | None = None
+        answer: object | None = None
         if re.search(r"\b(18 or older|at least (?:age )?18)\b", question):
             birth = _date_parts(identity.get("date_of_birth"))
             if birth:
@@ -377,6 +392,31 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = f"{parsed[0]:02d}/{year}" if parsed else None
             elif month and year:
                 answer = f"{month} {year}"
+        elif re.search(r"\bhighest level of education\b", question):
+            # David is currently pursuing a BS. Prefer an in-progress/some-college
+            # label over a completed Bachelor's claim when the form offers one.
+            if options:
+                answer = _first_matching_option([
+                    "Some college",
+                    "College - currently enrolled",
+                    "Currently pursuing a Bachelor's degree",
+                ], options)
+            else:
+                answer = "Currently pursuing a Bachelor of Science"
+        elif re.search(r"\b(current )?(major|area of study|field of study)\b", question):
+            major = str((PROFILE.get("education") or {}).get("major") or "")
+            candidates = [major]
+            candidates.extend(part.strip() for part in re.split(r"\s*&\s*|\s+and\s+", major)
+                              if part.strip())
+            answer = _first_matching_option(candidates, options) if options else major
+        elif re.search(r"\b(legally )?authorized to work\b", question):
+            expected = (PROFILE.get("work_authorization") or {}).get("authorized_us")
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(r"\b(require|need).*(sponsorship|visa)|\bsponsorship\b.*\b(require|need)\b", question):
+            expected = (PROFILE.get("work_authorization") or {}).get("needs_sponsorship")
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
         elif re.search(r"\b(offer deadline|exploding offer|deadline to accept)\b", question):
             if offers:
                 answer = offers[0].get("deadline") or offers[0].get("deadline_month")
@@ -391,7 +431,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             expected = _company_fact(control, "used_product", approved)
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
-        elif re.search(r"\b(previously employed|prior employment|worked (?:at|for)|former employee)\b", question):
+        elif re.search(r"\b(previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker))\b", question):
             expected = _company_fact(control, "prior_employment", approved)
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
@@ -403,7 +443,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             expected = _company_fact(control, "prior_interview_or_application", approved)
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
-        elif re.search(r"\b(FINRA|SIE|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b", question):
+        elif re.search(r"\b(finra|sie|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b", question):
             expected = _company_fact(control, "licenses_or_exams", approved)
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
@@ -415,13 +455,26 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             expected = preferences.get("hybrid")
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
+        elif re.search(r"\blocal to the area\b", question):
+            # Workday's "No" choices encode whether relocation assistance is
+            # required. Relocation willingness alone cannot answer that.
+            expected = _company_fact(control, "local_to_advertised_area_answer", approved)
+            if isinstance(expected, str):
+                answer = _best_option(expected, options) if options else expected
+        elif (re.search(r"\bwhich location\(s\).*open to working\b", question)
+              and control.get("kind") == "checkgroup"
+              and (PROFILE.get("preferences") or {}).get("relocate_ok")):
+            # The profile explicitly says open to any listed office. Preserve a
+            # list so Workday can select every checkbox instead of stringifying
+            # it and accidentally choosing only one.
+            answer = options or None
         if answer is not None:
-            if options:
+            if options and not isinstance(answer, list):
                 answer = _best_option(str(answer), options) or answer
             key = (control.get(key_field) if key_field != "id_or_name" else
                    control.get("id") or control.get("name") or control.get("label"))
             if key:
-                rendered.append({key_field: key, "answer": str(answer)})
+                rendered.append({key_field: key, "answer": answer})
     return rendered
 
 
@@ -505,13 +558,13 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         )
     if re.search(r"\bhave you (?:ever )?used\b.*\bbefore\b|\b(used|use|customer of|experience with|familiar with|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b", question):
         return _company_answer_is_approved(control, "used_product", approved, answer)
-    if re.search(r"\b(previously employed|prior employment|worked (?:at|for)|former employee)\b", question):
+    if re.search(r"\b(previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker))\b", question):
         return _company_answer_is_approved(control, "prior_employment", approved, answer)
     if re.search(r"\b(referral|referred|refer you|know anyone|current employee)\b", question):
         return _company_answer_is_approved(control, "referral", approved, answer)
     if re.search(r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|prior application|previous application)\b", question):
         return _company_answer_is_approved(control, "prior_interview_or_application", approved, answer)
-    if re.search(r"\b(FINRA|SIE|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b", question):
+    if re.search(r"\b(finra|sie|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b", question):
         return _company_answer_is_approved(control, "licenses_or_exams", approved, answer)
     if re.search(r"\b(member of your household|household member|family member|relative)\b", question):
         return _company_answer_is_approved(control, "household_employment", approved, answer)
@@ -524,6 +577,9 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     if re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|onsite|hybrid)\b", question):
         expected = preferences.get("hybrid")
         return expected is not None and _answer_boolean(answer_text) is expected
+    if re.search(r"\b(local to the area|relocation assistance)\b", question):
+        expected = _company_fact(control, "local_to_advertised_area_answer", approved)
+        return isinstance(expected, str) and expected.strip().lower() == answer_text.strip().lower()
     if re.search(r"\b(future contact|marketing (?:email|communication|consent)|talent community)\b", question):
         return preferences.get("future_contact") is not None
     return False

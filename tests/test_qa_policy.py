@@ -8,6 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apply"))
 import qa  # noqa: E402
 import smartrecruiters  # noqa: E402
+import workday  # noqa: E402
 
 
 class QaManualPolicyTest(unittest.TestCase):
@@ -240,6 +241,106 @@ class QaManualPolicyTest(unittest.TestCase):
             },
             {answer["id_or_name"]: answer["answer"] for answer in rendered},
         )
+
+    def test_lpl_factual_answers_render_without_model_guesses(self):
+        controls = [
+            {
+                "id": "education",
+                "label": "What is your highest level of education?",
+                "options": ["High school diploma", "Some college, no degree", "Bachelor’s degree"],
+            },
+            {
+                "id": "major",
+                "label": "What is your current major/area of study?",
+                "options": ["Accounting", "Computer Science", "Economics"],
+            },
+            {
+                "id": "auth",
+                "label": "Are you legally authorized to work in the United States for any employer?",
+                "options": ["Yes", "No"],
+            },
+            {
+                "id": "sponsor",
+                "label": "Will you now or in the future require immigration sponsorship by our company?",
+                "options": ["Yes", "No"],
+            },
+            {
+                "id": "former",
+                "label": "Are you a former LPL employee or contingent worker?",
+                "options": ["Yes", "No"],
+            },
+            {
+                "id": "finra",
+                "label": "Do you hold any FINRA licenses?",
+                "options": ["Yes - please indicate below", "No"],
+            },
+            {
+                "id": "local",
+                "label": "Are you local to the area in which this job has been advertised?",
+                "options": [
+                    "Yes",
+                    "No - I am willing to relocate & I do not require relocation assistance.",
+                ],
+            },
+            {
+                "id": "locations",
+                "label": "If offered this position, which location(s) would you be open to working in? Please select all that apply.",
+                "kind": "checkgroup",
+                "options": ["Austin, TX", "New York, NY", "Washington, DC"],
+            },
+        ]
+
+        rendered = qa.explicit_approved_answers(
+            controls,
+            company_context="lplfinancial",
+            approved_answers=self.APPROVED,
+        )
+        answers = {item["id_or_name"]: item["answer"] for item in rendered}
+
+        self.assertEqual("Some college, no degree", answers["education"])
+        self.assertEqual("Computer Science", answers["major"])
+        self.assertEqual("Yes", answers["auth"])
+        self.assertEqual("No", answers["sponsor"])
+        self.assertEqual("No", answers["former"])
+        self.assertEqual("No", answers["finra"])
+        self.assertNotIn("local", answers)
+        self.assertEqual(controls[-1]["options"], answers["locations"])
+
+        allowed, blocked = qa.filter_manual_answers(
+            [dict(controls[-2], company_context="lplfinancial")],
+            [{"id_or_name": "local", "answer": controls[-2]["options"][1]}],
+            approved_answers=self.APPROVED,
+        )
+        self.assertEqual([], allowed)
+        self.assertEqual(["local"], [item["id_or_name"] for item in blocked])
+
+    def test_former_named_company_employee_answer_is_policy_checked(self):
+        controls = [
+            {
+                "id": key,
+                "label": "Are you a former LPL employee or contingent worker?",
+                "company_context": "lplfinancial",
+                "options": ["Yes", "No"],
+            }
+            for key in ("former", "former-wrong")
+        ]
+
+        allowed, blocked = qa.filter_manual_answers(
+            controls,
+            [
+                {"id_or_name": "former", "answer": "No"},
+                {"id_or_name": "former-wrong", "answer": "Yes"},
+            ],
+            approved_answers=self.APPROVED,
+        )
+
+        self.assertEqual(["No"], [answer["answer"] for answer in allowed])
+        self.assertEqual(["Yes"], [answer["answer"] for answer in blocked])
+
+    def test_checkgroup_targets_preserve_every_requested_location(self):
+        labels = ["Austin, TX", "New York, NY", "Washington, DC"]
+        self.assertEqual(labels, workday._checkgroup_targets(labels, labels))
+        self.assertEqual([], workday._checkgroup_targets(["Austin, TX", "Paris"], labels))
 
     def test_only_relevant_sensitive_answers_enter_the_model_prompt(self):
         context = qa.relevant_application_answers(
