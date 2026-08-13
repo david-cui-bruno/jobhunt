@@ -81,6 +81,14 @@ class AwsDeploymentTests(unittest.TestCase):
         self.assertIn("parameter/${var.project_name}/kith_env", policy)
         self.assertNotIn("parameter/${var.project_name}/*", policy)
 
+    def test_kith_config_is_restored_with_worker_read_access(self) -> None:
+        installer = (ROOT / "deploy" / "install-ubuntu.sh").read_text()
+        bootstrap = (AWS / "stage-and-bootstrap.sh").read_text()
+        self.assertIn("install -d -o root -g jobhunt -m 0750 /etc/jobhunt", installer)
+        self.assertIn("--name ${kith_parameter_name} --with-decryption", bootstrap)
+        self.assertIn("chown root:jobhunt /etc/jobhunt/kith.env", bootstrap)
+        self.assertIn("chmod 640 /etc/jobhunt/kith.env", bootstrap)
+
     def test_sqlite_staging_is_consistent_and_removes_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -49,6 +49,7 @@ instance_id="$(terraform -chdir="${TF_DIR}" output -raw instance_id)"
 region="$(terraform -chdir="${TF_DIR}" output -raw aws_region)"
 bucket="$(terraform -chdir="${TF_DIR}" output -raw state_bucket)"
 parameter_name="$(terraform -chdir="${TF_DIR}" output -raw anthropic_parameter_name)"
+kith_parameter_name="${parameter_name%/*}/kith_env"
 
 workdir="$(mktemp -d)"
 uploaded_prefix=""
@@ -162,6 +163,15 @@ printf 'ANTHROPIC_API_KEY=%s\nJOBHUNT_HEADLESS=1\nJOBHUNT_POSTING_TIMEOUT_SECOND
 unset secret
 chown root:root /etc/jobhunt/jobhunt.env
 chmod 600 /etc/jobhunt/jobhunt.env
+chown root:jobhunt /etc/jobhunt
+chmod 750 /etc/jobhunt
+if aws ssm get-parameter --region ${region} --name ${kith_parameter_name} --with-decryption --query Parameter.Value --output text > /etc/jobhunt/kith.env.tmp 2>/dev/null; then
+  mv /etc/jobhunt/kith.env.tmp /etc/jobhunt/kith.env
+  chown root:jobhunt /etc/jobhunt/kith.env
+  chmod 640 /etc/jobhunt/kith.env
+else
+  rm -f /etc/jobhunt/kith.env.tmp
+fi
 cd /opt/jobhunt
 systemctl disable --now jobhunt@drip.timer jobhunt@revise.timer jobhunt@submit.timer jobhunt@sprint.timer jobhunt@inbox.timer jobhunt-queue-sync.timer || true
 sudo -u jobhunt env PYTHONDONTWRITEBYTECODE=1 /opt/jobhunt/.venv/bin/python -m unittest discover -v -s /opt/jobhunt -p 'test*.py'

@@ -29,7 +29,7 @@ if ! id -u jobhunt >/dev/null 2>&1; then
 fi
 
 install -d -o jobhunt -g jobhunt -m 0750 /opt/jobhunt/out /opt/jobhunt/resume /opt/jobhunt/secrets /opt/jobhunt/.cache/ms-playwright
-install -d -o root -g root -m 0750 /etc/jobhunt
+install -d -o root -g jobhunt -m 0750 /etc/jobhunt
 
 if [[ ! -e /opt/jobhunt/.venv/bin/python ]]; then
   python3 -m venv /opt/jobhunt/.venv
