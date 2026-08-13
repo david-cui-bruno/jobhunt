@@ -626,9 +626,15 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                             break
             if not advanced:
                 errs = wd_page_errors(page)
-                result["reason"] = f"stuck on '{step}': {errs[:3]}"
                 result["unanswered"] = [f["label"] for f in page.evaluate(WD_EXTRACT_JS)
                                         if f["required"] and not f["value"]][:10]
+                if result["unanswered"]:
+                    result.update(
+                        ok=True,
+                        reason=f"needs answers: {result['unanswered']}",
+                    )
+                else:
+                    result["reason"] = f"stuck on '{step}': {errs[:3]}"
                 _shot(page, slug, "stuck")
                 browser.close()
                 return result
