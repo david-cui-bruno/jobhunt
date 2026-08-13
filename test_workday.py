@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import inspect
 import json
 import sys
 import unittest
@@ -80,6 +81,12 @@ class WorkdayAnswerTests(unittest.TestCase):
             self.assertTrue(workday.saved_draft_wizard_is_active(page))
         with mock.patch.object(workday, "current_step", return_value=""):
             self.assertFalse(workday.saved_draft_wizard_is_active(page))
+
+    def test_saved_resume_refresh_deletes_only_the_exact_named_attachment(self) -> None:
+        source = inspect.getsource(workday.refresh_saved_resume)
+        self.assertIn('expected_label = f"Delete {resume_pdf.name}"', source)
+        self.assertIn("existing.count() != 1", source)
+        self.assertNotIn("delete-file'].first", source)
 
     def test_model_outage_returns_no_guesses(self) -> None:
         fields = [

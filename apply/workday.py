@@ -493,6 +493,49 @@ def saved_draft_wizard_is_active(page) -> bool:
     )
 
 
+def refresh_saved_resume(page, resume_pdf: Path) -> bool:
+    """Replace the same-named resume in a resumed Workday draft.
+
+    A saved draft bypasses the initial autofill upload screen. The attachment may
+    therefore predate a resume correction even though its filename is unchanged.
+    Delete only the exact same-named file, then upload the current verified PDF.
+    If Workday's controls do not match that safe shape, fail closed.
+    """
+    upload = page.locator("input[data-automation-id='file-upload-input-ref']").first
+    if not upload.count():
+        return False
+    expected_label = f"Delete {resume_pdf.name}"
+    existing = page.locator(
+        f"button[data-automation-id='delete-file'][aria-label={json.dumps(expected_label)}]"
+    )
+    if existing.count() != 1:
+        return False
+    try:
+        existing.first.click(timeout=5000)
+        page.wait_for_timeout(700)
+        dialog = page.locator("[role='dialog']:visible").last
+        if dialog.count():
+            confirm = dialog.locator(
+                "button[data-automation-id*='delete'], button:has-text('Delete')"
+            ).last
+            if confirm.count() and confirm.is_visible():
+                confirm.click(timeout=5000)
+                page.wait_for_timeout(700)
+        try:
+            existing.first.wait_for(state="detached", timeout=5000)
+        except Exception:
+            return False
+        upload = page.locator("input[data-automation-id='file-upload-input-ref']").first
+        upload.set_input_files(str(resume_pdf))
+        page.wait_for_timeout(4000)
+        replacement = page.locator(
+            f"button[data-automation-id='delete-file'][aria-label={json.dumps(expected_label)}]"
+        )
+        return replacement.count() == 1
+    except Exception:
+        return False
+
+
 def _account_scope(page):
     """The account form can render in the main page or an iframe (Medtronic).
     Return the frame that actually contains it, else the page itself.
@@ -683,10 +726,12 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
             maybe_create_account(page, company_key)
             maybe_sign_in(page, company_key)
         up = page.locator("[data-automation-id='file-upload-input-ref']").first
+        resume_current = False
         try:
             up.wait_for(state="attached", timeout=20000)
             up.set_input_files(str(resume_pdf))
             page.wait_for_timeout(5000)
+            resume_current = True
         except Exception:
             # Workday may resume an authenticated candidate directly into a
             # saved wizard. In that state the initial upload choice no longer
@@ -701,6 +746,18 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
         for page_no in range(MAX_PAGES):
             step = current_step(page)
             body_text = page.inner_text("body").lower()
+            if "my experience" in step.lower() and not resume_current:
+                if not refresh_saved_resume(page, resume_pdf):
+                    result.update(
+                        ok=True,
+                        reason="needs correction: could not refresh saved resume attachment",
+                        unanswered=["Resume/CV attachment"],
+                    )
+                    _shot(page, slug, "resume_refresh_failed")
+                    browser.close()
+                    return result
+                resume_current = True
+                result["resume_refreshed"] = True
             if "review" in step.lower():
                 _shot(page, slug, f"review")
                 if dry_run:
