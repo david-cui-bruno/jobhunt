@@ -66,7 +66,8 @@ def poll_once(verbose: bool = True) -> dict:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT e.*, p.company, p.title, p.status FROM emails e "
-        "JOIN postings p USING(posting_id) WHERE p.status IN ('tailored')"
+        "JOIN postings p USING(posting_id) WHERE p.status IN ('tailored') "
+        "AND e.thread_id IS NOT NULL AND e.thread_id != ''"
     ).fetchall()
     sent_ids = {x[0] for x in conn.execute("SELECT message_id FROM sent_messages")}
     actions = {"approved": [], "skipped": [], "revised": []}
