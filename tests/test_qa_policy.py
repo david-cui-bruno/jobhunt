@@ -21,6 +21,9 @@ class QaManualPolicyTest(unittest.TestCase):
             {"id": "clear", "name": "", "label": "What security clearance do you hold?", "value": ""},
             {"id": "sched", "name": "", "label": "List your exact work schedule and travel percentage", "value": ""},
             {"id": "dis", "name": "", "label": "Disability history", "value": ""},
+            {"id": "pronouns", "name": "", "label": "Preferred pronouns", "value": ""},
+            {"id": "used", "name": "", "label": "Have you ever used Sentry before?", "value": ""},
+            {"id": "hybrid", "name": "", "label": "Are you willing to join us in office 3 days a week?", "value": ""},
             {"id": "media", "name": "", "label": "What are you reading right now?", "value": ""},
             {"id": "allowed", "name": "", "label": "Why are you interested in this internship?", "value": ""},
         ]

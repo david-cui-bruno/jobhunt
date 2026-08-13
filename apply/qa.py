@@ -164,6 +164,10 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b",
     r"\b(exact|specific)\b.*\b(schedule|hours|availability|travel)\b|\b(work schedule|travel schedule|travel percentage|% travel|days per week|hours per week|available hours)\b",
     r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b",
+    r"\b(preferred pronouns?|pronouns?)\b",
+    r"\bhave you (?:ever )?used\b.*\bbefore\b",
+    r"\b(days? (?:a|per) week|in[- ]?office|onsite schedule|hybrid schedule|willing to (?:come|work|join).*(?:office|onsite))\b",
+    r"\b(future contact|marketing (?:email|communication|consent)|talent community)\b",
     r"\b(what (?:are you|do you) (?:reading|watching|listening)|favorite (?:book|movie|podcast|show|song|artist|media)|last (?:book|movie|show|podcast)|reading list|media (?:you consume|consumption))\b",
 ]
 
@@ -187,18 +191,47 @@ def answer_requires_manual(control: dict, answer: object, profile_text: str | No
     return any(re.search(p, question, re.I) for p in BLOCKED_QUESTION_PATTERNS)
 
 
-def filter_manual_answers(controls: list[dict], answers: list[dict], profile_text: str | None = None) -> tuple[list[dict], list[dict]]:
+def filter_manual_answers(controls: list[dict], answers: list[dict], profile_text: str | None = None,
+                          key_field: str = "id_or_name") -> tuple[list[dict], list[dict]]:
     """Return (allowed, blocked) answers using only inputs, with no side effects."""
     by_key = {}
     for c in controls:
-        for k in (c.get("id"), c.get("name"), c.get("label")):
+        for k in (c.get("id"), c.get("name"), c.get("label"), c.get("faid")):
             if k:
                 by_key.setdefault(k, c)
     allowed, blocked = [], []
     for a in answers:
-        c = by_key.get(a.get("id_or_name"), {"label": a.get("id_or_name", "")})
+        answer_key = a.get(key_field)
+        c = by_key.get(answer_key, {"label": answer_key or ""})
         (blocked if answer_requires_manual(c, a.get("answer"), profile_text) else allowed).append(a)
     return allowed, blocked
+
+
+def log_answer_decisions(controls: list[dict], allowed: list[dict], blocked: list[dict],
+                         context: dict | None = None, key_field: str = "id_or_name") -> None:
+    """Append attributable allowed/blocked decisions for later application review."""
+    label_by_key = {}
+    for c in controls:
+        for k in (c.get("id"), c.get("name"), c.get("faid"), c.get("label")):
+            if k:
+                label_by_key.setdefault(k, c.get("label", ""))
+    try:
+        (ROOT / "out").mkdir(parents=True, exist_ok=True)
+        with open(ROOT / "out" / "qa_answers.log", "a") as f:
+            for decision, batch in (("allowed", allowed), ("blocked_manual", blocked)):
+                for answer in batch:
+                    answer_key = answer.get(key_field)
+                    rec = {
+                        "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+                        "decision": decision,
+                        "question": label_by_key.get(answer_key, answer_key),
+                        "answer": answer.get("answer"),
+                    }
+                    if context:
+                        rec.update({k: v for k, v in context.items() if v})
+                    f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
 
 
 def harvest_select_options(page, controls: list[dict]) -> None:
@@ -270,28 +303,8 @@ def get_answers(controls: list[dict], context: dict | None = None) -> list[dict]
         if answers:
             print(f"[qa] output truncated; salvaged {len(answers)} answers", file=sys.stderr)
     answers, blocked = filter_manual_answers(unanswered, answers)
-    # FULL-AUTO audit trail: every answer Claude gives is logged for review
-    # (nightly summary points here; long essay answers especially).
-    try:
-        label_by_key = {}
-        for c in unanswered:
-            for k in (c.get("id"), c.get("name")):
-                if k:
-                    label_by_key.setdefault(k, c.get("label", ""))
-        with open(ROOT / "out" / "qa_answers.log", "a") as f:
-            for decision, batch in (("allowed", answers), ("blocked_manual", blocked)):
-                for a in batch:
-                    rec = {
-                        "ts": datetime.datetime.now().isoformat(timespec="seconds"),
-                        "decision": decision,
-                        "question": label_by_key.get(a.get("id_or_name"), a.get("id_or_name")),
-                        "answer": a.get("answer"),
-                    }
-                    if context:
-                        rec.update({k: v for k, v in context.items() if v})
-                    f.write(json.dumps(rec) + "\n")
-    except Exception:
-        pass
+    # FULL-AUTO audit trail: every answer Claude gives is logged for review.
+    log_answer_decisions(unanswered, answers, blocked, context=context)
     return answers
 
 

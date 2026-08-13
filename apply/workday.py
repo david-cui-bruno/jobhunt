@@ -335,7 +335,18 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
         resp = json.load(r)
     text = "".join(b.get("text", "") for b in resp["content"] if b.get("type") == "text")
     m = re.search(r"\[.*\]", text, re.S)
-    return json.loads(m.group(0)) if m else []
+    model_answers = json.loads(m.group(0)) if m else []
+    answers, blocked = qa.filter_manual_answers(
+        unanswered, model_answers, key_field="faid"
+    )
+    qa.log_answer_decisions(
+        unanswered,
+        answers,
+        blocked,
+        context={"company": company, "title": title, "ats": "workday"},
+        key_field="faid",
+    )
+    return answers
 
 
 def wd_page_errors(page) -> list[str]:
