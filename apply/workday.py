@@ -442,6 +442,15 @@ def current_step(page) -> str:
     return ""
 
 
+def saved_draft_wizard_is_active(page) -> bool:
+    """Whether Workday resumed directly into a previously saved application."""
+    return bool(
+        current_step(page)
+        and page.locator("[data-automation-id='pageFooterNextButton']").count()
+        and page.locator("[data-automation-id^='formField-']").count()
+    )
+
+
 def _account_scope(page):
     """The account form can render in the main page or an iframe (Medtronic).
     Return the frame that actually contains it, else the page itself.
@@ -613,10 +622,14 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
             up.set_input_files(str(resume_pdf))
             page.wait_for_timeout(5000)
         except Exception:
-            result["reason"] = "resume upload zone never appeared"
-            _shot(page, slug, "fail_upload")
-            browser.close()
-            return result
+            # Workday may resume an authenticated candidate directly into a
+            # saved wizard. In that state the initial upload choice no longer
+            # exists, but the normal per-page safety gates must still run.
+            if not saved_draft_wizard_is_active(page):
+                result["reason"] = "resume upload zone never appeared"
+                _shot(page, slug, "fail_upload")
+                browser.close()
+                return result
 
         # wizard loop
         for page_no in range(MAX_PAGES):
