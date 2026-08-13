@@ -202,7 +202,7 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
     results = []
     done = 0
     for r in rows:
-        if done >= limit:
+        if done >= limit or (dry_run and len(results) >= limit):
             break
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
         pdf = _runtime_path(r["resume_pdf"])
