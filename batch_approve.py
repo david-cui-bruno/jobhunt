@@ -54,30 +54,8 @@ def collect_pending(conn) -> list[dict]:
 
 
 def send_batch() -> int:
-    conn = sqlite3.connect(DB)
-    ensure_tables(conn)
-    items = collect_pending(conn)
-    if not items:
-        return 0
-    import json
-    lines = []
-    for i, it in enumerate(items, 1):
-        tag = {"resume": "RESUME", "email_app": "EMAIL-APP"}[it["kind"]]
-        lines.append(f"{i}. [{tag}] {it['company']} — {it['title']}\n   {it['url']}")
-    body = (
-        f"{len(items)} items pending approval. Reply with commands, e.g.:\n"
-        "  approve 1,3,5-7\n  skip 2\n  approve all\n  4: lead with the ML project\n\n"
-        + "\n\n".join(lines)
-        + "\n\n(Resumes: 'approve' -> submit queue. Email apps: 'approve' -> email sent to company.)"
-    )
-    resp = mailer.send(f"[jobhunt] BATCH APPROVAL — {len(items)} pending", body)
-    conn.execute("INSERT OR IGNORE INTO sent_messages VALUES (?)", (resp.get("id"),))
-    conn.execute("INSERT INTO batch_emails (thread_id, message_id, sent_at, item_map) VALUES (?,?,?,?)",
-                 (resp.get("threadId"), resp.get("id"), int(time.time()),
-                  json.dumps([{ "kind": it["kind"], "posting_id": it["posting_id"]} for it in items])))
-    conn.commit()
-    conn.close()
-    return len(items)
+    """Approval digests are disabled. Kept as a no-op for old callers."""
+    return 0
 
 
 def _parse_ranges(s: str) -> set[int]:

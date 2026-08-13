@@ -73,33 +73,8 @@ def run():
     filt_res = filt.run()
     print(f"[drip] watcher: {summary['new_count']} new, filter: {filt_res}")
 
-    # 2) revise poller
-    import revise
-    actions = revise.poll_once(verbose=False)
-    if any(actions.values()):
-        print(f"[drip] revise actions: {actions}")
-
-    # 2a2) batch-approval: poll replies every run; send digest at 9am and 3pm
-    try:
-        import batch_approve
-        acted = batch_approve.poll_batch_replies(verbose=False)
-        if any(acted.values()):
-            print(f"[drip] batch approvals: {acted}")
-        if now.hour in (9, 15):
-            import sqlite3 as _sq
-            _c = _sq.connect(DB)
-            batch_approve.ensure_tables(_c)
-            last = _c.execute("SELECT MAX(sent_at) FROM batch_emails").fetchone()[0] or 0
-            _c.close()
-            import time as _t
-            if _t.time() - last > 4 * 3600:
-                n = batch_approve.send_batch()
-                if n:
-                    print(f"[drip] batch approval email sent ({n} items)")
-    except Exception as e:
-        print(f"[drip] batch approval failed: {e}")
-
-    # 2b) email applications: compose drafts for ready HN postings + poll approvals
+    # 2) email applications: compose and send ready HN postings autonomously.
+    # poll_approvals only drains approval threads created by older releases.
     try:
         import email_apply
         comp = email_apply.compose_ready_email_postings()
@@ -109,43 +84,29 @@ def run():
     except Exception as e:
         print(f"[drip] email apps failed: {e}")
 
-    # 3) drip one tailored email if within window and under cap
+    # 3) tailor one posting and queue it directly, with no approval email.
     if 9 <= now.hour < 21 and sent_today(conn) < DAILY_CAP:
         row = pick_next(conn)
         if row:
             import batch
-            from jd import fetch_jd, detect_ats
+            from jd import fetch_jd
             from tailor import tailor
-            import mailer
             batch.ensure_email_table(conn)
             jd_text = fetch_jd(row["url"])
             pdf = tailor(row["posting_id"], row["company"], row["title"], jd_text)
             if pdf:
-                body = (f"{row['company']} — {row['title']}\n"
-                        f"ATS: {detect_ats(row['url'])}\nLocations: {row['locations']}\n"
-                        f"Link: {row['url']}\n\nTailored resume attached.\n\n"
-                        "Reply: suggestions -> revision | 'approve' -> submit queue | 'skip' -> drop.\n"
-                        "No reply in 72h -> auto-approved (easy ATS only).")
-                resp = mailer.send(f"[jobhunt] {row['company']} — {row['title']}", body, [pdf])
-                conn.execute("INSERT OR IGNORE INTO sent_messages VALUES (?)", (resp.get("id"),))
                 conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
-                             (row["posting_id"], resp.get("threadId"), resp.get("id"),
+                             (row["posting_id"], None, None,
                               str(pdf), str(pdf.with_suffix('.tex')), int(time.time())))
-                conn.execute("UPDATE postings SET status='tailored' WHERE posting_id=?",
+                conn.execute("UPDATE postings SET status='ready' WHERE posting_id=?",
                              (row["posting_id"],))
                 conn.commit()
-                print(f"[drip] emailed: {row['company']} — {row['title']}")
+                print(f"[drip] tailored and queued: {row['company']} — {row['title']}")
 
-    # 4) FULL AUTO (David ratified 2026-08-08): ALL tailored postings go ready
-    # after a 1h reply window (one drip cycle, so a quick 'skip' reply still
-    # wins). Revised postings re-enter the same flow: sent_at resets on each
-    # revision, so the 1h window restarts from the latest revision reply.
-    # Unknown-ATS postings just settle 'manual' at submit time as before.
-    cutoff = time.time() - 1 * 3600
-    for r in conn.execute("SELECT e.*, p.url, p.company FROM emails e JOIN postings p USING(posting_id) "
-                          "WHERE p.status='tailored' AND e.sent_at < ?", (cutoff,)).fetchall():
+    # 4) Drain legacy tailored rows immediately. New rows enter ready directly.
+    for r in conn.execute("SELECT posting_id, company FROM postings WHERE status='tailored'").fetchall():
         conn.execute("UPDATE postings SET status='ready' WHERE posting_id=?", (r["posting_id"],))
-        print(f"[drip] auto-approved: {r['company']}")
+        print(f"[drip] legacy tailored row queued: {r['company']}")
     conn.commit()
 
     # 4b) weekly funnel stats (Sunday 6pm)

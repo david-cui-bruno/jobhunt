@@ -116,14 +116,9 @@ mutate the remote queue.
 Start with the least consequential worker and inspect its journal. Each command
 below is explicit so the full-auto sprint lane is not enabled accidentally.
 
-```bash
-sudo systemctl enable --now jobhunt@revise.timer
-sudo journalctl -u jobhunt@revise.service -n 100 --no-pager
-```
-
-After confirming Gmail reads work, enable the notification-producing drip and
-inbox timers. They reflect the current application policy, which includes
-approval emails and auto-approval behavior:
+After confirming Gmail reads work, enable the autonomous drip and inbox timers.
+Tailored resumes enter the submission queue directly; approval-request emails
+and the revision poller are disabled:
 
 ```bash
 sudo systemctl enable --now jobhunt@drip.timer jobhunt@inbox.timer
@@ -136,9 +131,9 @@ submission:
 sudo systemctl enable --now jobhunt@submit.timer
 ```
 
-Leave `jobhunt@sprint.timer` disabled initially. It bypasses the approval window
-and submits newly discovered postings immediately. Enable it only after the
-ordinary drip and submit paths are stable:
+Leave `jobhunt@sprint.timer` disabled initially. It submits newly discovered
+postings immediately. Enable it only after the ordinary drip and submit paths
+are stable:
 
 ```bash
 sudo systemctl enable --now jobhunt@sprint.timer
@@ -148,7 +143,7 @@ If Kith queue sync is needed, create `/etc/jobhunt/kith.env` from
 `deploy/kith.env.example`, chmod it 600, and then enable:
 
 ```bash
-sudo install -o root -g root -m 0600 deploy/kith.env.example /etc/jobhunt/kith.env
+sudo install -o root -g jobhunt -m 0640 deploy/kith.env.example /etc/jobhunt/kith.env
 sudoedit /etc/jobhunt/kith.env
 sudo systemctl enable --now jobhunt-queue-sync.timer
 ```
@@ -187,5 +182,5 @@ than copying a stale token over a working one.
   not an environment variable.
 - SQLite is single-host state. Do not run the laptop and VPS workers at the
   same time against separate copies of the database.
-- The current code intentionally sends approval and FYI emails. Hosting moves
-  the behavior but does not change that policy.
+- Approval-request emails are disabled. Daily/weekly summaries and actionable
+  exception notifications remain enabled.

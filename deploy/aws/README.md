@@ -168,11 +168,7 @@ not run `drip.py`, `submit.py`, `sprint.py`, `inbox.py`, or a real queue sync.
 Open an SSM shell and enable one stage at a time:
 
 ```bash
-# Read-only Gmail approval/revision polling first.
-sudo systemctl enable --now jobhunt@revise.timer
-sudo journalctl -u jobhunt@revise.service -n 100 --no-pager
-
-# Watcher, tailoring, approval email, and inbox behavior.
+# Watcher, autonomous tailoring, direct queueing, and inbox behavior.
 sudo systemctl enable --now jobhunt@drip.timer jobhunt@inbox.timer
 
 # Ordinary application submission only after reviewing the queue.
@@ -181,6 +177,9 @@ sudo systemctl enable --now jobhunt@submit.timer
 # Full-auto fast lane last.
 sudo systemctl enable --now jobhunt@sprint.timer
 ```
+
+Keep `jobhunt@revise.timer` disabled. Approval and revision-request emails are no
+longer part of the production policy.
 
 Enable Kith sync separately only if `/etc/jobhunt/kith.env` has been populated.
 

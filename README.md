@@ -19,12 +19,12 @@ GitHub repos (Summer2027 listings)
          Adapters: Greenhouse, Lever, Ashby, Workday, Rippling, SmartRecruiters
         |
         v
-  Approval queue (email w/ one-click approve) -> submit -> tracker
+  Autonomous submit -> tracker -> email summaries/exceptions
 ```
 
 ## Decisions log
 - Original cloud-first design: GitHub Actions orchestration, Browserbase for browser sessions
-- Approval-queue mode first, full-auto later once trusted
+- Full-auto application flow; approval-request emails disabled
 - Tailoring: reword/reorder existing content only
 - LLM: Anthropic API
 - Notifications: email (no dashboard)
@@ -43,7 +43,7 @@ checkout.
 - `apply/`    per-ATS Playwright adapters
 - `resume/`   your base LaTeX resume (source of truth)
 - `profile/`  application answers (copy profile.example.yaml -> profile.yaml)
-- `notify/`   email digests + approval links
+- `notify/`   email summaries and actionable exception alerts
 
 ## VPS deployment
 

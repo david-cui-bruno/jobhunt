@@ -25,7 +25,7 @@
 
 ## Projects (candidates to swap in per-JD)
 
-10. jobhunt — Autonomous job-application pipeline: watchers diff 3 GitHub listing repos ($\sim$450 postings tracked), Claude tailors LaTeX resumes per JD, Playwright adapters submit across Greenhouse/Lever/Ashby/Workday with Gmail human-in-the-loop approvals (Python, Playwright, SQLite, launchd)
+10. jobhunt — Autonomous job-application pipeline: watchers diff 3 GitHub listing repos ($\sim$450 postings tracked), Claude tailors LaTeX resumes per JD, and Playwright adapters submit across Greenhouse/Lever/Ashby/Workday with Gmail exception alerts (Python, Playwright, SQLite, systemd)
 11. SpaceOverflow — Stripe Connect marketplace flows with idempotent webhook processing and real-time messaging via Supabase channels; .edu-verified onboarding across 2 campuses
 12. Bruno's Dictionary — Next.js 14 + Supabase app with auth, moderated submissions, and type-safe DB migrations; 500+ entries, deployed on Vercel
 

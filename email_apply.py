@@ -2,11 +2,7 @@
 
 Flow: posting marked 'ready' whose url is an HN item / mailto -> extract the
 application email + instructions from the posting text -> Claude drafts a short
-intro email -> approval request sent to you with the full draft.
-
-FULL AUTO (David ratified 2026-08-08): reply 'send' to send immediately,
-'skip' to drop, or edits in plain english. No reply within the veto window
-(3h, business hours only) -> the draft is auto-sent as-is.
+intro email -> send it directly to the company. Approval requests are disabled.
 """
 from __future__ import annotations
 
@@ -26,6 +22,45 @@ import mailer  # noqa: E402
 DB = ROOT / "out" / "tracker.db"
 MODEL = "claude-sonnet-5"
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+
+def _runtime_path(stored_path: str, root: Path = ROOT) -> Path:
+    path = Path(stored_path)
+    if not path.is_absolute():
+        return root / path
+    if path.exists():
+        return path
+    if "out" in path.parts:
+        candidate = root.joinpath(*path.parts[path.parts.index("out"):])
+        if candidate.exists():
+            return candidate
+    return path
+
+
+def _send_application(to_addr: str, subject: str, body: str, pdf: Path) -> dict:
+    import base64
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["To"] = to_addr
+    msg["From"] = mailer.ME
+    msg["Subject"] = subject.strip()
+    msg.set_content(body.strip())
+    if pdf.exists():
+        msg.add_attachment(pdf.read_bytes(), maintype="application",
+                           subtype="pdf", filename="David_Cui_Resume.pdf")
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    return mailer._call("/messages/send", {"raw": raw})
+
+
+def _record_sent(conn: sqlite3.Connection, posting_id: str, to_addr: str,
+                 pdf: Path, message_id: str | None = None) -> None:
+    if message_id:
+        conn.execute("INSERT OR IGNORE INTO sent_messages VALUES (?)", (message_id,))
+    conn.execute("UPDATE postings SET status='submitted' WHERE posting_id=?", (posting_id,))
+    conn.execute(
+        "INSERT OR REPLACE INTO applications VALUES (?,?,?,?,?,?)",
+        (posting_id, str(pdf), "email", int(time.time()), f"emailed {to_addr}", ""))
 
 DRAFT_PROMPT = """Draft a short application email for this posting. Candidate: David Cui,
 Brown CS+Econ '27 (GPA 4.0), ex-YC founding CTO (Framewise Health), SWE intern at Freya (YC S25,
@@ -82,6 +117,7 @@ def compose_ready_email_postings(limit: int = 3) -> list[str]:
     conn.execute("""CREATE TABLE IF NOT EXISTS email_apps (
         posting_id TEXT PRIMARY KEY, draft_id TEXT, to_addr TEXT,
         approval_thread TEXT, created_at INTEGER, status TEXT DEFAULT 'awaiting_approval')""")
+    conn.execute("CREATE TABLE IF NOT EXISTS sent_messages (message_id TEXT PRIMARY KEY)")
     rows = conn.execute(
         "SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING(posting_id) "
         "WHERE p.status='ready' AND p.url LIKE '%news.ycombinator.com%' LIMIT ?",
@@ -114,21 +150,13 @@ def compose_ready_email_postings(limit: int = 3) -> list[str]:
             conn.execute("UPDATE postings SET status='manual' WHERE posting_id=?", (r["posting_id"],))
             conn.commit()
             continue
-        # approval request to David (draft is NOT sent to company)
-        pdf = Path(r["resume_pdf"])
-        if not pdf.is_absolute():
-            pdf = ROOT / pdf
-        body = (f"EMAIL APPLICATION DRAFT — {r['company']}\n"
-                f"Posting: {r['url']}\n\nTo: {to_addr}\nSubject: {d['subject']}\n\n"
-                f"{d['body']}\n\n---\nReply 'send' to send now, 'skip' to drop, "
-                "or edits in plain english. No reply in 3h -> auto-sent as-is.")
-        resp = mailer.send(f"[jobhunt] email app: {r['company']}", body,
-                           [pdf] if pdf.exists() else [])
-        conn.execute("INSERT OR IGNORE INTO sent_messages VALUES (?)", (resp.get("id"),))
-        conn.execute("INSERT INTO email_apps VALUES (?,?,?,?,?,'awaiting_approval')",
-                     (r["posting_id"], "", to_addr, resp.get("threadId"), int(time.time())))
-        conn.execute("UPDATE postings SET status='email_drafted' WHERE posting_id=?",
-                     (r["posting_id"],))
+        if not d.get("subject"):
+            continue
+        pdf = _runtime_path(r["resume_pdf"])
+        resp = _send_application(to_addr, d["subject"], d["body"], pdf)
+        conn.execute("INSERT INTO email_apps VALUES (?,?,?,?,?,'sent')",
+                     (r["posting_id"], resp.get("id", ""), to_addr, None, int(time.time())))
+        _record_sent(conn, r["posting_id"], to_addr, pdf, resp.get("id"))
         conn.commit()
         done.append(r["company"])
     conn.close()
@@ -136,43 +164,22 @@ def compose_ready_email_postings(limit: int = 3) -> list[str]:
 
 
 def _send_draft(conn, r, thread) -> bool:
-    """Send the drafted application email (reconstructed from the approval
-    thread's first message) to the company. Returns True on success."""
+    """Drain a draft created by an older approval-based release."""
     first = thread["messages"][0]
     body_text = mailer.extract_plain(first)
     m_sub = re.search(r"Subject: (.+)", body_text)
     m_body = re.search(r"Subject: .+?\n\n(.*?)\n\n---\nReply", body_text, re.S)
     if not (m_sub and m_body):
         return False
-    pdf = Path(r["resume_pdf"])
-    if not pdf.is_absolute():
-        pdf = ROOT / pdf
-    import base64
-    from email.message import EmailMessage
-    msg = EmailMessage()
-    msg["To"] = r["to_addr"]
-    msg["From"] = mailer.ME
-    msg["Subject"] = m_sub.group(1).strip()
-    msg.set_content(m_body.group(1).strip())
-    if pdf.exists():
-        msg.add_attachment(pdf.read_bytes(), maintype="application",
-                           subtype="pdf", filename="David_Cui_Resume.pdf")
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    mailer._call("/messages/send", {"raw": raw})
+    pdf = _runtime_path(r["resume_pdf"])
+    resp = _send_application(r["to_addr"], m_sub.group(1), m_body.group(1), pdf)
     conn.execute("UPDATE email_apps SET status='sent' WHERE posting_id=?", (r["posting_id"],))
-    conn.execute("UPDATE postings SET status='submitted' WHERE posting_id=?", (r["posting_id"],))
-    conn.execute(
-        "INSERT OR REPLACE INTO applications VALUES (?,?,?,?,?,?)",
-        (r["posting_id"], str(pdf), "email", int(time.time()), f"emailed {r['to_addr']}", ""))
+    _record_sent(conn, r["posting_id"], r["to_addr"], pdf, resp.get("id"))
     return True
 
 
-AUTO_SEND_VETO_SECONDS = 3 * 3600
-
-
 def poll_approvals() -> list[str]:
-    """Check approval threads. 'skip' drops, 'send' sends now; with no reply,
-    the draft auto-sends after the veto window (business hours only)."""
+    """Drain approval threads created before approval requests were disabled."""
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
     try:
@@ -196,14 +203,8 @@ def poll_approvals() -> list[str]:
             if t:
                 replies.append((int(m["internalDate"]), t))
         if not replies:
-            # FULL AUTO: no veto within window -> send as-is (business hours only,
-            # so an overnight window still gives you the morning to object).
-            import datetime
-            from zoneinfo import ZoneInfo
-            now = datetime.datetime.now(ZoneInfo("America/New_York"))
-            if (time.time() - r["created_at"] >= AUTO_SEND_VETO_SECONDS
-                    and 9 <= now.hour < 21 and _send_draft(conn, r, thread)):
-                acted.append(f"AUTO-SENT {r['company']} -> {r['to_addr']}")
+            if _send_draft(conn, r, thread):
+                acted.append(f"LEGACY-SENT {r['company']} -> {r['to_addr']}")
                 conn.commit()
             continue
         replies.sort()
