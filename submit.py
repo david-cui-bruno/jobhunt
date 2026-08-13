@@ -31,6 +31,26 @@ GAME_APPS = ("league of legends", "leagueclient", "riot client", "valorant", "st
              "cs2", "dota 2", "minecraft")
 
 
+def _dry_run_requested(argv: list[str]) -> bool:
+    """Accept both documented spellings so a safety check can never run live."""
+    return "--dry" in argv or "--dry-run" in argv
+
+
+def _runtime_path(stored_path: str, root: Path = ROOT) -> Path:
+    """Relocate a project file whose DB path came from another machine."""
+    path = Path(stored_path)
+    if not path.is_absolute():
+        return root / path
+    if path.exists():
+        return path
+    for marker in ("out", "resume"):
+        if marker in path.parts:
+            candidate = root.joinpath(*path.parts[path.parts.index(marker):])
+            if candidate.exists():
+                return candidate
+    return path
+
+
 def _user_is_gaming() -> bool:
     """True if a known game is running or the frontmost app is fullscreen."""
     import subprocess
@@ -185,9 +205,7 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
         if done >= limit:
             break
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
-        pdf = Path(r["resume_pdf"])
-        if not pdf.is_absolute():
-            pdf = ROOT / pdf
+        pdf = _runtime_path(r["resume_pdf"])
         if _posting_dead(r["url"]):
             _mark_outcome(conn, r["posting_id"], "filtered_out", "stale",
                           "liveness check marked posting stale", dry_run)
@@ -238,7 +256,8 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
     return results
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv if argv is None else argv
     # rotate old screenshots (14d) so out/ doesn't grow unbounded (32MB after day 1)
     try:
         shots = ROOT / "out" / "screenshots"
@@ -248,6 +267,10 @@ if __name__ == "__main__":
                 f.unlink()
     except Exception:
         pass
-    dry = "--dry" in sys.argv
+    dry = _dry_run_requested(argv)
     for r in submit_ready(dry_run=dry):
         print(r)
+
+
+if __name__ == "__main__":
+    main()

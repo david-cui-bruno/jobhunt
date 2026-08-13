@@ -10,6 +10,16 @@ import revise
 
 
 class RevisePollingTests(unittest.TestCase):
+    def test_runtime_path_relocates_laptop_resume_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            relocated = root / "out" / "resumes" / "candidate.tex"
+            relocated.parent.mkdir(parents=True)
+            relocated.write_text("resume")
+
+            stale = "/Users/old-user/jobhunt/out/resumes/candidate.tex"
+            self.assertEqual(revise._runtime_path(stale, root), relocated)
+
     def test_poll_once_ignores_email_rows_without_gmail_threads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "tracker.db"

@@ -36,6 +36,21 @@ CURRENT LATEX:
 Return ONLY the complete revised LaTeX source, no commentary, no markdown fences."""
 
 
+def _runtime_path(stored_path: str, root: Path = ROOT) -> Path:
+    """Relocate a project file whose DB path came from another machine."""
+    path = Path(stored_path)
+    if not path.is_absolute():
+        return root / path
+    if path.exists():
+        return path
+    for marker in ("out", "resume"):
+        if marker in path.parts:
+            candidate = root.joinpath(*path.parts[path.parts.index(marker):])
+            if candidate.exists():
+                return candidate
+    return path
+
+
 def call_claude_revise(tex: str, feedback: str) -> str:
     body = json.dumps({
         "model": MODEL, "max_tokens": 8000,
@@ -102,13 +117,14 @@ def poll_once(verbose: bool = True) -> dict:
         else:
             if verbose:
                 print(f"revising {name} per: {text[:100]!r}")
-            tex = Path(r["resume_tex"]).read_text()
+            tex_path = _runtime_path(r["resume_tex"])
+            tex = tex_path.read_text()
             new_tex = sanitize(call_claude_revise(tex, text))
-            pdf_path = Path(r["resume_pdf"])
+            pdf_path = _runtime_path(r["resume_pdf"])
             rev = r["revision"] + 1
             if validate(new_tex) or True:  # user-driven edits may change length; compile is the gate
                 if compile_pdf(new_tex, pdf_path):
-                    Path(r["resume_tex"]).write_text(new_tex)
+                    tex_path.write_text(new_tex)
                     resp = mailer.send(
                         f"[jobhunt] {r['company']} — {r['title']}",
                         f"Revision {rev} attached, incorporating: {text[:300]}\n\n"
