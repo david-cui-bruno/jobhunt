@@ -50,6 +50,10 @@ class QaManualPolicyTest(unittest.TestCase):
             {"id": "pronouns", "name": "", "label": "Preferred pronouns", "value": ""},
             {"id": "used", "name": "", "label": "Have you ever used Sentry before?", "value": ""},
             {"id": "hybrid", "name": "", "label": "Are you willing to join us in office 3 days a week?", "value": ""},
+            {"id": "grad", "name": "", "label": "Anticipated graduation date", "kind": "date", "hasDay": True, "value": ""},
+            {"id": "interview", "name": "", "label": "Have you previously interviewed at LPL?", "value": ""},
+            {"id": "finra", "name": "", "label": "Do you hold any FINRA licenses?", "value": ""},
+            {"id": "household", "name": "", "label": "Was a member of your household employed by Deloitte?", "value": ""},
             {"id": "media", "name": "", "label": "What are you reading right now?", "value": ""},
             {"id": "allowed", "name": "", "label": "Why are you interested in this internship?", "value": ""},
         ]

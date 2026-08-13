@@ -9,6 +9,8 @@ identity:
   disability:
     current: null
     history: null
+education:
+  exact_graduation_date: null
 preferences:
   hybrid: null
   travel: null
@@ -36,3 +38,6 @@ company_facts:
     used_product: null
     prior_employment: null
     referral: null
+    prior_interview_or_application: null
+    licenses_or_exams: null
+    household_employment: null
