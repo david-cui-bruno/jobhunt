@@ -77,6 +77,38 @@ class WorkdayAnswerTests(unittest.TestCase):
         with mock.patch.object(workday, "current_step", return_value=""):
             self.assertFalse(workday.saved_draft_wizard_is_active(page))
 
+    def test_model_outage_returns_no_guesses(self) -> None:
+        fields = [
+            {
+                "faid": "question-1",
+                "value": "",
+                "label": "Why are you interested?",
+                "kind": "text",
+                "options": [],
+            }
+        ]
+        with mock.patch("urllib.request.urlopen", side_effect=RuntimeError("offline")):
+            self.assertEqual(workday.wd_answers(fields, "Example", "Engineer"), [])
+
+    def test_approved_workday_fact_does_not_require_the_model(self) -> None:
+        fields = [
+            {
+                "faid": "referral",
+                "value": "",
+                "label": "Were you referred by a current employee?",
+                "kind": "radio",
+                "options": ["Yes", "No"],
+            }
+        ]
+        approved = {"company_facts": {"LPL Financial": {"referral": False}}}
+        with mock.patch.object(workday.qa, "APPLICATION_ANSWERS", approved), \
+             mock.patch("urllib.request.urlopen") as urlopen:
+            self.assertEqual(
+                workday.wd_answers(fields, "lplfinancial", "Software Engineer Intern"),
+                [{"faid": "referral", "answer": "No"}],
+            )
+        urlopen.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

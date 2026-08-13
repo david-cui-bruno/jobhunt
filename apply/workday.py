@@ -329,13 +329,40 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
     if not unanswered:
         return []
     policy_fields = [dict(field, company_context=company) for field in unanswered]
+    explicit = qa.explicit_approved_answers(
+        unanswered,
+        key_field="faid",
+        company_context=company,
+    )
+    explicit_keys = {answer["faid"] for answer in explicit}
+    model_fields = [field for field in unanswered if field.get("faid") not in explicit_keys]
+    model_answers = []
+    if model_fields:
+        model_answers = _workday_model_answers(model_fields, company, title)
+    answers, blocked = qa.filter_manual_answers(
+        policy_fields, explicit + model_answers, key_field="faid"
+    )
+    qa.log_answer_decisions(
+        policy_fields,
+        answers,
+        blocked,
+        context={"company": company, "title": title, "ats": "workday"},
+        key_field="faid",
+    )
+    return answers
+
+
+def _workday_model_answers(fields: list[dict], company: str, title: str) -> list[dict]:
+    """Ask the model only for facts not directly rendered from approved answers."""
+    import datetime
+    import urllib.request
     today = datetime.date.today().strftime("%m/%d/%Y")
     prompt = qa.ANSWER_PROMPT.format(
         profile=yaml.dump(PROFILE),
         application_answers=yaml.safe_dump(
-            qa.relevant_application_answers(unanswered, company_context=company)
+            qa.relevant_application_answers(fields, company_context=company)
         ),
-        controls=json.dumps(unanswered)[:20000],
+        controls=json.dumps(fields)[:20000],
         stories=qa._grounding(),
         today=today,
     ).replace('"id_or_name"', '"faid"') + (
@@ -355,22 +382,15 @@ def wd_answers(fields: list[dict], company: str, title: str) -> list[dict]:
         "https://api.anthropic.com/v1/messages", data=body,
         headers={"x-api-key": qa.API_KEY, "anthropic-version": "2023-06-01",
                  "content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        resp = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            resp = json.load(r)
+    except Exception as exc:
+        print(f"[workday] answer model unavailable: {type(exc).__name__}", file=sys.stderr)
+        return []
     text = "".join(b.get("text", "") for b in resp["content"] if b.get("type") == "text")
     m = re.search(r"\[.*\]", text, re.S)
-    model_answers = json.loads(m.group(0)) if m else []
-    answers, blocked = qa.filter_manual_answers(
-        policy_fields, model_answers, key_field="faid"
-    )
-    qa.log_answer_decisions(
-        policy_fields,
-        answers,
-        blocked,
-        context={"company": company, "title": title, "ats": "workday"},
-        key_field="faid",
-    )
-    return answers
+    return json.loads(m.group(0)) if m else []
 
 
 def unsafe_prefilled_fields(fields: list[dict], company: str,

@@ -197,6 +197,50 @@ class QaManualPolicyTest(unittest.TestCase):
             {answer["id_or_name"] for answer in blocked},
         )
 
+    def test_explicit_facts_render_without_a_model_and_unknown_days_stay_empty(self):
+        controls = [
+            {
+                "id": "referral",
+                "label": "Were you referred by a current employee?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+            {
+                "id": "grad",
+                "label": "Graduation date",
+                "kind": "date",
+                "hasDay": False,
+                "value": "",
+            },
+            {
+                "id": "grad-day",
+                "label": "Graduation date",
+                "kind": "date",
+                "hasDay": True,
+                "value": "",
+            },
+            {
+                "id": "deadline",
+                "label": "Offer deadline",
+                "value": "",
+            },
+        ]
+
+        rendered = qa.explicit_approved_answers(
+            controls,
+            company_context="lplfinancial",
+            approved_answers=self.APPROVED,
+        )
+
+        self.assertEqual(
+            {
+                "referral": "No",
+                "grad": "06/2028",
+                "deadline": "September 2026",
+            },
+            {answer["id_or_name"]: answer["answer"] for answer in rendered},
+        )
+
     def test_only_relevant_sensitive_answers_enter_the_model_prompt(self):
         context = qa.relevant_application_answers(
             [{"label": "Preferred pronouns"}], approved=self.APPROVED

@@ -301,20 +301,138 @@ def _date_parts(value: object) -> tuple[int, int | None, int] | None:
     return None
 
 
-def _company_answer_is_approved(control: dict, field: str, answers: dict,
-                                answer: object) -> bool:
+_MISSING = object()
+
+
+def _company_fact(control: dict, field: str, answers: dict) -> object:
     question = _control_question_text(control).lower()
     company_context = str(control.get("company_context") or "")
     for company, facts in (answers.get("company_facts") or {}).items():
-        if not _company_matches(company, question, company_context) or not isinstance(facts, dict):
-            continue
-        expected = facts.get(field)
-        if expected is None:
-            continue
-        if isinstance(expected, bool):
-            return _answer_boolean(answer) is expected
-        return str(expected).strip().lower() in str(answer or "").strip().lower()
-    return False
+        if (_company_matches(company, question, company_context)
+                and isinstance(facts, dict) and facts.get(field) is not None):
+            return facts[field]
+    return _MISSING
+
+
+def _render_boolean(expected: bool, options: list[str]) -> str | None:
+    desired = "Yes" if expected else "No"
+    if not options:
+        return desired
+    exact = _best_option(desired, options)
+    if exact:
+        return exact
+    return next((option for option in options if _answer_boolean(option) is expected), None)
+
+
+def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name",
+                              company_context: str = "",
+                              approved_answers: dict | None = None) -> list[dict]:
+    """Render direct approved facts without asking a language model.
+
+    Sensitive yes/no and date facts should not become unavailable, or mutable,
+    merely because the model API is down. Unsupported questions are omitted.
+    """
+    approved = APPLICATION_ANSWERS if approved_answers is None else approved_answers
+    identity = approved.get("identity") or {}
+    education = approved.get("education") or {}
+    preferences = approved.get("preferences") or {}
+    offers = [offer for offer in (approved.get("current_offers") or [])
+              if isinstance(offer, dict)]
+    rendered = []
+    for original in controls:
+        control = dict(original, company_context=company_context)
+        question = _control_question_text(control).lower()
+        options = [str(option) for option in control.get("options") or []]
+        answer: str | None = None
+        if re.search(r"\b(18 or older|at least (?:age )?18)\b", question):
+            birth = _date_parts(identity.get("date_of_birth"))
+            if birth:
+                today = datetime.date.today()
+                age = today.year - birth[2] - ((today.month, today.day) < (birth[0], birth[1] or 1))
+                answer = _render_boolean(age >= 18, options)
+        elif re.search(r"\b(date of birth|dob|birth date|birthday)\b", question):
+            answer = identity.get("date_of_birth")
+        elif re.search(r"\b(preferred pronouns?|pronouns?)\b", question):
+            answer = identity.get("pronouns")
+        elif re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
+            disability = identity.get("disability") or {}
+            expected = disability.get("history") if "history" in question else disability.get("current")
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(r"\b(graduation|graduate)\s+(?:date|month|year)\b", question):
+            profile_education = PROFILE.get("education") or {}
+            month = str(education.get("expected_graduation_month")
+                        or profile_education.get("grad_month") or "")
+            year = str(education.get("expected_graduation_year")
+                       or profile_education.get("grad_year") or "")
+            exact = education.get("exact_graduation_date")
+            if control.get("hasDay"):
+                answer = exact
+            elif "year" in question and "date" not in question:
+                answer = year
+            elif "month" in question and "date" not in question:
+                answer = month
+            elif control.get("kind") == "date" and month and year:
+                parsed = _date_parts(f"{month} {year}")
+                answer = f"{parsed[0]:02d}/{year}" if parsed else None
+            elif month and year:
+                answer = f"{month} {year}"
+        elif re.search(r"\b(offer deadline|exploding offer|deadline to accept)\b", question):
+            if offers:
+                answer = offers[0].get("deadline") or offers[0].get("deadline_month")
+                if control.get("hasDay") and not offers[0].get("deadline"):
+                    answer = None
+        elif re.search(r"\b(outstanding offer|competing offer|pending offer)\b", question):
+            answer = _render_boolean(bool(offers), options)
+            if offers and not options:
+                companies = ", ".join(str(offer.get("company")) for offer in offers if offer.get("company"))
+                answer = f"Yes, {companies}" if companies else "Yes"
+        elif re.search(r"\bhave you (?:ever )?used\b.*\bbefore\b|\b(used|use|customer of|experience with|familiar with|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b", question):
+            expected = _company_fact(control, "used_product", approved)
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(r"\b(previously employed|prior employment|worked (?:at|for)|former employee)\b", question):
+            expected = _company_fact(control, "prior_employment", approved)
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(r"\b(referral|referred|refer you|know anyone|current employee)\b", question):
+            expected = _company_fact(control, "referral", approved)
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|prior application|previous application)\b", question):
+            expected = _company_fact(control, "prior_interview_or_application", approved)
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(r"\b(FINRA|SIE|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b", question):
+            expected = _company_fact(control, "licenses_or_exams", approved)
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(r"\b(member of your household|household member|family member|relative)\b", question):
+            expected = _company_fact(control, "household_employment", approved)
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|onsite|hybrid)\b", question):
+            expected = preferences.get("hybrid")
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        if answer is not None:
+            if options:
+                answer = _best_option(str(answer), options) or answer
+            key = (control.get(key_field) if key_field != "id_or_name" else
+                   control.get("id") or control.get("name") or control.get("label"))
+            if key:
+                rendered.append({key_field: key, "answer": str(answer)})
+    return rendered
+
+
+def _company_answer_is_approved(control: dict, field: str, answers: dict,
+                                answer: object) -> bool:
+    expected = _company_fact(control, field, answers)
+    if expected is _MISSING:
+        return False
+    if isinstance(expected, bool):
+        return _answer_boolean(answer) is expected
+    return str(expected).strip().lower() in str(answer or "").strip().lower()
 
 
 def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -> bool:
@@ -516,14 +634,37 @@ def get_answers(controls: list[dict], context: dict | None = None) -> list[dict]
     context = context or {}
     company_context = str(context.get("company") or context.get("slug") or "")
     policy_controls = [dict(control, company_context=company_context) for control in unanswered]
+    explicit = explicit_approved_answers(
+        unanswered,
+        company_context=company_context,
+    )
+    explicit_keys = {answer["id_or_name"] for answer in explicit}
+    model_controls = [
+        control for control in unanswered
+        if (control.get("id") or control.get("name") or control.get("label")) not in explicit_keys
+    ]
+    model_answers = []
+    if model_controls:
+        model_answers = _model_answers(model_controls, company_context)
+    answers, blocked = filter_manual_answers(
+        policy_controls,
+        explicit + model_answers,
+    )
+    # FULL-AUTO audit trail: every deterministic and model answer is logged.
+    log_answer_decisions(policy_controls, answers, blocked, context=context)
+    return answers
+
+
+def _model_answers(controls: list[dict], company_context: str = "") -> list[dict]:
+    """Ask the model for remaining answers, returning no guesses on API failure."""
     today = datetime.date.today().strftime("%m/%d/%Y")
     body = json.dumps({
         "model": MODEL, "max_tokens": 20000,  # reasoning tokens count against this;
         # 4000 truncated mid-array on 25-control forms (Zipline 2026-08-09)
         "messages": [{"role": "user", "content": ANSWER_PROMPT.format(
-            profile=yaml.dump(PROFILE), controls=json.dumps(unanswered)[:20000],
+            profile=yaml.dump(PROFILE), controls=json.dumps(controls)[:20000],
             application_answers=yaml.safe_dump(
-                relevant_application_answers(unanswered, company_context=company_context)
+                relevant_application_answers(controls, company_context=company_context)
             ),
             stories=_grounding(), today=today)}],
     }).encode()
@@ -531,8 +672,12 @@ def get_answers(controls: list[dict], context: dict | None = None) -> list[dict]
         "https://api.anthropic.com/v1/messages", data=body,
         headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01",
                  "content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        resp = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            resp = json.load(r)
+    except Exception as exc:
+        print(f"[qa] answer model unavailable: {type(exc).__name__}", file=sys.stderr)
+        return []
     text = "".join(b.get("text", "") for b in resp["content"] if b.get("type") == "text")
     m = re.search(r"\[.*\]", text, re.S)
     if m:
@@ -549,9 +694,6 @@ def get_answers(controls: list[dict], context: dict | None = None) -> list[dict]
                 continue
         if answers:
             print(f"[qa] output truncated; salvaged {len(answers)} answers", file=sys.stderr)
-    answers, blocked = filter_manual_answers(policy_controls, answers)
-    # FULL-AUTO audit trail: every answer Claude gives is logged for review.
-    log_answer_decisions(policy_controls, answers, blocked, context=context)
     return answers
 
 
