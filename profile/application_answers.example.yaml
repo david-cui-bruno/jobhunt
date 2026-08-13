@@ -12,9 +12,11 @@ identity:
 education:
   expected_graduation_month: null
   expected_graduation_year: null
+  # An explicitly approved estimate is allowed when a form requires a day.
   exact_graduation_date: null
 preferences:
   hybrid: null
+  relocation_assistance_required: null
   travel: null
   future_contact: null
   compensation_policy: null

@@ -21,12 +21,13 @@ class QaManualPolicyTest(unittest.TestCase):
         },
         "preferences": {
             "hybrid": True,
+            "relocation_assistance_required": False,
             "compensation_policy": "Use an employer-published range; otherwise open / market rate.",
         },
         "education": {
             "expected_graduation_month": "June",
             "expected_graduation_year": "2028",
-            "exact_graduation_date": None,
+            "exact_graduation_date": "06/01/2028",
         },
         "current_offers": [
             {"company": "Soren", "deadline_month": "September 2026", "deadline": None}
@@ -176,7 +177,7 @@ class QaManualPolicyTest(unittest.TestCase):
         )
         self.assertEqual(["referral-wrong"], [answer["id_or_name"] for answer in blocked])
 
-    def test_graduation_month_year_must_match_and_exact_day_stays_manual(self):
+    def test_graduation_month_year_and_approved_estimated_day_must_match(self):
         controls = [
             {"id": "right", "label": "Graduation date", "value": ""},
             {"id": "wrong", "label": "Graduation date", "value": ""},
@@ -192,13 +193,13 @@ class QaManualPolicyTest(unittest.TestCase):
             controls, answers, approved_answers=self.APPROVED
         )
 
-        self.assertEqual(["right"], [answer["id_or_name"] for answer in allowed])
         self.assertEqual(
-            {"wrong", "day"},
-            {answer["id_or_name"] for answer in blocked},
+            {"right", "day"},
+            {answer["id_or_name"] for answer in allowed},
         )
+        self.assertEqual(["wrong"], [answer["id_or_name"] for answer in blocked])
 
-    def test_explicit_facts_render_without_a_model_and_unknown_days_stay_empty(self):
+    def test_explicit_facts_render_without_a_model_including_approved_estimate(self):
         controls = [
             {
                 "id": "referral",
@@ -237,6 +238,7 @@ class QaManualPolicyTest(unittest.TestCase):
             {
                 "referral": "No",
                 "grad": "06/2028",
+                "grad-day": "06/01/2028",
                 "deadline": "September 2026",
             },
             {answer["id_or_name"]: answer["answer"] for answer in rendered},
@@ -303,7 +305,7 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertEqual("No", answers["sponsor"])
         self.assertEqual("No", answers["former"])
         self.assertEqual("No", answers["finra"])
-        self.assertNotIn("local", answers)
+        self.assertEqual(controls[-2]["options"][1], answers["local"])
         self.assertEqual(controls[-1]["options"], answers["locations"])
 
         allowed, blocked = qa.filter_manual_answers(
@@ -311,8 +313,38 @@ class QaManualPolicyTest(unittest.TestCase):
             [{"id_or_name": "local", "answer": controls[-2]["options"][1]}],
             approved_answers=self.APPROVED,
         )
-        self.assertEqual([], allowed)
-        self.assertEqual(["local"], [item["id_or_name"] for item in blocked])
+        self.assertEqual(["local"], [item["id_or_name"] for item in allowed])
+        self.assertEqual([], blocked)
+
+    def test_relocation_assistance_policy_allows_no_and_rejects_yes(self):
+        controls = [
+            {
+                "id": key,
+                "label": "Will you require relocation assistance?",
+                "options": ["Yes", "No"],
+            }
+            for key in ("right", "wrong")
+        ]
+
+        rendered = qa.explicit_approved_answers(
+            controls,
+            approved_answers=self.APPROVED,
+        )
+        self.assertEqual(
+            {"right": "No", "wrong": "No"},
+            {answer["id_or_name"]: answer["answer"] for answer in rendered},
+        )
+
+        allowed, blocked = qa.filter_manual_answers(
+            controls,
+            [
+                {"id_or_name": "right", "answer": "No"},
+                {"id_or_name": "wrong", "answer": "Yes"},
+            ],
+            approved_answers=self.APPROVED,
+        )
+        self.assertEqual(["right"], [answer["id_or_name"] for answer in allowed])
+        self.assertEqual(["wrong"], [answer["id_or_name"] for answer in blocked])
 
     def test_former_named_company_employee_answer_is_policy_checked(self):
         controls = [

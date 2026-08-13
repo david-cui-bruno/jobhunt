@@ -393,7 +393,7 @@ def _workday_model_answers(fields: list[dict], company: str, title: str) -> list
         "For 'How Did You Hear About Us': prefer company website/careers site options. "
         "For source dropdowns with many options, answer with the best guess text; matching is fuzzy. "
         "Date fields (kind='date') expect MM/YYYY. Work experience dates come from the resume in the profile's work_history_summary. "
-        "Education From/To: 09/2024 to 06/2028 for every role. The exact graduation day is unknown, so omit day-level graduation fields. Degree dropdown: 'Bachelor of Science (B.S.)' or closest BS option. "
+        "Education From/To: 09/2024 to 06/2028 for every role. For a required exact graduation day, use the approved estimate 06/01/2028. Degree dropdown: 'Bachelor of Science (B.S.)' or closest BS option. "
         "If a 'To' date field pairs with an 'I currently work here' checkbox, give the real end date instead of checking it."
     )
     body = json.dumps({

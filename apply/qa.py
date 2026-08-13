@@ -80,6 +80,7 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
     selected_preferences = {}
     for key, pattern in {
         "hybrid": r"\b(hybrid|onsite|in[- ]?office|days? (?:a|per) week|work schedule)\b",
+        "relocation_assistance_required": r"\b(relocat(?:e|ion)|local to the area)\b",
         "travel": r"\btravel\b",
         "future_contact": r"\b(future contact|marketing|talent community)\b",
         "compensation_policy": r"\b(compensation|salary|pay|hourly rate|bonus|equity)\b",
@@ -211,8 +212,8 @@ APPROVED APPLICATION ANSWERS AND POLICIES (source of truth; omit a personal answ
 Additional standing instructions:
 - Compensation expectation questions: follow the approved compensation policy. Prefer an employer-published range or no-preference option. Never invent a numeric amount.
 - Outstanding offers/deadlines: report only the approved current offers and deadlines. Never default to No.
-- Graduation: June 2028 for every role. Never change the year based on role type and never invent an exact day.
-- Willing to relocate: Yes. Open to any listed office location; prefer SF then NYC if ranked. If preferred cities are not offered, choose any offered US city over non-US.
+- Graduation: June 2028 for every role. When a form requires an exact day, use the user-approved estimate 06/01/2028. Never change the date based on role type.
+- Willing to relocate: Yes, without employer relocation assistance. Open to any listed office location; prefer SF then NYC if ranked. If preferred cities are not offered, choose any offered US city over non-US.
 - If a select's options are provided, your answer MUST be copied verbatim from the options list (character for character). Pick the option most consistent with the profile.
 - How did you hear about us: "Company website" or closest option.
 - Signature blocks: "Name"/"Signature" = the candidate's full legal name; "Date" = today's date {today} (use the format the field implies, default MM/DD/YYYY).
@@ -457,10 +458,23 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = _render_boolean(expected, options)
         elif re.search(r"\blocal to the area\b", question):
             # Workday's "No" choices encode whether relocation assistance is
-            # required. Relocation willingness alone cannot answer that.
+            # required. Prefer a company-specific approved label, then the
+            # user's general relocation policy.
             expected = _company_fact(control, "local_to_advertised_area_answer", approved)
             if isinstance(expected, str):
                 answer = _best_option(expected, options) if options else expected
+            elif (preferences.get("relocation_assistance_required") is False
+                  and (PROFILE.get("preferences") or {}).get("relocate_ok")):
+                candidates = [
+                    "No - I am willing to relocate & I do not require relocation assistance.",
+                    "No, I am willing to relocate and do not require relocation assistance",
+                    "No, willing to relocate without relocation assistance",
+                ]
+                answer = _first_matching_option(candidates, options) if options else candidates[0]
+        elif re.search(r"\brelocation assistance\b", question):
+            expected = preferences.get("relocation_assistance_required")
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
         elif (re.search(r"\bwhich location\(s\).*open to working\b", question)
               and control.get("kind") == "checkgroup"
               and (PROFILE.get("preferences") or {}).get("relocate_ok")):
@@ -577,9 +591,20 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     if re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|onsite|hybrid)\b", question):
         expected = preferences.get("hybrid")
         return expected is not None and _answer_boolean(answer_text) is expected
-    if re.search(r"\b(local to the area|relocation assistance)\b", question):
+    if re.search(r"\blocal to the area\b", question):
         expected = _company_fact(control, "local_to_advertised_area_answer", approved)
-        return isinstance(expected, str) and expected.strip().lower() == answer_text.strip().lower()
+        if isinstance(expected, str):
+            return expected.strip().lower() == answer_text.strip().lower()
+        return bool(
+            preferences.get("relocation_assistance_required") is False
+            and (PROFILE.get("preferences") or {}).get("relocate_ok")
+            and re.search(r"\bno\b", answer_text, re.I)
+            and re.search(r"\brelocat(?:e|ion)\b", answer_text, re.I)
+            and re.search(r"\b(?:do not|don't|without)\b.*\bassist", answer_text, re.I)
+        )
+    if re.search(r"\brelocation assistance\b", question):
+        expected = preferences.get("relocation_assistance_required")
+        return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
     if re.search(r"\b(future contact|marketing (?:email|communication|consent)|talent community)\b", question):
         return preferences.get("future_contact") is not None
     return False
