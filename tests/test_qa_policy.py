@@ -408,6 +408,32 @@ class QaManualPolicyTest(unittest.TestCase):
             )
         )
 
+    def test_texas_high_school_maps_to_north_america_picker(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["education"]["high_school"] = (
+            "Plano West Senior High School, Plano, Texas"
+        )
+        control = {
+            "id": "school-region",
+            "label": "Where did you attend high school/secondary school?",
+            "value": "",
+            "options": [
+                "North America", "South America", "Europe", "Asia", "Africa", "Australia"
+            ],
+        }
+
+        self.assertEqual(
+            [{"id_or_name": "school-region", "answer": "North America"}],
+            qa.explicit_approved_answers([control], approved_answers=approved),
+        )
+        self.assertFalse(
+            qa.answer_requires_manual(
+                control,
+                "North America",
+                approved_answers=approved,
+            )
+        )
+
     def test_get_answers_logs_allowed_and_blocked_with_context_without_api(self):
         controls = [
             {"id": "q1", "name": "", "label": "Why us?", "value": ""},

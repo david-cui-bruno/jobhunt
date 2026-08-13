@@ -347,6 +347,27 @@ def _first_matching_option(candidates: list[str], options: list[str]) -> str | N
     return None
 
 
+def _approved_high_school_answer(approved: dict, options: list[str]) -> str | None:
+    """Render the approved school fact for either text or geographic pickers.
+
+    Greenhouse normally asks for the school name, but HRT labels a continent
+    picker "Where did you attend high school/secondary school?".  A Texas school
+    truthfully maps to North America.  Never choose a region unless the approved
+    school value itself contains an explicit US/Texas location marker.
+    """
+    school = str((approved.get("education") or {}).get("high_school") or "").strip()
+    if not school:
+        return None
+    if not options:
+        return school
+    direct = _best_option(school, options)
+    if direct:
+        return direct
+    if re.search(r"\b(texas|tx|united states|usa|u\.s\.)\b", school, re.I):
+        return _first_matching_option(["United States", "USA", "North America"], options)
+    return None
+
+
 def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name",
                               company_context: str = "",
                               approved_answers: dict | None = None) -> list[dict]:
@@ -401,7 +422,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             elif month and year:
                 answer = f"{month} {year}"
         elif re.search(r"\b(high school|secondary school)\b", question):
-            answer = education.get("high_school")
+            answer = _approved_high_school_answer(approved, options)
         elif re.search(r"\bhighest level of education\b", question):
             # David is currently pursuing a BS. Prefer an in-progress/some-college
             # label over a completed Bachelor's claim when the form offers one.
@@ -547,7 +568,10 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             return answer_text.strip() == expected_year
         return str(expected_month or "").lower() == answer_text.strip().lower()
     if re.search(r"\b(high school|secondary school)\b", question):
-        expected = str((approved.get("education") or {}).get("high_school") or "").strip()
+        expected = _approved_high_school_answer(
+            approved,
+            [str(option) for option in control.get("options") or []],
+        )
         return bool(expected and expected.lower() == answer_text.strip().lower())
     if re.search(r"\b(preferred pronouns?|pronouns?)\b", question):
         expected = str(identity.get("pronouns") or "").strip().lower()
