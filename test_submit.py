@@ -75,6 +75,22 @@ class SubmitSafetyTests(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", side_effect=error):
             self.assertTrue(submit._posting_dead("https://dead.example/job"))
 
+    def test_missing_ashby_board_marks_wrapper_posting_dead(self) -> None:
+        import urllib.error
+
+        job_id = "404bb82e-37f3-4a78-b0f3-12923a7c4856"
+        error = urllib.error.HTTPError(
+            "https://api.ashbyhq.com/posting-api/job-board/shopify",
+            404,
+            "not found",
+            {},
+            None,
+        )
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            self.assertTrue(
+                submit._posting_dead(f"https://jobs.ashbyhq.com/shopify/{job_id}")
+            )
+
     def test_unrecognized_careers_url_remains_manual(self) -> None:
         url = "https://www.oracle.com/careers/"
         self.assertEqual(canonical_application_url(url), url)

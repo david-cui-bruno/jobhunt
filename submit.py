@@ -96,6 +96,12 @@ def _posting_dead(url: str) -> bool:
             d = _json.load(_ur.urlopen(req, timeout=15))
             ids = {j.get("id") for j in d.get("jobs", [])} |                   {str(j.get("jobUrl", ""))[-36:] for j in d.get("jobs", [])}
             return m.group(2) not in ids
+        except _ue.HTTPError as exc:
+            # Ashby serves a friendly HTTP-200 "Page not found" shell for the
+            # application route even when the underlying board is gone.  The
+            # board API is authoritative, so a terminal response is stale, not
+            # a retryable resume-upload failure.
+            return exc.code in {404, 410}
         except Exception:
             return False
     try:
