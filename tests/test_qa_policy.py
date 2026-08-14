@@ -108,6 +108,23 @@ class QaManualPolicyTest(unittest.TestCase):
             )
         )
 
+    def test_optional_other_detail_cannot_be_invented(self):
+        controls = [
+            {"id": "other", "label": "If other, please specify", "required": False, "value": ""},
+            {"id": "selected-other", "label": "If you selected Other, describe it", "required": False, "value": ""},
+        ]
+        answers = [
+            {"id_or_name": "other", "answer": "Framewise Health"},
+            {"id_or_name": "selected-other", "answer": "Coding competition"},
+        ]
+
+        allowed, blocked = qa.filter_manual_answers(
+            controls, answers, approved_answers=self.APPROVED,
+        )
+
+        self.assertEqual([], allowed)
+        self.assertEqual({"other", "selected-other"}, {answer["id_or_name"] for answer in blocked})
+
     def test_greenhouse_required_scan_ignores_hidden_conditional_controls(self):
         source = Path(greenhouse.__file__).read_text()
         self.assertIn("el.offsetParent === null", source)

@@ -275,6 +275,10 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(local to the area|relocation assistance)\b",
     r"\b(high school|secondary school)\b",
     r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b",
+    # A model must not invent a detail for an optional branch whose parent
+    # selection was not "Other".  If the branch is genuinely required, leaving
+    # it blank makes the adapter stop for review instead of submitting fiction.
+    r"\b(?:if|when) (?:you )?(?:selected?|chose|choose) other\b|\bif other\b.*\b(?:specify|explain|describe)\b|\b(?:specify|explain|describe)\b.*\bif other\b",
     r"\b(what (?:are you|do you) (?:reading|watching|listening)|favorite (?:book|movie|podcast|show|song|artist|media)|last (?:book|movie|show|podcast)|reading list|media (?:you consume|consumption))\b",
 ]
 
