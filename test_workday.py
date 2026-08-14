@@ -52,6 +52,32 @@ class WorkdayAnswerTests(unittest.TestCase):
         self.assertIn("CreateAccount", workday.CREATE_ACCOUNT_OVERLAY)
         self.assertIn("SignIn", workday.SIGN_IN_OVERLAY)
 
+    def test_generic_submit_filter_is_scoped_to_the_exact_auth_button(self) -> None:
+        scope = mock.Mock()
+        button_lookup = mock.Mock()
+        button = mock.Mock()
+        wrapper = mock.Mock()
+        overlay_lookup = mock.Mock()
+        overlay = mock.Mock()
+        scope.locator.return_value = button_lookup
+        button_lookup.last = button
+        button.locator.return_value = wrapper
+        wrapper.locator.return_value = overlay_lookup
+        overlay_lookup.first = overlay
+        overlay.count.return_value = 1
+
+        workday._click_workday_submit(scope, "signInSubmitButton")
+
+        scope.locator.assert_called_once_with(
+            '[data-automation-id="signInSubmitButton"]'
+        )
+        button.locator.assert_called_once_with("xpath=..")
+        wrapper.locator.assert_called_once_with(
+            ":scope > [data-automation-id='click_filter']"
+        )
+        overlay.click.assert_called_once_with(timeout=5000)
+        button.click.assert_not_called()
+
     def test_prompt_includes_grounding_without_missing_stories_placeholder(self) -> None:
         response = io.StringIO(json.dumps({"content": [{"type": "text", "text": "[]"}]}))
         fields = [

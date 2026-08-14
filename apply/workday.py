@@ -710,6 +710,27 @@ def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tup
     return True, ""
 
 
+def _click_workday_submit(scope, automation_id: str) -> None:
+    """Click the filter paired with one exact Workday submit button.
+
+    Newer tenants label both account-creation and sign-in filters simply
+    ``Submit``. Selecting by that label can hit the wrong form, while clicking
+    the hidden button directly is blocked by the filter. Scope the filter to the
+    requested button's immediate wrapper instead.
+    """
+    button = scope.locator(
+        f"[data-automation-id={json.dumps(automation_id)}]"
+    ).last
+    wrapper = button.locator("xpath=..")
+    overlay = wrapper.locator(
+        ":scope > [data-automation-id='click_filter']"
+    ).first
+    if overlay.count():
+        overlay.click(timeout=5000)
+    else:
+        button.click(timeout=5000)
+
+
 def maybe_create_account(page, company_key: str) -> None:
     """Some tenants interpose account creation. Use profile email + stored password."""
     scope = _account_scope(page)
@@ -735,13 +756,7 @@ def maybe_create_account(page, company_key: str) -> None:
             cb.check()
         except Exception:
             cb.evaluate("el => el.click()")
-    # Workday overlays the real button with a click_filter div that intercepts
-    # pointer events (Medtronic trace 2026-08-09): click the overlay if present.
-    overlay = scope.locator(CREATE_ACCOUNT_OVERLAY)
-    if overlay.count():
-        overlay.first.click()
-    else:
-        scope.locator("[data-automation-id='createAccountSubmitButton']").click()
+    _click_workday_submit(scope, "createAccountSubmitButton")
     page.wait_for_timeout(4000)
 
 
@@ -757,11 +772,7 @@ def maybe_sign_in(page, company_key: str) -> None:
         return
     scope.locator("input[data-automation-id='email']").fill(row[0])
     scope.locator("input[data-automation-id='password']").fill(row[1])
-    overlay = scope.locator(SIGN_IN_OVERLAY)
-    if overlay.count():
-        overlay.first.click()
-    else:
-        scope.locator("[data-automation-id='signInSubmitButton']").click()
+    _click_workday_submit(scope, "signInSubmitButton")
     page.wait_for_timeout(4000)
 
 
