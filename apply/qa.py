@@ -299,6 +299,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(days? (?:a|per) week|in[- ]?office|on[- ]?site|hybrid schedule|willing to (?:come|work|join).*(?:office|on[- ]?site))\b",
     r"\b(local to the area|relocation assistance)\b",
     r"\b(high school|secondary school)\b",
+    r"\bcurrent school\s+(?:year|enrollment|status|grade|class|level)\b",
     r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b",
     # A model must not invent a detail for an optional branch whose parent
     # selection was not "Other".  If the branch is genuinely required, leaving
@@ -410,6 +411,41 @@ def _first_matching_option(candidates: list[str], options: list[str]) -> str | N
         if match:
             return match
     return None
+
+
+def _exact_matching_option(candidates: list[str], options: list[str]) -> str | None:
+    """Return only a normalized exact option match.
+
+    Date menus often contain several options with the same year.  The fuzzy
+    matching used for ordinary select controls must not turn a known year into
+    an invented month.
+    """
+    normalized = {
+        re.sub(r"\s+", " ", option).strip().casefold(): option
+        for option in options
+    }
+    for candidate in candidates:
+        match = normalized.get(re.sub(r"\s+", " ", candidate).strip().casefold())
+        if match:
+            return match
+    return None
+
+
+def _year_only_graduation_answer(year: str, options: list[str]) -> str | None:
+    """Map a known year only when an option expresses only that year."""
+    if not year:
+        return None
+    return _exact_matching_option([year, f"Class of {year}"], options)
+
+
+def _high_school_term_answer(year: str, options: list[str]) -> str | None:
+    """Map a high-school year without inventing a specific graduation month."""
+    if not year:
+        return None
+    broad_term = _exact_matching_option(
+        [f"Spring/Summer {year}", f"Spring {year}"], options,
+    )
+    return broad_term or _year_only_graduation_answer(year, options)
 
 
 def _decline_demographic_option(options: list[str]) -> str | None:
@@ -548,6 +584,11 @@ def _is_current_school_control(control: dict) -> bool:
             return True
     question = _control_question_text(control).lower()
     if re.search(
+        r"\bcurrent school\s+(?:year|enrollment|status|grade|class|level)\b",
+        question,
+    ):
+        return False
+    if re.search(
         r"\b(?:select|choose)\b.*\bcurrent school\b|"
         r"\bcurrent school\b.*\b(?:list|below)\b",
         question,
@@ -620,11 +661,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             # secondary school. Date-range menus use the approved graduation year.
             high_school_year = str(education.get("high_school_graduation_year") or "").strip()
             if options and high_school_year:
-                answer = _first_matching_option([
-                    f"Spring/Summer {high_school_year}",
-                    f"Spring {high_school_year}",
-                    high_school_year,
-                ], options)
+                answer = _high_school_term_answer(high_school_year, options)
             if answer is None:
                 answer = _render_boolean(True, options)
         elif re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b", question):
@@ -637,7 +674,8 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             if control.get("hasDay"):
                 answer = exact
             elif options and month and year:
-                answer = _graduation_menu_answer(month, year, options)
+                answer = (_graduation_menu_answer(month, year, options)
+                          or _year_only_graduation_answer(year, options))
             elif "month" in question and "year" in question and month and year:
                 answer = _graduation_menu_answer(month, year, options)
             elif "year" in question and "date" not in question:
@@ -961,11 +999,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             "high_school_graduation_year"
         ) or "").strip()
         if options and high_school_year:
-            expected = _first_matching_option([
-                f"Spring/Summer {high_school_year}",
-                f"Spring {high_school_year}",
-                high_school_year,
-            ], options)
+            expected = _high_school_term_answer(high_school_year, options)
             if expected:
                 return expected.lower() == answer_text.strip().lower()
         return _answer_boolean(answer_text) is True
@@ -979,8 +1013,9 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         expected_year = str(education.get("expected_graduation_year") or profile_education.get("grad_year") or "")
         options = [str(option) for option in control.get("options") or []]
         if options:
-            expected_option = _graduation_menu_answer(
-                str(expected_month or ""), expected_year, options,
+            expected_option = (
+                _graduation_menu_answer(str(expected_month or ""), expected_year, options)
+                or _year_only_graduation_answer(expected_year, options)
             )
             return bool(expected_option and expected_option.lower() == answer_text.strip().lower())
         supplied = _date_parts(answer_text)

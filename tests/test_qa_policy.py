@@ -706,6 +706,63 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertIn("slice(0, 1000)", qa.EXTRACT_JS)
         self.assertIn("slice(0, 500)", qa.EXTRACT_JS)
 
+    def test_year_only_facts_never_invent_months_or_replace_school_status(self):
+        approved = {
+            **self.APPROVED,
+            "education": {
+                **self.APPROVED["education"],
+                "high_school_graduation_year": "2024",
+            },
+        }
+        controls = [
+            {
+                "id": "hs-month",
+                "label": "When did you earn your high school diploma?",
+                "options": ["January 2024", "May 2024", "June 2024"],
+            },
+            {
+                "id": "school-year",
+                "label": "Please select your current school year from the list below",
+                "options": ["Freshman", "Sophomore", "Junior", "Senior"],
+            },
+            {
+                "id": "school-status",
+                "label": "Choose your current school enrollment status",
+                "options": ["Enrolled", "Graduated", "On leave"],
+            },
+            {
+                "id": "grad-class",
+                "label": "What is your graduation year?",
+                "options": ["Class of 2027", "Class of 2028"],
+            },
+        ]
+
+        rendered = qa.explicit_approved_answers(controls, approved_answers=approved)
+        answers = {item["id_or_name"]: item["answer"] for item in rendered}
+
+        self.assertNotIn("hs-month", answers)
+        self.assertNotIn("school-year", answers)
+        self.assertNotIn("school-status", answers)
+        self.assertEqual("Class of 2028", answers["grad-class"])
+
+        allowed, blocked = qa.filter_manual_answers(
+            controls,
+            [
+                {"id_or_name": "hs-month", "answer": "January 2024"},
+                {"id_or_name": "school-year", "answer": "Brown University"},
+                {"id_or_name": "school-status", "answer": "Brown University"},
+                {"id_or_name": "grad-class", "answer": "Class of 2028"},
+            ],
+            approved_answers=approved,
+        )
+        self.assertEqual(
+            ["grad-class"], [item["id_or_name"] for item in allowed],
+        )
+        self.assertEqual(
+            {"hs-month", "school-year", "school-status"},
+            {item["id_or_name"] for item in blocked},
+        )
+
     def test_explicit_facts_render_without_a_model_including_approved_estimate(self):
         controls = [
             {
