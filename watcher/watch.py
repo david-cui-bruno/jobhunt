@@ -82,17 +82,35 @@ _MD_LINK = re.compile(r'href="([^"]+)"')
 def _parse_md_table(md: str, source: str) -> list[Posting]:
     out = []
     last_company = ""
+    posting_column: int | None = None
     for line in md.splitlines():
         if not line.startswith("|"):
             continue
         cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) < 4 or set(cells[0]) <= {"-", " "} or cells[0] in ("Company",):
+        if cells and cells[0] == "Company":
+            posting_column = next(
+                (index for index, value in enumerate(cells)
+                 if value.lower() in {"posting", "application", "apply"}),
+                None,
+            )
+            continue
+        if len(cells) < 4 or set(cells[0]) <= {"-", " "}:
             continue
         company = re.sub(r"<[^>]+>", "", cells[0])          # strip embedded HTML
         company = re.sub(r"\*\*|\[|\]\([^)]*\)|↳", "", company).strip() or last_company
         last_company = company
         title = cells[1]
-        m = _MD_LINK.search(line)
+        # Never use the first link in the full row. Several source repos link the
+        # company name to its homepage and put the real application in a later
+        # Posting column, which previously queued homepage-only false positives.
+        m = None
+        if posting_column is not None and posting_column < len(cells):
+            m = _MD_LINK.search(cells[posting_column])
+        if not m:
+            for cell in reversed(cells[1:]):
+                m = _MD_LINK.search(cell)
+                if m:
+                    break
         if not m:
             continue
         url = _clean_url(m.group(1))

@@ -13,12 +13,15 @@ widget-specific strategies, verify no required-field errors, then Next.
 """
 from __future__ import annotations
 
+import base64
+import html
 import json
 import re
 import secrets
 import sqlite3
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 import yaml
@@ -552,6 +555,145 @@ def _account_scope(page):
     return page
 
 
+def _account_record(company_key: str):
+    """Return the saved Workday account without creating tracker state."""
+    conn = sqlite3.connect(DB)
+    try:
+        return conn.execute(
+            "SELECT email, password, created_at FROM wd_accounts WHERE tenant=?",
+            (company_key,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+
+def _open_email_auth(page, create_account: bool) -> None:
+    """Open Workday's email auth form from the newer social-login chooser."""
+    scope = _account_scope(page)
+    if scope.locator(
+        "[data-automation-id='createAccountSubmitButton'], "
+        "[data-automation-id='signInSubmitButton']"
+    ).count():
+        return
+
+    utility = page.locator("[data-automation-id='utilityButtonSignIn']:visible").last
+    if utility.count():
+        utility.click(timeout=5000)
+        page.wait_for_timeout(700)
+    email_choice = page.locator(
+        "[data-automation-id='SignInWithEmailButton']:visible"
+    ).last
+    if email_choice.count():
+        # Workday renders a duplicate hidden auth view on some tenants. The
+        # visible copy can still be covered by the sibling modal container.
+        email_choice.click(timeout=5000, force=True)
+        page.wait_for_timeout(700)
+    if create_account:
+        create = page.locator("[data-automation-id='createAccountLink']:visible").last
+        if create.count():
+            create.click(timeout=5000, force=True)
+            page.wait_for_timeout(700)
+
+
+def _message_bodies(part: dict):
+    data = part.get("body", {}).get("data")
+    if data:
+        try:
+            padded = data + "=" * (-len(data) % 4)
+            yield base64.urlsafe_b64decode(padded).decode("utf-8", "replace")
+        except Exception:
+            pass
+    for child in part.get("parts", []) or []:
+        yield from _message_bodies(child)
+
+
+def workday_activation_url_from_message(message: dict, expected_host: str) -> str | None:
+    """Extract only a same-tenant Workday activation URL from a Gmail message."""
+    for body in _message_bodies(message.get("payload", {})):
+        for raw in re.findall(r"https?://[^\s<>\"']+", html.unescape(body)):
+            url = html.unescape(raw).rstrip(".,);]")
+            parsed = urllib.parse.urlparse(url)
+            if parsed.netloc.lower() != expected_host.lower():
+                continue
+            if re.search(r"/activate/[^/?#]+", parsed.path):
+                return url
+    return None
+
+
+def fetch_workday_activation_url(company_key: str, expected_host: str,
+                                  not_before: int = 0) -> str | None:
+    """Poll Gmail for the newest activation link for exactly one Workday tenant."""
+    notify = ROOT / "notify"
+    if str(notify) not in sys.path:
+        sys.path.insert(0, str(notify))
+    import mailer
+
+    after = max(not_before - 300, int(time.time()) - 2 * 86400)
+    query = urllib.parse.quote(
+        f'after:{after} from:{company_key}@otp.workday.com '
+        'subject:"Verify your candidate account"'
+    )
+    for attempt in range(6):
+        data = mailer._call(f"/messages?q={query}&maxResults=10")
+        for item in data.get("messages", []) or []:
+            message = mailer._call(f"/messages/{item['id']}?format=full")
+            internal = int(message.get("internalDate", 0)) // 1000
+            if internal and internal < after:
+                continue
+            url = workday_activation_url_from_message(message, expected_host)
+            if url:
+                return url
+        if attempt < 5:
+            time.sleep(6)
+    return None
+
+
+def _verification_required(page) -> bool:
+    phrases = ("verify your account", "verify your candidate account",
+               "email has been sent to you")
+    for frame in page.frames:
+        try:
+            body = frame.locator("body").inner_text().lower()
+            if any(phrase in body for phrase in phrases):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tuple[bool, str]:
+    """Sign in or create and activate a Workday account, then return to Apply."""
+    record = _account_record(company_key)
+    _open_email_auth(page, create_account=record is None)
+    started = int(time.time())
+    maybe_create_account(page, company_key)
+    maybe_sign_in(page, company_key)
+    page.wait_for_timeout(1200)
+
+    if not _verification_required(page):
+        return True, ""
+
+    record = _account_record(company_key)
+    created_at = int(record[2]) if record and record[2] else started
+    host = urllib.parse.urlparse(apply_url).netloc
+    activation_url = fetch_workday_activation_url(company_key, host, created_at)
+    if not activation_url:
+        return False, "workday account verification email not found"
+
+    page.goto(activation_url, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(2500)
+    page.goto(apply_url, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(2500)
+    _open_email_auth(page, create_account=False)
+    maybe_sign_in(page, company_key)
+    page.wait_for_timeout(2000)
+    if _verification_required(page):
+        return False, "workday account remains unverified after activation"
+    return True, ""
+
+
 def maybe_create_account(page, company_key: str) -> None:
     """Some tenants interpose account creation. Use profile email + stored password."""
     scope = _account_scope(page)
@@ -705,11 +847,22 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
         # Some tenants (Medtronic) don't navigate on the Apply click: go directly
         # to the canonical autofill route, which surfaces the account gate.
         # NOTE: the account form may live in an IFRAME (Medtronic), so check frames.
+        apply_url = url.rstrip("/") + "/apply/autofillWithResume"
         if not (af.count() and af.is_visible()) and \
                 _account_scope(page) is page:
-            page.goto(url.rstrip("/") + "/apply/autofillWithResume",
+            page.goto(apply_url,
                       wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(3500)
+        if not (af.count() and af.is_visible()) and not saved_draft_wizard_is_active(page):
+            account_ok, account_reason = ensure_workday_account_access(
+                page, company_key, apply_url
+            )
+            if not account_ok:
+                result.update(ok=True, reason=account_reason,
+                              unanswered=["Workday account verification"])
+                _shot(page, slug, "account_gate")
+                browser.close()
+                return result
         maybe_create_account(page, company_key)
         maybe_sign_in(page, company_key)
         # after account creation/sign-in the autofill choice may render fresh
@@ -725,6 +878,23 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
             # the upload zone.
             maybe_create_account(page, company_key)
             maybe_sign_in(page, company_key)
+        if not page.locator("[data-automation-id='file-upload-input-ref']").count() and \
+                not saved_draft_wizard_is_active(page):
+            account_ok, account_reason = ensure_workday_account_access(
+                page, company_key, apply_url
+            )
+            if not account_ok:
+                result.update(ok=True, reason=account_reason,
+                              unanswered=["Workday account verification"])
+                _shot(page, slug, "account_gate")
+                browser.close()
+                return result
+            try:
+                if af.count() and af.is_visible():
+                    af.click(timeout=8000)
+                    page.wait_for_timeout(3000)
+            except Exception:
+                pass
         up = page.locator("[data-automation-id='file-upload-input-ref']").first
         resume_current = False
         try:

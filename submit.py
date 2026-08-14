@@ -71,15 +71,22 @@ def _user_is_gaming() -> bool:
 
 
 DEAD_MARKERS = ("job not found", "no longer available", "job you requested was not found",
-                "position has been filled", "posting is closed", "job posting is no longer")
+                "position has been filled", "posting is closed", "job posting is no longer",
+                "job has expired", "this job has expired")
 
 
 def _posting_dead(url: str) -> bool:
     """Cheap liveness check before spending a browser session.
     Ashby: authoritative board API (SPA hides deadness from raw HTTP).
     Others: body-text marker sniff."""
+    try:
+        from apply.jd import canonical_application_url
+        url = canonical_application_url(url)
+    except Exception:
+        pass
     import json as _json
     import re as _re
+    import urllib.error as _ue
     import urllib.request as _ur
     m = _re.search(r"ashbyhq\.com/([^/?]+)/([0-9a-f-]{36})", url)
     if m:
@@ -96,6 +103,8 @@ def _posting_dead(url: str) -> bool:
         with _ur.urlopen(req, timeout=15) as r:
             body = r.read(60000).decode("utf-8", "replace").lower()
         return any(mk in body for mk in DEAD_MARKERS)
+    except _ue.HTTPError as exc:
+        return exc.code in {404, 410}
     except Exception:
         return False
 
@@ -215,7 +224,9 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
     _ensure_outcome_columns(conn)
     rows = conn.execute(
         "SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING(posting_id) "
-        "WHERE p.status='ready' ORDER BY p.rowid DESC").fetchall()
+        "WHERE p.status='ready' "
+        "AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.posting_id=p.posting_id) "
+        "ORDER BY p.rowid DESC").fetchall()
     results = []
     done = 0
     from drip import claim_posting
@@ -263,6 +274,7 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
             status_for_outcome = {
                 "submitted": "submitted",
                 "manual": "manual",
+                "stale": "filtered_out",
                 "retryable_failure": "failed",
                 "failed": "failed",
             }.get(outcome, "failed")
@@ -279,9 +291,29 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
                                 "outcome": "manual", "reason": "submission claim lost; verify"})
                 continue
             ats = str(res.get("detected_ats", "unknown"))
-            conn.execute(
-                "INSERT OR REPLACE INTO applications VALUES (?,?,?,?,?,?)",
-                (r["posting_id"], str(pdf), ats, int(time.time()), reason, ""))
+            # Never overwrite a prior submission record. The ready-query anti-join
+            # is the first guard; this unique insert closes the race if another
+            # worker records the application after rows were selected.
+            try:
+                conn.execute(
+                    "INSERT INTO applications VALUES (?,?,?,?,?,?)",
+                    (r["posting_id"], str(pdf), ats, int(time.time()), reason, ""))
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                conn.execute(
+                    "UPDATE postings SET status='submitted', outcome='submitted', "
+                    "last_error='already present in applications ledger' "
+                    "WHERE posting_id=? AND status='submitting'",
+                    (r["posting_id"],),
+                )
+                conn.commit()
+                results.append({
+                    "company": r["company"],
+                    "ats": ats,
+                    "outcome": "submitted",
+                    "reason": "already present in applications ledger; not resubmitted",
+                })
+                continue
             conn.commit()
             done += 1
         elif outcome == "manual" and res.get("unanswered") and not dry_run:

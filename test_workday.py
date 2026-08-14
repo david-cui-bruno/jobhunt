@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import inspect
 import json
@@ -15,6 +16,36 @@ import workday
 
 
 class WorkdayAnswerTests(unittest.TestCase):
+    def test_activation_link_must_match_the_exact_workday_tenant(self) -> None:
+        good = "https://nelnet.wd1.myworkdayjobs.com/MyNelnet/activate/secret-token"
+        evil = "https://evil.example/activate/stolen"
+        html_body = f'<a href="{evil}">bad</a><a href="{good}">verify</a>'
+        encoded = base64.urlsafe_b64encode(html_body.encode()).decode().rstrip("=")
+        message = {
+            "payload": {
+                "mimeType": "multipart/alternative",
+                "parts": [{"mimeType": "text/html", "body": {"data": encoded}}],
+            }
+        }
+
+        self.assertEqual(
+            good,
+            workday.workday_activation_url_from_message(
+                message, "nelnet.wd1.myworkdayjobs.com"
+            ),
+        )
+        self.assertIsNone(
+            workday.workday_activation_url_from_message(
+                message, "psu.wd1.myworkdayjobs.com"
+            )
+        )
+
+    def test_new_workday_social_auth_chooser_is_supported(self) -> None:
+        source = inspect.getsource(workday._open_email_auth)
+        self.assertIn("utilityButtonSignIn", source)
+        self.assertIn("SignInWithEmailButton", source)
+        self.assertIn("createAccountLink", source)
+
     def test_localized_workday_click_filters_are_supported(self) -> None:
         self.assertIn("CreateAccount", workday.CREATE_ACCOUNT_OVERLAY)
         self.assertIn("SignIn", workday.SIGN_IN_OVERLAY)

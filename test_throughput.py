@@ -41,6 +41,19 @@ class SourceCoverageTests(unittest.TestCase):
         self.assertIn("speedy-ai", names)
         self.assertIn("vansh-offseason", names)
 
+    def test_markdown_source_uses_posting_link_not_company_homepage(self) -> None:
+        markdown = "\n".join((
+            "| Company | Position | Location | Posting | Age |",
+            "|---|---|---|---|---|",
+            "| <a href=\"https://acme.example\">Acme</a> | SWE Intern | NYC | "
+            "<a href=\"https://jobs.example/acme/123\">Apply</a> | 1d |",
+        ))
+
+        postings = watch._parse_md_table(markdown, "speedy")
+
+        self.assertEqual(1, len(postings))
+        self.assertEqual("https://jobs.example/acme/123", postings[0].url)
+
     def test_advanced_degree_only_titles_are_filtered(self) -> None:
         for title in (
             "Machine Learning Engineer Intern - PhD",

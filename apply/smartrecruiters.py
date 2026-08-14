@@ -21,6 +21,20 @@ PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
 SHOTS = ROOT / "out" / "screenshots"
 
 
+def _preflight_outcome(body_text: str, captcha_present: bool = False) -> dict | None:
+    body = body_text.lower()
+    if "job has expired" in body or "job is no longer available" in body:
+        return {"outcome": "stale", "reason": "posting expired"}
+    if captcha_present:
+        return {
+            "ok": True,
+            "outcome": "manual",
+            "reason": "SmartRecruiters CAPTCHA requires manual completion",
+            "unanswered": ["SmartRecruiters CAPTCHA"],
+        }
+    return None
+
+
 def _hiring_team_message(profile: dict) -> str:
     """Build a short factual intro without duplicating the resume graduation date."""
     education = profile["education"]
@@ -47,6 +61,12 @@ def apply_smartrecruiters(url: str, resume_pdf: Path, slug: str, dry_run: bool =
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(2500)
 
+        blocked = _preflight_outcome(page.inner_text("body"))
+        if blocked:
+            result.update(blocked)
+            browser.close()
+            return result
+
         # cookie banner
         for sel in ["#st-accept", "button:has-text('Accept')", "#onetrust-accept-btn-handler"]:
             try:
@@ -67,6 +87,18 @@ def apply_smartrecruiters(url: str, resume_pdf: Path, slug: str, dry_run: bool =
                 page.wait_for_timeout(4000)
         except Exception:
             pass
+
+        # SmartRecruiters protects some active oneclick forms with DataDome on
+        # cloud IPs. That is a human CAPTCHA gate, not a missing resume widget.
+        captcha = page.locator(
+            "iframe[title*='DataDome' i], iframe[src*='captcha-delivery.com']"
+        )
+        blocked = _preflight_outcome(page.inner_text("body"), captcha.count() > 0)
+        if blocked:
+            result.update(blocked)
+            _shot(page, slug, "captcha")
+            browser.close()
+            return result
 
         # resume upload: the FIRST file input is often the avatar; find the one
         # scoped to the Resume/Easy Apply sections (accepts documents)
