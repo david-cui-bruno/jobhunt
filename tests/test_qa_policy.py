@@ -125,6 +125,24 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertEqual([], allowed)
         self.assertEqual({"other", "selected-other"}, {answer["id_or_name"] for answer in blocked})
 
+    def test_active_other_school_detail_can_use_the_profile_institution(self):
+        control = {
+            "id": "other-school",
+            "label": "If you selected other, please specify which one",
+            "required": True,
+            "value": "",
+        }
+        self.assertFalse(
+            qa.answer_requires_manual(
+                control, "Brown University", approved_answers=self.APPROVED,
+            )
+        )
+        self.assertTrue(
+            qa.answer_requires_manual(
+                control, "Made Up University", approved_answers=self.APPROVED,
+            )
+        )
+
     def test_greenhouse_required_scan_ignores_hidden_conditional_controls(self):
         source = Path(greenhouse.__file__).read_text()
         self.assertIn("el.offsetParent === null", source)
@@ -182,6 +200,8 @@ class QaManualPolicyTest(unittest.TestCase):
             {"id": "gender", "label": "What is your gender?", "options": ["Woman", "Man", "Non-binary", "I don't wish to answer"]},
             {"id": "race", "label": "What is your race/ethnicity?", "options": ["East Asian", "White", "I don't wish to answer"]},
             {"id": "hispanic", "label": "Are you Hispanic/Latino?", "options": ["Yes", "No", "I don't wish to answer"]},
+            {"id": "orientation", "label": "How would you describe your sexual orientation?", "options": ["Straight", "Gay", "I don't wish to answer"]},
+            {"id": "transgender", "label": "Do you identify as transgender?", "options": ["Yes", "No", "I don't wish to answer"]},
             {"id": "veteran", "label": "Are you a veteran?", "options": ["Yes", "No", "I don't wish to answer"]},
         ]
         rendered = qa.explicit_approved_answers(
@@ -192,6 +212,8 @@ class QaManualPolicyTest(unittest.TestCase):
                 "gender": "Man",
                 "race": "I don't wish to answer",
                 "hispanic": "I don't wish to answer",
+                "orientation": "I don't wish to answer",
+                "transgender": "I don't wish to answer",
                 "veteran": "I don't wish to answer",
             },
             {item["id_or_name"]: item["answer"] for item in rendered},
@@ -209,6 +231,16 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertTrue(
             qa.answer_requires_manual(
                 controls[3], "No", approved_answers=self.APPROVED,
+            )
+        )
+        self.assertTrue(
+            qa.answer_requires_manual(
+                controls[4], "No", approved_answers=self.APPROVED,
+            )
+        )
+        self.assertTrue(
+            qa.answer_requires_manual(
+                controls[5], "No", approved_answers=self.APPROVED,
             )
         )
 

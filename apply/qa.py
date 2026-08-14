@@ -269,7 +269,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(exact|specific)\b.*\b(schedule|hours|availability|travel)\b|\b(work schedule|travel schedule|travel percentage|% travel|days per week|hours per week|available hours)\b",
     r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b",
     r"\b(preferred pronouns?|pronouns?)\b",
-    r"\b(gender|race|ethnicity|racial|hispanic|latino|veteran status|are you a veteran)\b",
+    r"\b(gender|race|ethnicity|racial|hispanic|latino|transgender|sexual orientation|veteran status|are you a veteran)\b",
     r"\bhave you (?:ever )?used\b.*\bbefore\b",
     r"\b(days? (?:a|per) week|in[- ]?office|onsite schedule|hybrid schedule|willing to (?:come|work|join).*(?:office|onsite))\b",
     r"\b(local to the area|relocation assistance)\b",
@@ -481,6 +481,10 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             race = identity.get("race_ethnicity")
             answer = (_best_option(str(race), options) if race else
                       _decline_demographic_option(options))
+        elif re.search(r"\b(transgender|sexual orientation)\b", question):
+            # These identity facts have not been provided. Prefer the site's
+            # explicit decline option rather than allowing a model to infer one.
+            answer = _decline_demographic_option(options)
         elif re.search(r"\b(veteran status|are you a veteran)\b", question):
             veteran = identity.get("veteran")
             answer = (_render_boolean(veteran, options) if isinstance(veteran, bool) else
@@ -668,6 +672,8 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         expected = str(identity.get("race_ethnicity") or "").strip().lower()
         return (bool(expected and expected == answer_text.strip().lower())
                 or _decline_demographic_option([answer_text]) is not None)
+    if re.search(r"\b(transgender|sexual orientation)\b", question):
+        return _decline_demographic_option([answer_text]) is not None
     if re.search(r"\b(veteran status|are you a veteran)\b", question):
         expected = identity.get("veteran")
         return ((isinstance(expected, bool) and _answer_boolean(answer_text) is expected)
@@ -743,6 +749,15 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         if not isinstance(expected, bool):
             expected = False
         return _answer_boolean(answer_text) is expected
+    if re.search(r"\b(?:if|when) (?:you )?(?:selected?|chose|choose) other\b|\bif other\b.*\b(?:specify|explain|describe)\b", question):
+        # "Other" is sometimes the only truthful school option. Allow the
+        # follow-up only when it exactly names an institution already present in
+        # the profile or approved answer bank; arbitrary model prose stays blocked.
+        institutions = {
+            str((PROFILE.get("education") or {}).get("school") or "").strip().lower(),
+            str((approved.get("education") or {}).get("high_school") or "").split(",", 1)[0].strip().lower(),
+        }
+        return answer_text.strip().lower() in (institutions - {""})
     return False
 
 
