@@ -59,13 +59,14 @@ def run(verbose: bool = False) -> dict:
             # is a not-yet-submitted full-time role, swap: intern wins.)
             dup = conn.execute(
                 "SELECT posting_id, title, status FROM postings WHERE lower(company)=lower(?) "
-                "AND status IN ('queued','tailored','ready','manual','failed','submitted') LIMIT 1",
+                "AND status IN ('queued','tailoring','sprinting','submitting','tailored','ready','manual','failed','submitted') LIMIT 1",
                 (r["company"],),
             ).fetchone()
             if dup:
                 new_is_intern = bool(re.search(r"\bintern|co[- ]?op\b", r["title"], re.I))
                 old_is_intern = bool(re.search(r"\bintern|co[- ]?op\b", dup["title"], re.I))
-                if new_is_intern and not old_is_intern and dup["status"] != "submitted":
+                if (new_is_intern and not old_is_intern
+                        and dup["status"] not in {"submitted", "tailoring", "sprinting", "submitting"}):
                     conn.execute(
                         "UPDATE postings SET status='filtered_out' WHERE posting_id=?",
                         (dup["posting_id"],))

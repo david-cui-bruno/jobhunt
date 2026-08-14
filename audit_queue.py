@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from submit import DB, _ensure_outcome_columns, _posting_dead  # noqa: E402
 
+# Intentionally skip live claim states. Stale claims are recovered before drip;
+# auditing a URL while its browser worker is active could corrupt that workflow.
 STATUSES = ("queued", "ready", "failed")
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -78,6 +79,32 @@ class SourceCoverageTests(unittest.TestCase):
         self.assertEqual(result, {"queued": 0, "filtered_out": 1})
         self.assertEqual(status, "filtered_out")
 
+    def test_active_tailoring_claim_cannot_be_replaced_by_new_intern(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "tracker.db"
+            conn = sqlite3.connect(db)
+            watch.init_db(conn)
+            conn.executemany(
+                "INSERT INTO postings "
+                "(posting_id, source, company, title, locations, url, sponsorship, "
+                "citizenship_required, closed, first_seen, status) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    ("claimed", "one", "Acme", "Software Engineer", "NYC", "https://old", "", 0, 0, 1, "tailoring"),
+                    ("intern", "two", "Acme", "Software Engineer Intern", "SF", "https://new", "", 0, 0, 2, "new"),
+                ],
+            )
+            conn.commit()
+            conn.close()
+            with mock.patch.object(filt, "DB_PATH", db):
+                result = filt.run()
+            conn = sqlite3.connect(db)
+            statuses = dict(conn.execute("SELECT posting_id,status FROM postings"))
+            conn.close()
+
+        self.assertEqual(result, {"queued": 0, "filtered_out": 1})
+        self.assertEqual(statuses, {"claimed": "tailoring", "intern": "filtered_out"})
+
 
 class BacklogPriorityTests(unittest.TestCase):
     def _connection(self) -> sqlite3.Connection:
@@ -105,6 +132,96 @@ class BacklogPriorityTests(unittest.TestCase):
     def test_tailoring_batch_is_bounded_but_material(self) -> None:
         self.assertEqual(drip.TAILOR_PER_RUN, 5)
         self.assertEqual(drip.DAILY_CAP, 50)
+
+    def test_only_one_worker_can_claim_a_queued_posting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "tracker.db"
+            first = sqlite3.connect(db)
+            first.execute(
+                "CREATE TABLE postings (posting_id TEXT PRIMARY KEY, status TEXT, "
+                "last_attempt_at INTEGER, outcome TEXT, last_error TEXT)"
+            )
+            first.execute("INSERT INTO postings VALUES ('p1','queued',NULL,NULL,NULL)")
+            first.commit()
+            second = sqlite3.connect(db)
+
+            self.assertTrue(drip.claim_posting(first, "p1", "sprinting"))
+            self.assertFalse(drip.claim_posting(second, "p1", "tailoring"))
+            self.assertEqual(
+                "sprinting",
+                first.execute("SELECT status FROM postings WHERE posting_id='p1'").fetchone()[0],
+            )
+            first.close()
+            second.close()
+
+    def test_stale_claims_recover_but_fresh_claims_remain_reserved(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE postings (posting_id TEXT PRIMARY KEY, status TEXT, "
+            "last_attempt_at INTEGER, outcome TEXT, last_error TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO postings VALUES (?,?,?,?,?)",
+            [
+                ("stale", "sprinting", 1, None, None),
+                ("fresh", "tailoring", int(time.time()), None, None),
+            ],
+        )
+
+        self.assertEqual(1, drip.recover_stale_claims(conn))
+        self.assertEqual(
+            [("fresh", "tailoring"), ("stale", "queued")],
+            conn.execute("SELECT posting_id,status FROM postings ORDER BY posting_id").fetchall(),
+        )
+        conn.close()
+
+    def test_interrupted_submission_is_quarantined_for_manual_verification(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE postings (posting_id TEXT PRIMARY KEY, status TEXT, "
+            "last_attempt_at INTEGER, outcome TEXT, last_error TEXT)"
+        )
+        conn.execute("INSERT INTO postings VALUES ('p1','submitting',1,NULL,NULL)")
+
+        self.assertEqual(1, drip.recover_stale_claims(conn))
+        self.assertEqual(
+            ("manual", "manual", "submission interrupted; verify possible prior submission"),
+            conn.execute(
+                "SELECT status,outcome,last_error FROM postings WHERE posting_id='p1'"
+            ).fetchone(),
+        )
+        conn.close()
+
+    def test_late_worker_cannot_clobber_a_terminal_status(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE postings (posting_id TEXT PRIMARY KEY, status TEXT, "
+            "last_attempt_at INTEGER)"
+        )
+        conn.execute("INSERT INTO postings VALUES ('p1','queued',NULL)")
+        self.assertTrue(drip.claim_posting(conn, "p1", "tailoring"))
+        conn.execute("UPDATE postings SET status='submitted' WHERE posting_id='p1'")
+        conn.commit()
+
+        self.assertFalse(
+            drip.transition_claim(conn, "p1", "tailoring", "ready")
+        )
+        self.assertEqual(
+            "submitted",
+            conn.execute("SELECT status FROM postings WHERE posting_id='p1'").fetchone()[0],
+        )
+        conn.close()
+
+    def test_release_claim_rejects_unapproved_target_status(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE postings (posting_id TEXT PRIMARY KEY, status TEXT, "
+            "last_attempt_at INTEGER)"
+        )
+        conn.execute("INSERT INTO postings VALUES ('p1','tailoring',NULL)")
+        with self.assertRaises(ValueError):
+            drip.release_claim(conn, "p1", "tailoring", "submitted")
+        conn.close()
 
 
 if __name__ == "__main__":

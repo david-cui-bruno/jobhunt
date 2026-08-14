@@ -23,6 +23,22 @@ TAILOR_PER_RUN = 5
 LOC_PRIORITY = ["san francisco", "sf", "bay area", "palo alto", "mountain view", "menlo",
                 "new york", "nyc", "manhattan", "brooklyn", "remote"]
 SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workday", "smartrecruiters", "rippling")
+CLAIM_TIMEOUT_SECONDS = 2 * 60 * 60
+CLAIM_TRANSITIONS = {
+    ("queued", "tailoring"),
+    ("queued", "sprinting"),
+    ("ready", "submitting"),
+    ("sprinting", "submitting"),
+    ("tailoring", "queued"),
+    ("tailoring", "ready"),
+    ("sprinting", "queued"),
+    ("sprinting", "filtered_out"),
+    ("submitting", "ready"),
+    ("submitting", "manual"),
+    ("submitting", "failed"),
+    ("submitting", "filtered_out"),
+    ("submitting", "submitted"),
+}
 
 
 def loc_score(locations: str) -> int:
@@ -51,10 +67,63 @@ def sent_today(conn) -> int:
     return conn.execute("SELECT COUNT(*) FROM emails WHERE sent_at > ?", (midnight,)).fetchone()[0]
 
 
+def transition_claim(conn: sqlite3.Connection, posting_id: str, expected_status: str,
+                     status: str, *, commit: bool = True) -> bool:
+    """Compare-and-set one workflow state without clobbering another worker."""
+    if (expected_status, status) not in CLAIM_TRANSITIONS:
+        raise ValueError(f"invalid claim transition: {expected_status} -> {status}")
+    changed = conn.execute(
+        "UPDATE postings SET status=?, last_attempt_at=? "
+        "WHERE posting_id=? AND status=?",
+        (status, int(time.time()), posting_id, expected_status),
+    ).rowcount
+    if commit:
+        conn.commit()
+    return changed == 1
+
+
+def claim_posting(conn: sqlite3.Connection, posting_id: str, status: str,
+                  from_status: str = "queued") -> bool:
+    """Atomically reserve a posting for one worker."""
+    if status not in {"tailoring", "sprinting", "submitting"}:
+        raise ValueError(f"invalid claim status: {status}")
+    return transition_claim(conn, posting_id, from_status, status)
+
+
+def release_claim(conn: sqlite3.Connection, posting_id: str, claim_status: str,
+                  status: str = "queued") -> bool:
+    """Release only the claim this worker still owns."""
+    if status not in {"queued", "ready", "manual"}:
+        raise ValueError(f"invalid release status: {status}")
+    return transition_claim(conn, posting_id, claim_status, status)
+
+
+def recover_stale_claims(conn: sqlite3.Connection) -> int:
+    """Recover safe work; quarantine an interrupted browser submission."""
+    cutoff = int(time.time()) - CLAIM_TIMEOUT_SECONDS
+    safe = conn.execute(
+        "UPDATE postings SET status='queued' "
+        "WHERE status IN ('tailoring','sprinting') "
+        "AND COALESCE(last_attempt_at, 0) < ?",
+        (cutoff,),
+    ).rowcount
+    uncertain = conn.execute(
+        "UPDATE postings SET status='manual', outcome='manual', "
+        "last_error='submission interrupted; verify possible prior submission' "
+        "WHERE status='submitting' AND COALESCE(last_attempt_at, 0) < ?",
+        (cutoff,),
+    ).rowcount
+    conn.commit()
+    return safe + uncertain
+
+
 def run():
     now = datetime.datetime.now(ET)
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
+    recovered = recover_stale_claims(conn)
+    if recovered:
+        print(f"[drip] recovered {recovered} stale tailoring claims")
 
     # 1) watcher + filter every run
     from watcher import watch, filter as filt  # noqa
@@ -97,6 +166,8 @@ def run():
         row = pick_next(conn, excluded)
         if row:
             excluded.add(row["posting_id"])
+            if not claim_posting(conn, row["posting_id"], "tailoring"):
+                continue
             try:
                 import batch
                 from jd import fetch_jd
@@ -108,12 +179,18 @@ def run():
                     conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
                                  (row["posting_id"], None, None,
                                   str(pdf), str(pdf.with_suffix('.tex')), int(time.time())))
-                    conn.execute("UPDATE postings SET status='ready' WHERE posting_id=?",
-                                 (row["posting_id"],))
-                    conn.commit()
-                    print(f"[drip] tailored and queued: {row['company']} — {row['title']}")
+                    if transition_claim(conn, row["posting_id"], "tailoring", "ready",
+                                        commit=False):
+                        conn.commit()
+                        print(f"[drip] tailored and queued: {row['company']} — {row['title']}")
+                    else:
+                        conn.rollback()
+                        print(f"[drip] claim lost; discarded late result: {row['company']}")
+                else:
+                    release_claim(conn, row["posting_id"], "tailoring")
             except Exception as e:
                 # One bad JD or model call must not block the other four slots.
+                release_claim(conn, row["posting_id"], "tailoring")
                 print(f"[drip] tailoring failed for {row['company']}: {type(e).__name__}: {e}")
 
     # 4) Drain legacy tailored rows immediately. New rows enter ready directly.

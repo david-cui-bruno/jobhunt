@@ -111,6 +111,59 @@ class SubmitSafetyTests(unittest.TestCase):
             )
             conn.close()
 
+    def test_uncertain_worker_result_is_never_retried_automatically(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / "tracker.db"
+            pdf = root / "resume.pdf"
+            pdf.write_bytes(b"pdf")
+            conn = sqlite3.connect(db)
+            conn.executescript(
+                """
+                CREATE TABLE postings (
+                    posting_id TEXT PRIMARY KEY, company TEXT, title TEXT,
+                    status TEXT, url TEXT, outcome TEXT, last_attempt_at INTEGER,
+                    attempt_count INTEGER NOT NULL DEFAULT 0, last_error TEXT
+                );
+                CREATE TABLE emails (posting_id TEXT PRIMARY KEY, resume_pdf TEXT);
+                CREATE TABLE applications (
+                    posting_id TEXT PRIMARY KEY, resume_path TEXT, ats TEXT,
+                    submitted_at INTEGER, confirmation TEXT, notes TEXT
+                );
+                INSERT INTO postings (posting_id,company,title,status,url)
+                VALUES ('one','One','Engineer','ready','https://one');
+                """
+            )
+            conn.execute("INSERT INTO emails VALUES ('one', ?)", (str(pdf),))
+            conn.commit()
+            conn.close()
+
+            result = {
+                "outcome": "retryable_failure",
+                "ok": False,
+                "submitted": False,
+                "submission_uncertain": True,
+                "reason": "worker timed out after a possible click",
+            }
+            with (
+                mock.patch.object(submit, "DB", db),
+                mock.patch.object(submit, "_user_is_gaming", return_value=False),
+                mock.patch.object(submit, "_posting_dead", return_value=False),
+                mock.patch.object(submit, "_isolated_adapter", return_value=result),
+                mock.patch.object(submit.time, "sleep"),
+            ):
+                results = submit.submit_ready(limit=1)
+
+            self.assertEqual(results[0]["outcome"], "retryable_failure")
+            conn = sqlite3.connect(db)
+            self.assertEqual(
+                ("manual", "retryable_failure", 1),
+                conn.execute(
+                    "SELECT status,outcome,attempt_count FROM postings WHERE posting_id='one'"
+                ).fetchone(),
+            )
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

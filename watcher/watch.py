@@ -149,7 +149,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         , last_attempt_at INTEGER
         , attempt_count INTEGER NOT NULL DEFAULT 0
         , last_error TEXT
-        -- status: new -> filtered_out | queued -> tailored -> ready -> submitted | failed | skipped_dupe_company
+        -- status: new -> filtered_out | queued -> tailoring/sprinting -> ready/submitting -> submitted/manual/failed
     );
     CREATE TABLE IF NOT EXISTS applications (
         posting_id TEXT PRIMARY KEY REFERENCES postings(posting_id),

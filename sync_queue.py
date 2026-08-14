@@ -22,7 +22,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "out" / "tracker.db"
-ACTIVE_STATUSES = ("queued", "ready", "failed")
+ACTIVE_STATUSES = ("queued", "tailoring", "sprinting", "ready", "submitting", "failed")
 BATCH_SIZE = 100
 
 
@@ -56,9 +56,16 @@ def read_active_postings(path: Path = DB) -> list[dict[str, Any]]:
     with sqlite3.connect(uri, uri=True) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            """SELECT posting_id, source, company, title, locations, url, status, first_seen
+            """SELECT posting_id, source, company, title, locations, url,
+                       CASE status
+                           WHEN 'tailoring' THEN 'queued'
+                           WHEN 'sprinting' THEN 'queued'
+                           WHEN 'submitting' THEN 'ready'
+                           ELSE status
+                       END AS status,
+                       first_seen
                  FROM postings
-                WHERE status IN (?,?,?)
+                WHERE status IN (?,?,?,?,?,?)
                 ORDER BY CASE status WHEN 'ready' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END,
                          first_seen DESC""",
             ACTIVE_STATUSES,

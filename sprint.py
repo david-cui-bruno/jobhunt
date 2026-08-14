@@ -12,8 +12,7 @@ Safety properties (FULL AUTO, David ratified 2026-08-09):
   - FYI email with the submitted PDF after each sprint submission (audit trail;
     also counts into drip's daily-cap accounting via the emails table)
   - lockfile prevents overlapping runs; attempted-row cap prevents batch-update storms
-  - unknown ATS / adapter failure -> posting falls back into the normal queue
-    ('tailored', so drip's auto-approve picks it up within the hour)
+  - unknown ATS / adapter failure -> posting falls back into the normal ready queue
 """
 from __future__ import annotations
 
@@ -29,7 +28,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT /
 DB = ROOT / "out" / "tracker.db"
 LOCK = ROOT / "out" / "sprint.lock"
 PER_RUN_CAP = 5          # batch repo updates: don't churn for an hour
-SPRINT_DAILY_CAP = 15    # sprint submissions per day (drip backlog has its own 20)
+SPRINT_DAILY_CAP = 15    # sprint submissions per day (drip backlog is capped separately)
 
 
 def _sprint_submitted_today(conn) -> int:
@@ -46,6 +45,7 @@ def run() -> list[dict]:
     from watcher import watch, filter as filt
     from jd import fetch_jd, detect_ats
     from tailor import tailor
+    from drip import claim_posting, release_claim, transition_claim
     import mailer
 
     results = []
@@ -68,44 +68,69 @@ def run() -> list[dict]:
             continue  # filtered out, closed, or deduped
         print(f"[sprint] NEW: {r['company']} — {r['title']}", flush=True)
         attempted += 1
+        if not claim_posting(conn, r["posting_id"], "sprinting"):
+            continue
         try:
             jd_text = fetch_jd(r["url"]) or ""
             pdf = tailor(r["posting_id"], r["company"], r["title"], jd_text)
         except Exception as e:
+            release_claim(conn, r["posting_id"], "sprinting")
             print(f"[sprint] tailor failed for {r['company']}: {e}", flush=True)
             continue
         if not pdf:
+            release_claim(conn, r["posting_id"], "sprinting")
             print(f"[sprint] tailor returned None for {r['company']}", flush=True)
+            continue
+
+        import submit as submit_mod
+        if submit_mod._posting_dead(r["url"]):
+            transition_claim(conn, r["posting_id"], "sprinting", "filtered_out")
             continue
 
         # record the resume paths (submit machinery + revise thread need them)
         conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
                      (r["posting_id"], None, None, str(pdf),
                       str(pdf.with_suffix(".tex")), int(time.time())))
-        conn.execute("UPDATE postings SET status='tailored' WHERE posting_id=?",
-                     (r["posting_id"],))
+        # This marker separates a safely retryable tailoring crash from a browser
+        # crash whose remote submission result may be unknowable.
+        if not transition_claim(conn, r["posting_id"], "sprinting", "submitting",
+                                commit=False):
+            conn.rollback()
+            print(f"[sprint] claim lost; discarded late result: {r['company']}", flush=True)
+            continue
         conn.commit()
 
         # submit RIGHT NOW via the isolated adapter (same as submit.py)
-        import submit as submit_mod
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
-        if submit_mod._posting_dead(r["url"]):
-            conn.execute("UPDATE postings SET status='filtered_out' WHERE posting_id=?",
-                         (r["posting_id"],))
-            conn.commit()
+        try:
+            res = submit_mod._isolated_adapter({
+                "url": r["url"], "resume_pdf": str(pdf), "slug": slug, "dry_run": False,
+            })
+        except Exception as exc:
+            submit_mod._mark_outcome(
+                conn, r["posting_id"], "manual", "retryable_failure",
+                f"adapter execution failed: {type(exc).__name__}: {exc}",
+                expected_status="submitting",
+            )
+            print(f"[sprint] adapter crashed for {r['company']}: {type(exc).__name__}: {exc}",
+                  flush=True)
             continue
-        res = submit_mod._isolated_adapter({
-            "url": r["url"], "resume_pdf": str(pdf), "slug": slug, "dry_run": False,
-        })
         outcome = submit_mod._outcome(res)
         reason = str(res.get("reason", ""))
         if outcome == "submitted":
-            conn.execute("UPDATE postings SET status='submitted', outcome='submitted' "
-                         "WHERE posting_id=?", (r["posting_id"],))
-            conn.execute("INSERT OR REPLACE INTO applications VALUES (?,?,?,?,?,?)",
-                         (r["posting_id"], str(pdf), str(res.get("detected_ats", "unknown")),
-                          int(time.time()), reason, "sprint"))
-            conn.commit()
+            changed = submit_mod._mark_outcome(
+                conn, r["posting_id"], "submitted", "submitted", reason,
+                expected_status="submitting", commit=False,
+            )
+            if changed:
+                conn.execute("INSERT OR REPLACE INTO applications VALUES (?,?,?,?,?,?)",
+                             (r["posting_id"], str(pdf), str(res.get("detected_ats", "unknown")),
+                              int(time.time()), reason, "sprint"))
+                conn.commit()
+            else:
+                conn.rollback()
+                print(f"[sprint] claim lost after adapter: {r['company']}", flush=True)
+                continue
             done += 1
             print(f"[sprint] SUBMITTED: {r['company']} ({reason})", flush=True)
             # FYI audit email (attachment = what was sent)
@@ -124,10 +149,16 @@ def run() -> list[dict]:
             except Exception as e:
                 print(f"[sprint] FYI email failed: {e}", flush=True)
         else:
-            # leave in 'tailored': drip auto-approves within the hour and the
-            # normal submit lane (with retries) takes over.
+            # Release the sprint claim only after its adapter has finished, so
+            # the normal submit lane cannot race the same application.
+            target = "manual" if res.get("submission_uncertain") else "ready"
+            submit_mod._mark_outcome(
+                conn, r["posting_id"], target, outcome, reason,
+                expected_status="submitting",
+            )
             print(f"[sprint] not submitted ({outcome}: {reason[:60]}); "
-                  f"left for normal lane", flush=True)
+                  f"left for {'verification' if target == 'manual' else 'normal lane'}",
+                  flush=True)
         results.append({"company": r["company"], "outcome": outcome, "reason": reason})
     conn.close()
     return results

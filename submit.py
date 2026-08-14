@@ -109,18 +109,25 @@ def _ensure_outcome_columns(conn: sqlite3.Connection) -> None:
 
 
 def _mark_outcome(conn: sqlite3.Connection, posting_id: str, status: str,
-                  outcome: str, reason: str = "", dry_run: bool = False) -> None:
+                  outcome: str, reason: str = "", dry_run: bool = False,
+                  expected_status: str | None = None, commit: bool = True) -> bool:
     if dry_run:
-        return
-    conn.execute(
+        return True
+    where = "posting_id=?" if expected_status is None else "posting_id=? AND status=?"
+    params = (status, outcome, int(time.time()), reason[:1000] or None, posting_id)
+    if expected_status is not None:
+        params += (expected_status,)
+    changed = conn.execute(
         """UPDATE postings
            SET status=?, outcome=?, last_attempt_at=?,
                attempt_count=COALESCE(attempt_count, 0) + 1,
                last_error=?
-         WHERE posting_id=?""",
-        (status, outcome, int(time.time()), reason[:1000] or None, posting_id),
-    )
-    conn.commit()
+         WHERE """ + where,
+        params,
+    ).rowcount
+    if commit:
+        conn.commit()
+    return changed == 1
 
 
 def _isolated_adapter(payload: dict) -> dict:
@@ -150,6 +157,7 @@ def _isolated_adapter(payload: dict) -> dict:
             "ok": False,
             "submitted": False,
             "retryable": True,
+            "submission_uncertain": True,
             "reason": f"posting timeout after {POSTING_TIMEOUT_SECONDS}s",
         }
 
@@ -159,6 +167,7 @@ def _isolated_adapter(payload: dict) -> dict:
             "ok": False,
             "submitted": False,
             "retryable": True,
+            "submission_uncertain": True,
             "reason": f"worker exited {proc.returncode}: {stderr[-500:]}",
         }
     try:
@@ -169,6 +178,7 @@ def _isolated_adapter(payload: dict) -> dict:
             "ok": False,
             "submitted": False,
             "retryable": True,
+            "submission_uncertain": True,
             "reason": f"worker returned invalid JSON: {stderr[-500:]}",
         }
     return result
@@ -201,30 +211,46 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
         "WHERE p.status='ready' ORDER BY p.rowid DESC").fetchall()
     results = []
     done = 0
+    from drip import claim_posting
     for r in rows:
         if done >= limit or (dry_run and len(results) >= limit):
             break
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
         pdf = _runtime_path(r["resume_pdf"])
+        if not dry_run and not claim_posting(
+                conn, r["posting_id"], "submitting", from_status="ready"):
+            continue
         if _posting_dead(r["url"]):
             _mark_outcome(conn, r["posting_id"], "filtered_out", "stale",
-                          "liveness check marked posting stale", dry_run)
+                          "liveness check marked posting stale", dry_run,
+                          expected_status=None if dry_run else "submitting")
             results.append({"company": r["company"], "ats": "unknown", "outcome": "stale"})
             continue
 
-        res = _isolated_adapter({
-            "url": r["url"],
-            "resume_pdf": str(pdf),
-            "slug": slug,
-            "dry_run": dry_run,
-        })
+        try:
+            res = _isolated_adapter({
+                "url": r["url"],
+                "resume_pdf": str(pdf),
+                "slug": slug,
+                "dry_run": dry_run,
+            })
+        except Exception as exc:
+            res = {
+                "outcome": "retryable_failure",
+                "ok": False,
+                "submitted": False,
+                "submission_uncertain": True,
+                "reason": f"adapter launch failed: {type(exc).__name__}: {exc}",
+            }
         outcome = _outcome(res)
         # retryable (timeouts, network blips): stay 'ready' so the next hourly
         # sweep retries automatically, up to 3 attempts, then settle failed.
         # (Before this, retryable_failure settled 'failed' and was never retried;
         # Kastle and Scale both needed manual requeues on 2026-08-08.)
         attempts = (r["attempt_count"] or 0) if "attempt_count" in r.keys() else 0
-        if outcome == "retryable_failure" and attempts < 2:
+        if res.get("submission_uncertain"):
+            status_for_outcome = "manual"
+        elif outcome == "retryable_failure" and attempts < 2:
             status_for_outcome = "ready"
         else:
             status_for_outcome = {
@@ -234,8 +260,17 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
                 "failed": "failed",
             }.get(outcome, "failed")
         reason = str(res.get("reason", ""))
-        _mark_outcome(conn, r["posting_id"], status_for_outcome, outcome, reason, dry_run)
+        changed = _mark_outcome(
+            conn, r["posting_id"], status_for_outcome, outcome, reason, dry_run,
+            expected_status=None if dry_run else "submitting",
+            commit=not (outcome == "submitted" and not dry_run),
+        )
         if outcome == "submitted" and not dry_run:
+            if not changed:
+                conn.rollback()
+                results.append({"company": r["company"], "ats": res.get("detected_ats", "unknown"),
+                                "outcome": "manual", "reason": "submission claim lost; verify"})
+                continue
             ats = str(res.get("detected_ats", "unknown"))
             conn.execute(
                 "INSERT OR REPLACE INTO applications VALUES (?,?,?,?,?,?)",

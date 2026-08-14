@@ -18,11 +18,22 @@ class SyncQueueTests(unittest.TestCase):
                     "INSERT INTO postings VALUES (?,?,?,?,?,?,?,?)",
                     [
                         ("ready", "source", "Acme", "Role", "Remote", "https://acme.test/role", "ready", 2),
+                        ("tailoring", "source", "Tailor", "Role", "Remote", "https://tailor.test/role", "tailoring", 4),
+                        ("sprinting", "source", "Sprint", "Role", "Remote", "https://sprint.test/role", "sprinting", 5),
+                        ("submitting", "source", "Submit", "Role", "Remote", "https://submit.test/role", "submitting", 6),
                         ("filtered", "source", "Old", "Role", "Remote", "https://old.test/role", "filtered_out", 3),
                     ],
                 )
             rows = read_active_postings(path)
-            self.assertEqual([row["posting_id"] for row in rows], ["ready"])
+            self.assertEqual(
+                {row["posting_id"]: row["status"] for row in rows},
+                {
+                    "ready": "ready",
+                    "tailoring": "queued",
+                    "sprinting": "queued",
+                    "submitting": "ready",
+                },
+            )
 
 
 if __name__ == "__main__":
