@@ -200,13 +200,16 @@ class QaManualPolicyTest(unittest.TestCase):
             {
                 "id": "school",
                 "label": "School*",
-                "options": [],
+                "options": ["Aalborg University", "Aalto University", "Aarhus University"],
                 "value": "",
             },
             {
                 "id": "graduation",
                 "label": "What is your expected graduation month & year?*",
-                "options": ["May 2028", "June 2028", "December 2028"],
+                "options": [
+                    "Already graduated", "Jan - Aug 2026", "Sept - Dec 2026",
+                    "Jan - April 2027", "May - Aug 2027", "Aug 2027 or later",
+                ],
                 "value": "",
             },
         ]
@@ -218,9 +221,14 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertEqual(
             {
                 "school": "Brown University",
-                "graduation": "June 2028",
+                "graduation": "Aug 2027 or later",
             },
             {item["id_or_name"]: item["answer"] for item in rendered},
+        )
+        self.assertFalse(
+            qa.answer_requires_manual(
+                controls[1], "Aug 2027 or later", approved_answers=self.APPROVED,
+            )
         )
 
     def test_demographics_use_explicit_gender_and_decline_unknown_answers(self):

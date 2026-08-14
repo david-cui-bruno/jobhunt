@@ -377,6 +377,52 @@ def _first_option_after(month: str, year: str, options: list[str]) -> str | None
     return next((option for key, option in sorted(dated) if key >= target_key), None)
 
 
+def _graduation_menu_answer(month: str, year: str, options: list[str]) -> str | None:
+    """Map an approved graduation month to an exact or ranged menu option."""
+    combined = f"{month} {year}".strip()
+    if not month or not year:
+        return None
+    if not options:
+        return combined
+    direct = _best_option(combined, options)
+    if direct:
+        return direct
+
+    target = _date_parts(combined)
+    if not target:
+        return None
+    target_key = (target[2], target[0])
+    month_numbers = {
+        name[:3].lower(): index for index, name in enumerate(
+            ("January", "February", "March", "April", "May", "June", "July",
+             "August", "September", "October", "November", "December"),
+            start=1,
+        )
+    }
+
+    def month_number(value: str) -> int | None:
+        return month_numbers.get(value.strip().lower()[:3])
+
+    for option in options:
+        later = re.search(r"\b([A-Za-z]+)\s+(\d{4})\s+or\s+later\b", option, re.I)
+        if later:
+            start_month = month_number(later.group(1))
+            start_key = (int(later.group(2)), start_month or 1)
+            if target_key >= start_key:
+                return option
+        same_year = re.search(
+            r"\b([A-Za-z]+)\s*-\s*([A-Za-z]+)\s+(\d{4})\b", option, re.I,
+        )
+        if same_year:
+            start_month = month_number(same_year.group(1))
+            end_month = month_number(same_year.group(2))
+            option_year = int(same_year.group(3))
+            if (start_month and end_month and target[2] == option_year
+                    and start_month <= target[0] <= end_month):
+                return option
+    return None
+
+
 def _approved_high_school_answer(approved: dict, options: list[str]) -> str | None:
     """Render the approved school fact for either text or geographic pickers.
 
@@ -403,7 +449,10 @@ def _approved_college_answer(options: list[str]) -> str | None:
     school = str((PROFILE.get("education") or {}).get("school") or "").strip()
     if not school:
         return None
-    return (_best_option(school, options) if options else school)
+    # Option harvesting is capped because global school menus contain thousands
+    # of entries. If Brown is not in the initial slice, return the grounded
+    # school name so fill_answers can type-search the async menu.
+    return _best_option(school, options) or school
 
 
 def _is_current_school_control(control: dict) -> bool:
@@ -471,9 +520,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             if control.get("hasDay"):
                 answer = exact
             elif "month" in question and "year" in question and month and year:
-                # Combined Greenhouse menus contain values such as "June 2028".
-                # Giving only the year can leave an async React Select unresolved.
-                answer = f"{month} {year}"
+                answer = _graduation_menu_answer(month, year, options)
             elif "year" in question and "date" not in question:
                 answer = year
             elif "month" in question and "date" not in question:
@@ -670,6 +717,12 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         profile_education = PROFILE.get("education") or {}
         expected_month = education.get("expected_graduation_month") or profile_education.get("grad_month")
         expected_year = str(education.get("expected_graduation_year") or profile_education.get("grad_year") or "")
+        options = [str(option) for option in control.get("options") or []]
+        if "month" in question and "year" in question and options:
+            expected_option = _graduation_menu_answer(
+                str(expected_month or ""), expected_year, options,
+            )
+            return bool(expected_option and expected_option.lower() == answer_text.strip().lower())
         supplied = _date_parts(answer_text)
         if supplied:
             month, day, year = supplied
