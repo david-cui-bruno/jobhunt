@@ -132,7 +132,7 @@ class BacklogPriorityTests(unittest.TestCase):
 
     def test_tailoring_batch_is_bounded_but_material(self) -> None:
         self.assertEqual(drip.TAILOR_PER_RUN, 5)
-        self.assertEqual(drip.DAILY_CAP, 50)
+        self.assertEqual(drip.DAILY_CAP, 100)
 
     def test_live_pipeline_is_not_artificially_capped_at_three_per_hour(self) -> None:
         self.assertEqual(submit.SUBMISSIONS_PER_RUN, 8)

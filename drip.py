@@ -6,6 +6,7 @@ system can actually submit before spending model calls on unsupported forms.
 from __future__ import annotations
 
 import datetime
+import os
 import sqlite3
 import sys
 import time
@@ -17,8 +18,11 @@ sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT /
 
 DB = ROOT / "out" / "tracker.db"
 ET = ZoneInfo("America/New_York")
-DAILY_CAP = 50
-TAILOR_PER_RUN = 5
+DAILY_CAP = int(os.environ.get("JOBHUNT_DAILY_TAILOR_CAP", "100"))
+TAILOR_PER_RUN = int(os.environ.get("JOBHUNT_TAILOR_PER_RUN", "5"))
+
+if DAILY_CAP < 1 or TAILOR_PER_RUN < 1:
+    raise ValueError("jobhunt tailoring limits must be at least 1")
 
 LOC_PRIORITY = ["san francisco", "sf", "bay area", "palo alto", "mountain view", "menlo",
                 "new york", "nyc", "manhattan", "brooklyn", "remote"]
