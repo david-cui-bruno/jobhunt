@@ -80,11 +80,14 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
             })
         if re.search(r"\b(high school|secondary school)\b", question):
             selected_education["high_school"] = education.get("high_school")
+            selected_education["high_school_graduation_year"] = education.get(
+                "high_school_graduation_year"
+            )
         result["education"] = selected_education
     preferences = source.get("preferences") or {}
     selected_preferences = {}
     for key, pattern in {
-        "hybrid": r"\b(hybrid|onsite|in[- ]?office|days? (?:a|per) week|work schedule)\b",
+        "hybrid": r"\b(hybrid|on[- ]?site|in[- ]?office|days? (?:a|per) week|work schedule)\b",
         "relocation_assistance_required": r"\b(relocat(?:e|ion)|local to the area)\b",
         "travel": r"\btravel\b",
         "future_contact": r"\b(future contact|marketing|talent community)\b",
@@ -99,8 +102,15 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
     if re.search(r"\b(start|end|availability|available|internship dates|season)\b", question):
         result["availability"] = source.get("availability") or {}
     legal = source.get("legal") or {}
-    if re.search(r"\b(non[- ]?compete|conflict|clearance|public trust)\b", question):
+    if re.search(
+        r"\b(non[- ]?compete|conflict|clearance|public trust|notice period|"
+        r"driver'?s? licen[cs]e|restrictive (?:agreement|covenant))\b|"
+        r"\bagreement with (?:your )?(?:current|any other) employer\b",
+        question,
+    ):
         result["legal"] = legal
+    if re.search(r"\bpublications?\b", question):
+        result["professional"] = source.get("professional") or {}
     companies = {}
     for company, facts in (source.get("company_facts") or {}).items():
         if _company_matches(company, question, company_context):
@@ -274,14 +284,16 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|prior application|previous application)\b",
     r"\b(FINRA|SIE|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b",
     r"\b(member of your household|household member|family member|relative)\b.*\b(employed|worked|employee)\b",
-    r"\b(non[- ]?compete|conflict of interest|conflicts?|restrictive covenant|moonlighting|outside employment)\b",
+    r"\b(non[- ]?compete|notice period|conflict of interest|conflicts?|restrictive (?:agreement|covenant)|moonlighting|outside employment)\b|\bagreement with (?:your )?(?:current|any other) employer\b",
+    r"\bdriver'?s? licen[cs]e\b",
+    r"\bpublications?\b",
     r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b",
     r"\b(exact|specific)\b.*\b(schedule|hours|availability|travel)\b|\b(work schedule|travel schedule|travel percentage|% travel|days per week|hours per week|available hours)\b",
     r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b",
     r"\b(preferred pronouns?|pronouns?)\b",
     r"\b(gender|race|ethnicity|racial|hispanic|latino|transgender|sexual orientation|veteran status|are you a veteran)\b",
     r"\bhave you (?:ever )?used\b.*\bbefore\b",
-    r"\b(days? (?:a|per) week|in[- ]?office|onsite schedule|hybrid schedule|willing to (?:come|work|join).*(?:office|onsite))\b",
+    r"\b(days? (?:a|per) week|in[- ]?office|on[- ]?site|hybrid schedule|willing to (?:come|work|join).*(?:office|on[- ]?site))\b",
     r"\b(local to the area|relocation assistance)\b",
     r"\b(high school|secondary school)\b",
     r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b",
@@ -592,6 +604,12 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = f"{parsed[0]:02d}/{year}" if parsed else None
             elif month and year:
                 answer = f"{month} {year}"
+        elif re.search(
+            r"\b(?:what year|when)\b.*\bgraduat(?:e|ed)\b.*\bhigh school\b|"
+            r"\bhigh school\b.*\b(?:graduation|graduat(?:e|ed))\b.*\byear\b",
+            question,
+        ):
+            answer = education.get("high_school_graduation_year")
         elif (re.search(r"\b(high school|secondary school)\b", question)
               and not re.search(r"\bhigh school diploma\b", question)):
             answer = _approved_high_school_answer(approved, options)
@@ -729,8 +747,35 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             expected = _company_fact(control, "household_employment", approved)
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
-        elif re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|onsite|hybrid)\b", question):
-            expected = preferences.get("hybrid")
+        elif re.search(r"\bdriver'?s? licen[cs]e\b", question):
+            expected = (approved.get("legal") or {}).get("valid_drivers_license")
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(
+            r"\b(non[- ]?compete|restrictive (?:agreement|covenant)|conflict of interest|"
+            r"moonlighting|outside employment)\b|"
+            r"\bagreement with (?:your )?(?:current|any other) employer\b",
+            question,
+        ):
+            legal = approved.get("legal") or {}
+            expected = legal.get("non_compete_or_conflict")
+            notice = str(legal.get("notice_period") or "").strip()
+            if "notice period" in question and expected is False and notice:
+                answer = notice
+            elif isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(r"\bnotice period\b", question):
+            answer = (approved.get("legal") or {}).get("notice_period")
+        elif re.search(r"\bpublications?\b", question):
+            publications = (approved.get("professional") or {}).get("publications")
+            if publications is False or publications == []:
+                answer = _render_boolean(False, options) if options else "None"
+            elif isinstance(publications, list) and publications:
+                answer = "; ".join(str(item) for item in publications)
+        elif re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|on[- ]?site|hybrid)\b", question):
+            expected = _company_fact(control, "fully_onsite", approved)
+            if expected is _MISSING and not re.search(r"\bfully on[- ]?site\b", question):
+                expected = preferences.get("hybrid")
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
         elif re.search(r"\blocal to the area\b", question):
@@ -863,6 +908,15 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         if re.fullmatch(r"\s*\d{4}\s*", answer_text):
             return answer_text.strip() == expected_year
         return str(expected_month or "").lower() == answer_text.strip().lower()
+    if re.search(
+        r"\b(?:what year|when)\b.*\bgraduat(?:e|ed)\b.*\bhigh school\b|"
+        r"\bhigh school\b.*\b(?:graduation|graduat(?:e|ed))\b.*\byear\b",
+        question,
+    ):
+        expected = str((approved.get("education") or {}).get(
+            "high_school_graduation_year"
+        ) or "").strip()
+        return bool(expected and expected == answer_text.strip())
     if re.search(r"\bhigh school diploma\b", question):
         return _answer_boolean(answer_text) is True
     if re.search(r"\b(high school|secondary school)\b", question):
@@ -958,14 +1012,39 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return _company_answer_is_approved(control, "licenses_or_exams", approved, answer)
     if re.search(r"\b(member of your household|household member|family member|relative)\b", question):
         return _company_answer_is_approved(control, "household_employment", approved, answer)
-    if re.search(r"\b(non[- ]?compete|conflict of interest|conflicts?|restrictive covenant|moonlighting|outside employment)\b", question):
-        return legal.get("non_compete_or_conflict") is not None
+    if re.search(r"\bdriver'?s? licen[cs]e\b", question):
+        expected = legal.get("valid_drivers_license")
+        return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
+    if re.search(
+        r"\b(non[- ]?compete|restrictive (?:agreement|covenant)|conflict of interest|"
+        r"conflicts?|moonlighting|outside employment)\b|"
+        r"\bagreement with (?:your )?(?:current|any other) employer\b",
+        question,
+    ):
+        expected = legal.get("non_compete_or_conflict")
+        notice = str(legal.get("notice_period") or "").strip()
+        if "notice period" in question and expected is False and notice:
+            return notice.lower() == answer_text.strip().lower()
+        return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
+    if re.search(r"\bnotice period\b", question):
+        expected = str(legal.get("notice_period") or "").strip()
+        return bool(expected and expected.lower() == answer_text.strip().lower())
+    if re.search(r"\bpublications?\b", question):
+        publications = (approved.get("professional") or {}).get("publications")
+        if publications is False or publications == []:
+            return _answer_boolean(answer_text) is False
+        if isinstance(publications, list) and publications:
+            expected = "; ".join(str(item) for item in publications)
+            return expected.lower() == answer_text.strip().lower()
+        return False
     if re.search(r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b", question):
         return legal.get("security_clearance") is not None
     if re.search(r"\btravel\b", question):
         return preferences.get("travel") is not None
-    if re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|onsite|hybrid)\b", question):
-        expected = preferences.get("hybrid")
+    if re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|on[- ]?site|hybrid)\b", question):
+        expected = _company_fact(control, "fully_onsite", approved)
+        if expected is _MISSING and not re.search(r"\bfully on[- ]?site\b", question):
+            expected = preferences.get("hybrid")
         return expected is not None and _answer_boolean(answer_text) is expected
     if re.search(r"\blocal to the area\b", question):
         expected = _company_fact(control, "local_to_advertised_area_answer", approved)

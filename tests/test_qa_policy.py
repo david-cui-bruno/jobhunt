@@ -866,6 +866,165 @@ class QaManualPolicyTest(unittest.TestCase):
             )
         )
 
+    def test_newly_confirmed_defaults_render_and_reject_contradictions(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["education"].update({
+            "high_school": "Plano West Senior High School, Plano, Texas",
+            "high_school_graduation_year": "2024",
+        })
+        approved["legal"] = {
+            "non_compete_or_conflict": False,
+            "notice_period": "None",
+            "valid_drivers_license": True,
+        }
+        approved["professional"] = {"publications": []}
+        approved["company_facts"].update({
+            "Nextiva": {"prior_employment": False, "fully_onsite": True},
+            "Crowe": {"prior_employment": False},
+            "Akuna Capital": {
+                "prior_application": False,
+                "prior_interview_or_application": False,
+            },
+        })
+        controls = [
+            {
+                "id": "high-school-year",
+                "label": "What year did you graduate high school?",
+                "value": "",
+            },
+            {
+                "id": "driver",
+                "label": "Do you have a valid driver's license?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+            {
+                "id": "agreement",
+                "label": "Do you have any agreement with your current employer or any other employer that restricts your work?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+            {
+                "id": "notice",
+                "label": "Non-compete/Notice period comments",
+                "value": "",
+            },
+            {
+                "id": "publications",
+                "label": "Please provide a list of your publications, ranked.",
+                "value": "",
+            },
+            {
+                "id": "nextiva-employee",
+                "label": "Are you a current or former Nextiva employee?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+            {
+                "id": "nextiva-onsite",
+                "label": "This role is based at Nextiva's Scottsdale headquarters. Are you able to work fully on-site?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+            {
+                "id": "akuna-application",
+                "label": "Have you applied to this role at Akuna previously?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+        ]
+
+        rendered = qa.explicit_approved_answers(
+            controls,
+            company_context="Nextiva Akuna Capital",
+            approved_answers=approved,
+        )
+
+        self.assertEqual(
+            {
+                "high-school-year": "2024",
+                "driver": "Yes",
+                "agreement": "No",
+                "notice": "None",
+                "publications": "None",
+                "nextiva-employee": "No",
+                "nextiva-onsite": "Yes",
+                "akuna-application": "No",
+            },
+            {item["id_or_name"]: item["answer"] for item in rendered},
+        )
+
+        right_answers = [
+            {"id_or_name": item["id"], "answer": expected}
+            for item, expected in zip(
+                controls,
+                ["2024", "Yes", "No", "None", "None", "No", "Yes", "No"],
+            )
+        ]
+        allowed, blocked = qa.filter_manual_answers(
+            [dict(item, company_context="Nextiva Akuna Capital") for item in controls],
+            right_answers,
+            approved_answers=approved,
+        )
+        self.assertEqual({item["id"] for item in controls}, {
+            item["id_or_name"] for item in allowed
+        })
+        self.assertEqual([], blocked)
+
+        wrong_controls = [controls[index] for index in (1, 2, 4, 6, 7)]
+        wrong_answers = [
+            {"id_or_name": item["id"], "answer": answer}
+            for item, answer in zip(wrong_controls, ["No", "Yes", "A paper", "No", "Yes"])
+        ]
+        allowed, blocked = qa.filter_manual_answers(
+            [dict(item, company_context="Nextiva Akuna Capital") for item in wrong_controls],
+            wrong_answers,
+            approved_answers=approved,
+        )
+        self.assertEqual([], allowed)
+        self.assertEqual(
+            {item["id"] for item in wrong_controls},
+            {item["id_or_name"] for item in blocked},
+        )
+
+        unrelated_onsite = {
+            "id": "other-onsite",
+            "label": "Are you able to work fully on-site?",
+            "options": ["Yes", "No"],
+            "value": "",
+        }
+        self.assertEqual([], qa.explicit_approved_answers(
+            [unrelated_onsite],
+            company_context="Other Company",
+            approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            unrelated_onsite,
+            "Yes",
+            approved_answers=approved,
+        ))
+
+    def test_new_confirmed_sections_are_only_exposed_to_relevant_questions(self):
+        approved = {
+            "version": 1,
+            "legal": {"valid_drivers_license": True},
+            "professional": {"publications": []},
+        }
+        driver = qa.relevant_application_answers(
+            [{"label": "Do you have a valid driver's license?"}], approved=approved
+        )
+        publications = qa.relevant_application_answers(
+            [{"label": "Please list your publications"}], approved=approved
+        )
+        unrelated = qa.relevant_application_answers(
+            [{"label": "Why are you interested in this role?"}], approved=approved
+        )
+        self.assertEqual(approved["legal"], driver["legal"])
+        self.assertNotIn("professional", driver)
+        self.assertEqual(approved["professional"], publications["professional"])
+        self.assertNotIn("legal", publications)
+        self.assertEqual({"version": 1}, unrelated)
+
     def test_get_answers_logs_allowed_and_blocked_with_context_without_api(self):
         controls = [
             {"id": "q1", "name": "", "label": "Why us?", "value": ""},

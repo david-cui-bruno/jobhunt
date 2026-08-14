@@ -13,6 +13,7 @@ identity:
     history: null
 education:
   high_school: null
+  high_school_graduation_year: null
   expected_graduation_month: null
   expected_graduation_year: null
   # An explicitly approved estimate is allowed when a form requires a day.
@@ -44,7 +45,12 @@ current_offers:
     deadline: null
 legal:
   non_compete_or_conflict: null
+  notice_period: null
+  valid_drivers_license: null
   security_clearance: null
+professional:
+  # Use false or [] only after the user confirms there are no publications.
+  publications: null
 # Exact user-authored answers for recurring free-text application prompts. Every
 # normalized phrase in match_all must appear in the form question before the
 # answer is eligible. Keep the real populated values in the encrypted answer bank.
@@ -67,3 +73,5 @@ company_facts:
     securities_exam_planned: null
     licenses_or_exams: null
     household_employment: null
+    # Use only for a company/location whose fully-onsite requirement was approved.
+    fully_onsite: null
