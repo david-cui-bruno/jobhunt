@@ -45,6 +45,15 @@ current_offers:
 legal:
   non_compete_or_conflict: null
   security_clearance: null
+# Exact user-authored answers for recurring free-text application prompts. Every
+# normalized phrase in match_all must appear in the form question before the
+# answer is eligible. Keep the real populated values in the encrypted answer bank.
+long_form_answers:
+  - key: example_accomplishment
+    match_all:
+      - "most impressive thing"
+      - "built or achieved"
+    answer: null
 company_facts:
   Example Company:
     used_product: null

@@ -34,6 +34,38 @@ class QaManualPolicyTest(unittest.TestCase):
         "current_offers": [
             {"company": "Soren", "deadline_month": "September 2026", "deadline": None}
         ],
+        "long_form_answers": [
+            {
+                "key": "non_computer_system_hack",
+                "match_all": ["most successfully hacked", "non-computer system"],
+                "answer": "I organized a campus event by recruiting aligned partners and using an existing event process.",
+            },
+            {
+                "key": "most_impressive_achievement",
+                "match_all": ["most impressive thing", "built or achieved"],
+                "answer": "I reached USACO Platinum after starting competitive programming in high school.",
+            },
+            {
+                "key": "things_built",
+                "match_all": ["built before", "include urls"],
+                "answer": "I built Bruno's Dictionary and several workflow tools.",
+            },
+            {
+                "key": "competitions_awards_papers",
+                "match_all": ["competitions", "awards", "papers"],
+                "answer": "USACO Platinum, AIME 4x, TartanHacks Grand Prize.",
+            },
+            {
+                "key": "test_scores",
+                "match_all": ["relevant or impressive test scores"],
+                "answer": "1570 SAT and 1520 PSAT.",
+            },
+            {
+                "key": "entrepreneurship_programs_clubs",
+                "match_all": ["entrepreneurship programs", "clubs", "hacker houses"],
+                "answer": "Hack@Brown, Brown-RISD Game Developers, Full Stack@Brown, Brown Product Management.",
+            },
+        ],
         "company_facts": {
             "Sentry": {"used_product": True},
             "LPL Financial": {
@@ -320,6 +352,79 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertEqual(
             {"deadline", "comp"},
             {answer["id_or_name"] for answer in blocked},
+        )
+
+    def test_user_authored_long_form_answers_render_exactly_without_a_model(self):
+        controls = [
+            {
+                "id": "hack",
+                "label": "Tell us about a time you most successfully hacked a non-computer system to your advantage.",
+                "value": "",
+            },
+            {
+                "id": "achievement",
+                "label": "Tell us in one or two sentences about the most impressive thing other than this startup that you have built or achieved.",
+                "value": "",
+            },
+            {
+                "id": "built",
+                "label": "Tell us about things you've built before. Include URLs if possible.",
+                "value": "",
+            },
+            {
+                "id": "awards",
+                "label": "List any competitions/awards you have won, or papers you've published.",
+                "value": "",
+            },
+            {
+                "id": "scores",
+                "label": "List any relevant or impressive test scores.",
+                "value": "",
+            },
+            {
+                "id": "programs",
+                "label": "List any entrepreneurship programs, clubs, or hacker houses you have participated in.",
+                "value": "",
+            },
+            {
+                "id": "similar-but-not-approved",
+                "label": "Tell us about a computer system you successfully hacked.",
+                "value": "",
+            },
+        ]
+
+        rendered = qa.explicit_approved_answers(
+            controls,
+            approved_answers=self.APPROVED,
+        )
+
+        self.assertEqual(
+            {
+                "hack": "I organized a campus event by recruiting aligned partners and using an existing event process.",
+                "achievement": "I reached USACO Platinum after starting competitive programming in high school.",
+                "built": "I built Bruno's Dictionary and several workflow tools.",
+                "awards": "USACO Platinum, AIME 4x, TartanHacks Grand Prize.",
+                "scores": "1570 SAT and 1520 PSAT.",
+                "programs": "Hack@Brown, Brown-RISD Game Developers, Full Stack@Brown, Brown Product Management.",
+            },
+            {answer["id_or_name"]: answer["answer"] for answer in rendered},
+        )
+
+    def test_only_matching_long_form_answers_enter_the_model_context(self):
+        controls = [{
+            "id": "hack",
+            "label": "Tell us about a time you most successfully hacked a non-computer system.",
+            "value": "",
+        }]
+
+        relevant = qa.relevant_application_answers(
+            controls,
+            approved=self.APPROVED,
+        )
+
+        self.assertEqual(
+            ["non_computer_system_hack"],
+            [entry["key"] for entry in relevant["long_form_answers"]],
         )
 
     def test_month_only_offer_deadline_is_allowed_but_day_is_not_invented(self):

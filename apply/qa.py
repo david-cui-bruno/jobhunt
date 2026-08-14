@@ -107,6 +107,16 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
             companies[company] = facts
     if companies:
         result["company_facts"] = companies
+    long_form_answers = []
+    for entry in source.get("long_form_answers") or []:
+        if not isinstance(entry, dict):
+            continue
+        if any(_approved_long_form_answer(_control_question_text(control), {
+                "long_form_answers": [entry],
+        }) is not None for control in controls):
+            long_form_answers.append(entry)
+    if long_form_answers:
+        result["long_form_answers"] = long_form_answers
     return result
 
 
@@ -330,6 +340,30 @@ def _company_fact(control: dict, field: str, answers: dict) -> object:
     return _MISSING
 
 
+def _approved_long_form_answer(question: str, approved: dict) -> str | None:
+    """Return a user-authored answer only when every configured phrase matches.
+
+    Long-form application answers are private answer-bank data, not model prose.
+    Matching all normalized phrases keeps similar but materially different prompts
+    manual instead of reusing a story in the wrong context.
+    """
+    normalized = re.sub(r"\s+", " ", str(question or "").strip().lower())
+    if not normalized:
+        return None
+    for entry in approved.get("long_form_answers") or []:
+        if not isinstance(entry, dict):
+            continue
+        phrases = [
+            re.sub(r"\s+", " ", str(phrase).strip().lower())
+            for phrase in entry.get("match_all") or []
+            if str(phrase).strip()
+        ]
+        answer = str(entry.get("answer") or "").strip()
+        if phrases and answer and all(phrase in normalized for phrase in phrases):
+            return answer
+    return None
+
+
 def _render_boolean(expected: bool, options: list[str]) -> str | None:
     desired = "Yes" if expected else "No"
     if not options:
@@ -487,8 +521,10 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
         control = dict(original, company_context=company_context)
         question = _control_question_text(control).lower()
         options = [str(option) for option in control.get("options") or []]
-        answer: object | None = None
-        if re.search(r"\b(18 or older|at least (?:age )?18)\b", question):
+        answer: object | None = _approved_long_form_answer(question, approved)
+        if answer is not None:
+            pass
+        elif re.search(r"\b(18 or older|at least (?:age )?18)\b", question):
             birth = _date_parts(identity.get("date_of_birth"))
             if birth:
                 today = datetime.date.today()
@@ -687,6 +723,9 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     legal = approved.get("legal") or {}
     offers = approved.get("current_offers") or []
     answer_text = str(answer or "")
+    approved_long_form = _approved_long_form_answer(question, approved)
+    if approved_long_form is not None:
+        return approved_long_form == answer_text.strip()
     if re.search(r"\b(18 or older|at least (?:age )?18)\b", question):
         birth = _date_parts(identity.get("date_of_birth"))
         actual = _answer_boolean(answer_text)
