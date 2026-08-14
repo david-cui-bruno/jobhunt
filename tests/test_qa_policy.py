@@ -175,6 +175,7 @@ class QaManualPolicyTest(unittest.TestCase):
         controls = [
             {"id": "gender", "label": "What is your gender?", "options": ["Woman", "Man", "Non-binary", "I don't wish to answer"]},
             {"id": "race", "label": "What is your race/ethnicity?", "options": ["East Asian", "White", "I don't wish to answer"]},
+            {"id": "hispanic", "label": "Are you Hispanic/Latino?", "options": ["Yes", "No", "I don't wish to answer"]},
             {"id": "veteran", "label": "Are you a veteran?", "options": ["Yes", "No", "I don't wish to answer"]},
         ]
         rendered = qa.explicit_approved_answers(
@@ -184,6 +185,7 @@ class QaManualPolicyTest(unittest.TestCase):
             {
                 "gender": "Man",
                 "race": "I don't wish to answer",
+                "hispanic": "I don't wish to answer",
                 "veteran": "I don't wish to answer",
             },
             {item["id_or_name"]: item["answer"] for item in rendered},
@@ -196,6 +198,11 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertTrue(
             qa.answer_requires_manual(
                 controls[2], "No", approved_answers=self.APPROVED,
+            )
+        )
+        self.assertTrue(
+            qa.answer_requires_manual(
+                controls[3], "No", approved_answers=self.APPROVED,
             )
         )
 
