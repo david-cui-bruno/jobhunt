@@ -83,6 +83,26 @@ class WorkdayAnswerTests(unittest.TestCase):
         overlay.click.assert_called_once_with(timeout=5000)
         button.click.assert_not_called()
 
+    def test_visible_workday_auth_error_is_reported_and_recoverable(self) -> None:
+        page = mock.Mock()
+        frame = mock.Mock()
+        lookup = mock.Mock()
+        error = mock.Mock()
+        page.frames = [frame]
+        frame.locator.return_value = lookup
+        lookup.last = error
+        error.count.return_value = 1
+        error.is_visible.return_value = True
+        error.inner_text.return_value = (
+            "You may have entered the wrong email address or password "
+            "or your account might be locked."
+        )
+
+        self.assertIn("wrong email address", workday._workday_auth_error(page))
+        source = inspect.getsource(workday.ensure_workday_account_access)
+        self.assertIn("createAccountLink", source)
+        self.assertIn("_workday_auth_gate_visible", source)
+
     def test_prompt_includes_grounding_without_missing_stories_placeholder(self) -> None:
         response = io.StringIO(json.dumps({"content": [{"type": "text", "text": "[]"}]}))
         fields = [

@@ -684,6 +684,27 @@ def _verification_required(page) -> bool:
     return False
 
 
+def _workday_auth_error(page) -> str:
+    """Return the visible Workday authentication error, if any."""
+    for frame in reversed(page.frames):
+        try:
+            error = frame.locator("[data-automation-id='errorMessage']").last
+            if error.count() and error.is_visible():
+                return error.inner_text().strip()
+        except Exception:
+            continue
+    return ""
+
+
+def _workday_auth_gate_visible(page) -> bool:
+    selector = (
+        "[data-automation-id='SignInWithEmailButton'], "
+        "[data-automation-id='createAccountSubmitButton'], "
+        "[data-automation-id='signInSubmitButton']"
+    )
+    return _visible_locator_in_frames(page, selector) is not None
+
+
 def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tuple[bool, str]:
     """Sign in or create and activate a Workday account, then return to Apply."""
     record = _account_record(company_key)
@@ -693,7 +714,25 @@ def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tup
     maybe_sign_in(page, company_key)
     page.wait_for_timeout(1200)
 
+    # Earlier releases persisted credentials before Workday's click-filter
+    # actually created the remote account. If that stale record cannot sign in,
+    # create the missing account with the same saved credentials, then continue
+    # through the normal tenant-verified activation flow.
+    error = _workday_auth_error(page).lower()
+    if "wrong email address or password" in error or "account might be locked" in error:
+        create = _visible_locator_in_frames(
+            page, "[data-automation-id='createAccountLink']"
+        )
+        if create is not None:
+            create.click(timeout=5000, force=True)
+            page.wait_for_timeout(700)
+            maybe_create_account(page, company_key)
+            page.wait_for_timeout(1200)
+
     if not _verification_required(page):
+        if _workday_auth_gate_visible(page):
+            detail = _workday_auth_error(page)
+            return False, detail or "workday account sign-in did not complete"
         return True, ""
 
     record = _account_record(company_key)
@@ -712,6 +751,9 @@ def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tup
     page.wait_for_timeout(2000)
     if _verification_required(page):
         return False, "workday account remains unverified after activation"
+    if _workday_auth_gate_visible(page):
+        detail = _workday_auth_error(page)
+        return False, detail or "workday account sign-in did not complete after activation"
     return True, ""
 
 
