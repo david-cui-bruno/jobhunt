@@ -398,6 +398,27 @@ def _approved_high_school_answer(approved: dict, options: list[str]) -> str | No
     return None
 
 
+def _approved_college_answer(options: list[str]) -> str | None:
+    """Render the profile's current college without asking the answer model."""
+    school = str((PROFILE.get("education") or {}).get("school") or "").strip()
+    if not school:
+        return None
+    return (_best_option(school, options) if options else school)
+
+
+def _is_current_school_control(control: dict) -> bool:
+    """Identify direct current-college fields without matching enrollment questions."""
+    exact_labels = {
+        "school", "school name", "college", "college name",
+        "university", "university name", "institution", "institution name",
+    }
+    for key in ("label", "placeholder", "id", "name"):
+        value = re.sub(r"[\s*?:]+$", "", str(control.get(key) or "").strip().lower())
+        if value in exact_labels:
+            return True
+    return False
+
+
 def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name",
                               company_context: str = "",
                               approved_answers: dict | None = None) -> list[dict]:
@@ -449,6 +470,10 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             exact = education.get("exact_graduation_date")
             if control.get("hasDay"):
                 answer = exact
+            elif "month" in question and "year" in question and month and year:
+                # Combined Greenhouse menus contain values such as "June 2028".
+                # Giving only the year can leave an async React Select unresolved.
+                answer = f"{month} {year}"
             elif "year" in question and "date" not in question:
                 answer = year
             elif "month" in question and "date" not in question:
@@ -460,6 +485,8 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = f"{month} {year}"
         elif re.search(r"\b(high school|secondary school)\b", question):
             answer = _approved_high_school_answer(approved, options)
+        elif _is_current_school_control(control):
+            answer = _approved_college_answer(options)
         elif re.search(r"\bwhen did you first hear about\b", question):
             # The tracked discovery happened while David is enrolled at Brown.
             answer = _first_matching_option(["University Program"], options)

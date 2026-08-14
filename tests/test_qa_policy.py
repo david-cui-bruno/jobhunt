@@ -195,6 +195,34 @@ class QaManualPolicyTest(unittest.TestCase):
             )
         )
 
+    def test_greenhouse_school_and_combined_grad_menu_use_known_profile_facts(self):
+        controls = [
+            {
+                "id": "school",
+                "label": "School*",
+                "options": [],
+                "value": "",
+            },
+            {
+                "id": "graduation",
+                "label": "What is your expected graduation month & year?*",
+                "options": ["May 2028", "June 2028", "December 2028"],
+                "value": "",
+            },
+        ]
+
+        rendered = qa.explicit_approved_answers(
+            controls, approved_answers=self.APPROVED,
+        )
+
+        self.assertEqual(
+            {
+                "school": "Brown University",
+                "graduation": "June 2028",
+            },
+            {item["id_or_name"]: item["answer"] for item in rendered},
+        )
+
     def test_demographics_use_explicit_gender_and_decline_unknown_answers(self):
         controls = [
             {"id": "gender", "label": "What is your gender?", "options": ["Woman", "Man", "Non-binary", "I don't wish to answer"]},
