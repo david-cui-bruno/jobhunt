@@ -1025,6 +1025,112 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertNotIn("legal", publications)
         self.assertEqual({"version": 1}, unrelated)
 
+    def test_reviewed_wording_keeps_confirmed_facts_and_polarity_exact(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["education"]["high_school_graduation_year"] = "2024"
+        approved["legal"] = {
+            "non_compete_or_conflict": False,
+            "notice_period": "None",
+            "valid_drivers_license": True,
+        }
+        approved["company_facts"]["Nextiva"] = {
+            "fully_onsite": True,
+        }
+        controls = [
+            {
+                "id": "high-school-year",
+                "label": "What is your high school graduation year?",
+                "value": "",
+            },
+            {
+                "id": "notice-boolean",
+                "label": "Do you have a non-compete or notice period with your current employer?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+            {
+                "id": "hybrid-required",
+                "label": "Do you require a hybrid work schedule?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+            {
+                "id": "hybrid-willing",
+                "label": "Are you willing to work a hybrid schedule?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+            {
+                "id": "curly-driver",
+                "label": "Do you have a valid driver’s license?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+        ]
+        expected = {
+            "high-school-year": "2024",
+            "notice-boolean": "No",
+            "hybrid-required": "No",
+            "hybrid-willing": "Yes",
+            "curly-driver": "Yes",
+        }
+
+        rendered = qa.explicit_approved_answers(
+            controls,
+            company_context="Nextiva",
+            approved_answers=approved,
+        )
+        self.assertEqual(expected, {
+            item["id_or_name"]: item["answer"] for item in rendered
+        })
+
+        policy_controls = [dict(item, company_context="Nextiva") for item in controls]
+        allowed, blocked = qa.filter_manual_answers(
+            policy_controls,
+            [{"id_or_name": key, "answer": value} for key, value in expected.items()],
+            approved_answers=approved,
+        )
+        self.assertEqual(set(expected), {item["id_or_name"] for item in allowed})
+        self.assertEqual([], blocked)
+
+        wrong = {
+            "high-school-year": "2028",
+            "notice-boolean": "Yes",
+            "hybrid-required": "Yes",
+            "hybrid-willing": "No",
+            "curly-driver": "No",
+        }
+        allowed, blocked = qa.filter_manual_answers(
+            policy_controls,
+            [{"id_or_name": key, "answer": value} for key, value in wrong.items()],
+            approved_answers=approved,
+        )
+        self.assertEqual([], allowed)
+        self.assertEqual(set(wrong), {item["id_or_name"] for item in blocked})
+
+    def test_behavioral_conflict_does_not_expose_legal_facts_or_get_blocked(self):
+        approved = {
+            "version": 1,
+            "legal": {
+                "non_compete_or_conflict": False,
+                "valid_drivers_license": True,
+            },
+        }
+        control = {
+            "id": "story",
+            "label": "Describe a conflict you resolved with a teammate.",
+            "value": "",
+        }
+        self.assertEqual(
+            {"version": 1},
+            qa.relevant_application_answers([control], approved=approved),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            control,
+            "I resolved the disagreement by aligning on shared evidence.",
+            approved_answers=approved,
+        ))
+
     def test_get_answers_logs_allowed_and_blocked_with_context_without_api(self):
         controls = [
             {"id": "q1", "name": "", "label": "Why us?", "value": ""},
