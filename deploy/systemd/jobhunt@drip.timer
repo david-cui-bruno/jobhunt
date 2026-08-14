@@ -1,10 +1,10 @@
 [Unit]
-Description=Run jobhunt drip hourly
+Description=Run jobhunt discovery and tailoring queue
 
 [Timer]
-OnActiveSec=5min
-OnUnitActiveSec=1h
-AccuracySec=1min
+OnActiveSec=2min
+OnUnitActiveSec=20min
+AccuracySec=30s
 RandomizedDelaySec=30s
 Persistent=true
 Unit=jobhunt@drip.service

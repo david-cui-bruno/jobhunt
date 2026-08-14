@@ -1,7 +1,7 @@
 """Submitter: takes 'ready' postings and submits via the matching ATS adapter.
 
-Pacing: max 3 submissions/hour, business hours ET, human-ish jitter between.
-Unknown ATS or adapter failure -> posting marked 'manual', summarized in nightly email.
+Pacing is bounded and configurable, but optimized for speed-to-apply. Unknown ATS
+or adapter failure -> posting marked 'manual', summarized in the nightly email.
 """
 from __future__ import annotations
 
@@ -22,9 +22,16 @@ sys.path[:0] = [str(ROOT / "apply"), str(ROOT / "notify")]
 
 DB = ROOT / "out" / "tracker.db"
 ET = ZoneInfo("America/New_York")
-HOURLY_CAP = 3
+SUBMISSIONS_PER_RUN = int(os.environ.get("JOBHUNT_SUBMISSIONS_PER_RUN", "8"))
+PACING_MIN_SECONDS = float(os.environ.get("JOBHUNT_PACING_MIN_SECONDS", "15"))
+PACING_MAX_SECONDS = float(os.environ.get("JOBHUNT_PACING_MAX_SECONDS", "45"))
 POSTING_TIMEOUT_SECONDS = int(os.environ.get("JOBHUNT_POSTING_TIMEOUT_SECONDS", "300"))
 PLAYWRIGHT_TIMEOUT_MS = int(os.environ.get("JOBHUNT_PLAYWRIGHT_TIMEOUT_MS", "30000"))
+
+if SUBMISSIONS_PER_RUN < 1:
+    raise ValueError("JOBHUNT_SUBMISSIONS_PER_RUN must be at least 1")
+if PACING_MIN_SECONDS < 0 or PACING_MAX_SECONDS < PACING_MIN_SECONDS:
+    raise ValueError("invalid JOBHUNT pacing interval")
 
 
 GAME_APPS = ("league of legends", "leagueclient", "riot client", "valorant", "steam_osx",
@@ -196,7 +203,7 @@ def _outcome(result: dict) -> str:
     return "failed"
 
 
-def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
+def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> list[dict]:
     # 24/7 (David 2026-08-09): ATS forms don't care what hour they're submitted
     # and speed-to-apply wins. Human-ish pacing between submissions retained.
     if _user_is_gaming():
@@ -285,8 +292,10 @@ def submit_ready(limit: int = HOURLY_CAP, dry_run: bool = False) -> list[dict]:
                         "Reply with answers and I'll retry, or apply manually.")
         results.append({"company": r["company"], "ats": res.get("detected_ats", "unknown"),
                         "outcome": outcome, "reason": reason})
-        if not dry_run:
-            time.sleep(random.uniform(60, 240))  # human-ish gap
+        # Keep attempts sequential and lightly staggered without imposing the old
+        # one-to-four-minute artificial delay. Do not sleep after reaching the cap.
+        if not dry_run and done < limit:
+            time.sleep(random.uniform(PACING_MIN_SECONDS, PACING_MAX_SECONDS))
     conn.close()
     return results
 

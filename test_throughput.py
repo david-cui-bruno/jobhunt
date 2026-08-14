@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import drip
+import submit
 from watcher import filter as filt
 from watcher import watch
 
@@ -132,6 +133,16 @@ class BacklogPriorityTests(unittest.TestCase):
     def test_tailoring_batch_is_bounded_but_material(self) -> None:
         self.assertEqual(drip.TAILOR_PER_RUN, 5)
         self.assertEqual(drip.DAILY_CAP, 50)
+
+    def test_live_pipeline_is_not_artificially_capped_at_three_per_hour(self) -> None:
+        self.assertEqual(submit.SUBMISSIONS_PER_RUN, 8)
+        self.assertEqual((submit.PACING_MIN_SECONDS, submit.PACING_MAX_SECONDS), (15.0, 45.0))
+
+        systemd = Path(__file__).parent / "deploy" / "systemd"
+        submit_timer = (systemd / "jobhunt@submit.timer").read_text()
+        drip_timer = (systemd / "jobhunt@drip.timer").read_text()
+        self.assertIn("OnUnitActiveSec=30min", submit_timer)
+        self.assertIn("OnUnitActiveSec=20min", drip_timer)
 
     def test_only_one_worker_can_claim_a_queued_posting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
