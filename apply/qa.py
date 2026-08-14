@@ -190,8 +190,9 @@ EXTRACT_JS = """
     }
     let chosen = '';
     const shell = (el.parentElement || el).closest('.select-shell, .select__container, [class*=select-shell]');
-    const cv = shell?.querySelector('.select__single-value, [class*=singleValue], [class*=single-value]');
-    if (cv) chosen = cv.innerText.trim().slice(0, 100);
+    const cvs = shell?.querySelectorAll(
+      '.select__single-value, .select__multi-value, [class*=singleValue], [class*=single-value], [class*=multiValue], [class*=multi-value]');
+    if (cvs?.length) chosen = [...cvs].map(x => x.innerText.trim()).filter(Boolean).join(' | ').slice(0, 200);
     controls.push({
       id: isGroup ? '' : (el.id || ''), name: el.name || '', tag: el.tagName.toLowerCase(),
       type: isGroup ? 'group-' + el.type : (el.type || el.getAttribute('role') || ''),
@@ -268,6 +269,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(exact|specific)\b.*\b(schedule|hours|availability|travel)\b|\b(work schedule|travel schedule|travel percentage|% travel|days per week|hours per week|available hours)\b",
     r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b",
     r"\b(preferred pronouns?|pronouns?)\b",
+    r"\b(gender|race|ethnicity|racial|veteran status|are you a veteran)\b",
     r"\bhave you (?:ever )?used\b.*\bbefore\b",
     r"\b(days? (?:a|per) week|in[- ]?office|onsite schedule|hybrid schedule|willing to (?:come|work|join).*(?:office|onsite))\b",
     r"\b(local to the area|relocation assistance)\b",
@@ -348,6 +350,29 @@ def _first_matching_option(candidates: list[str], options: list[str]) -> str | N
     return None
 
 
+def _decline_demographic_option(options: list[str]) -> str | None:
+    return _first_matching_option([
+        "I don't wish to answer",
+        "I do not wish to answer",
+        "Decline to self-identify",
+        "Prefer not to say",
+    ], options)
+
+
+def _first_option_after(month: str, year: str, options: list[str]) -> str | None:
+    """Choose the earliest offered month no earlier than the approved date."""
+    target = _date_parts(f"{month} {year}")
+    if not target:
+        return None
+    target_key = (target[2], target[0])
+    dated = []
+    for option in options:
+        parsed = _date_parts(option)
+        if parsed:
+            dated.append(((parsed[2], parsed[0]), option))
+    return next((option for key, option in sorted(dated) if key >= target_key), None)
+
+
 def _approved_high_school_answer(approved: dict, options: list[str]) -> str | None:
     """Render the approved school fact for either text or geographic pickers.
 
@@ -404,6 +429,13 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             expected = disability.get("history") if "history" in question else disability.get("current")
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
+        elif re.search(r"\bearliest\b.*\bfull[- ]?time employment\b", question):
+            profile_education = PROFILE.get("education") or {}
+            month = str(education.get("expected_graduation_month")
+                        or profile_education.get("grad_month") or "")
+            year = str(education.get("expected_graduation_year")
+                       or profile_education.get("grad_year") or "")
+            answer = _first_option_after(month, year, options)
         elif re.search(r"\b(graduation|graduate)\s+(?:date|month|year)\b", question):
             profile_education = PROFILE.get("education") or {}
             month = str(education.get("expected_graduation_month")
@@ -424,6 +456,31 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = f"{month} {year}"
         elif re.search(r"\b(high school|secondary school)\b", question):
             answer = _approved_high_school_answer(approved, options)
+        elif re.search(r"\bwhen did you first hear about\b", question):
+            # The tracked discovery happened while David is enrolled at Brown.
+            answer = _first_matching_option(["University Program"], options)
+        elif re.search(r"\bhow did you hear about\b", question):
+            answer = _first_matching_option([
+                "Company website", "HRT Job Board", "University Job Board", "Job Board",
+            ], options)
+        elif re.search(r"\bgender\b", question):
+            gender = str(identity.get("gender") or "").strip().lower()
+            candidates = {
+                "male": ["Man", "Male"],
+                "man": ["Man", "Male"],
+                "female": ["Woman", "Female"],
+                "woman": ["Woman", "Female"],
+                "non-binary": ["Non-binary", "Nonbinary"],
+            }.get(gender, [])
+            answer = _first_matching_option(candidates, options)
+        elif re.search(r"\b(race|ethnicity|racial)\b", question):
+            race = identity.get("race_ethnicity")
+            answer = (_best_option(str(race), options) if race else
+                      _decline_demographic_option(options))
+        elif re.search(r"\b(veteran status|are you a veteran)\b", question):
+            veteran = identity.get("veteran")
+            answer = (_render_boolean(veteran, options) if isinstance(veteran, bool) else
+                      _decline_demographic_option(options))
         elif re.search(r"\bhighest level of education\b", question):
             # David is currently pursuing a BS. Prefer an in-progress/some-college
             # label over a completed Bachelor's claim when the form offers one.
@@ -559,6 +616,17 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     if re.search(r"\b(date of birth|dob|birth date|birthday|age)\b", question):
         expected = identity.get("date_of_birth")
         return bool(expected and _date_parts(expected) == _date_parts(answer_text))
+    if re.search(r"\bearliest\b.*\bfull[- ]?time employment\b", question):
+        education = approved.get("education") or {}
+        profile_education = PROFILE.get("education") or {}
+        expected = _first_option_after(
+            str(education.get("expected_graduation_month")
+                or profile_education.get("grad_month") or ""),
+            str(education.get("expected_graduation_year")
+                or profile_education.get("grad_year") or ""),
+            [str(option) for option in control.get("options") or []],
+        )
+        return bool(expected and expected.lower() == answer_text.strip().lower())
     if re.search(r"\b(graduation|graduate)\s+(?:date|month|year)\b", question):
         education = approved.get("education") or {}
         if control.get("hasDay") or re.search(r"\d{1,2}/\d{1,2}/\d{4}", answer_text):
@@ -584,6 +652,23 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     if re.search(r"\b(preferred pronouns?|pronouns?)\b", question):
         expected = str(identity.get("pronouns") or "").strip().lower()
         return bool(expected and expected in answer_text.strip().lower())
+    if re.search(r"\bgender\b", question):
+        expected = str(identity.get("gender") or "").strip().lower()
+        aliases = {
+            "male": {"male", "man"}, "man": {"male", "man"},
+            "female": {"female", "woman"}, "woman": {"female", "woman"},
+            "non-binary": {"non-binary", "nonbinary"},
+        }.get(expected, set())
+        return answer_text.strip().lower() in aliases
+    if re.search(r"\b(race|ethnicity|racial)\b", question):
+        expected = str(identity.get("race_ethnicity") or "").strip().lower()
+        return (bool(expected and expected == answer_text.strip().lower())
+                or _decline_demographic_option([answer_text]) is not None)
+    if re.search(r"\b(veteran status|are you a veteran)\b", question):
+        expected = identity.get("veteran")
+        return ((isinstance(expected, bool) and _answer_boolean(answer_text) is expected)
+                or (not isinstance(expected, bool)
+                    and _decline_demographic_option([answer_text]) is not None))
     if re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
         disability = identity.get("disability") or {}
         expected = disability.get("history") if "history" in question else disability.get("current")
@@ -955,17 +1040,22 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                     el.check()
                 ok = True
             elif _is_react_select(c):
-                VERIFY = """
+                SELECTED = """
                     el => {
-                        if ((el.value || '').trim()) return true;
                         const shell = (el.parentElement || el).closest('.select-shell, .select__container, [class*=select-shell]');
-                        const chosen = shell?.querySelector(
-                            '.select__single-value, .select__multi-value, [class*=singleValue], [class*=single-value], [class*=multi-value]');
-                        return !!(chosen && chosen.innerText.trim());
+                        const chosen = shell?.querySelectorAll(
+                            '.select__single-value, .select__multi-value, [class*=singleValue], [class*=single-value], [class*=multiValue], [class*=multi-value]');
+                        return [...(chosen || [])].map(x => x.innerText.trim()).filter(Boolean);
                     }
                 """
                 known = c.get("options") or []
                 target = _best_option(ans, known) if known else None
+                desired = target or ans
+                selected = el.evaluate(SELECTED)
+                if _best_option(desired, selected):
+                    ok = True
+                    (filled if ok else failed).append(c["label"] or a["id_or_name"])
+                    continue
                 for attempt in range(2):
                     el = page.locator(sel).first
                     el.scroll_into_view_if_needed()
@@ -1005,7 +1095,8 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                         else:
                             page.keyboard.press("Enter")
                     page.wait_for_timeout(400)
-                    ok = bool(el.evaluate(VERIFY))
+                    selected = el.evaluate(SELECTED)
+                    ok = bool(_best_option(desired, selected))
                     if ok:
                         break
                     page.keyboard.press("Escape")

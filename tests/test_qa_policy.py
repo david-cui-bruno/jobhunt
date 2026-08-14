@@ -18,6 +18,7 @@ class QaManualPolicyTest(unittest.TestCase):
         "identity": {
             "date_of_birth": "06/01/2006",
             "pronouns": "He/Him",
+            "gender": "male",
             "disability": {"current": False, "history": False},
         },
         "preferences": {
@@ -112,6 +113,78 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertIn("el.offsetParent === null", source)
         self.assertIn("el.getClientRects().length === 0", source)
         self.assertIn("el.closest('[hidden], [aria-hidden=\"true\"]')", source)
+
+    def test_hrt_timeline_and_discovery_answers_are_deterministic(self):
+        controls = [
+            {
+                "id": "eligible",
+                "label": "Based on your expected graduation date, when is the earliest you are eligible to begin full-time employment at HRT?",
+                "options": ["August 2027", "February 2028", "August 2028", "February 2029"],
+            },
+            {
+                "id": "first-heard",
+                "label": "When did you first hear about HRT?",
+                "options": ["High School", "University Program", "Graduate Program"],
+            },
+            {
+                "id": "source",
+                "label": "How did you hear about HRT?",
+                "options": ["Coding Competition", "University Job Board", "HRT Job Board", "Other"],
+            },
+        ]
+        rendered = qa.explicit_approved_answers(
+            controls, approved_answers=self.APPROVED,
+        )
+        self.assertEqual(
+            {
+                "eligible": "August 2028",
+                "first-heard": "University Program",
+                "source": "HRT Job Board",
+            },
+            {item["id_or_name"]: item["answer"] for item in rendered},
+        )
+        self.assertFalse(
+            qa.answer_requires_manual(
+                controls[0], "August 2028", approved_answers=self.APPROVED,
+            )
+        )
+        self.assertTrue(
+            qa.answer_requires_manual(
+                controls[0], "February 2028", approved_answers=self.APPROVED,
+            )
+        )
+
+    def test_demographics_use_explicit_gender_and_decline_unknown_answers(self):
+        controls = [
+            {"id": "gender", "label": "What is your gender?", "options": ["Woman", "Man", "Non-binary", "I don't wish to answer"]},
+            {"id": "race", "label": "What is your race/ethnicity?", "options": ["East Asian", "White", "I don't wish to answer"]},
+            {"id": "veteran", "label": "Are you a veteran?", "options": ["Yes", "No", "I don't wish to answer"]},
+        ]
+        rendered = qa.explicit_approved_answers(
+            controls, approved_answers=self.APPROVED,
+        )
+        self.assertEqual(
+            {
+                "gender": "Man",
+                "race": "I don't wish to answer",
+                "veteran": "I don't wish to answer",
+            },
+            {item["id_or_name"]: item["answer"] for item in rendered},
+        )
+        self.assertTrue(
+            qa.answer_requires_manual(
+                controls[1], "East Asian", approved_answers=self.APPROVED,
+            )
+        )
+        self.assertTrue(
+            qa.answer_requires_manual(
+                controls[2], "No", approved_answers=self.APPROVED,
+            )
+        )
+
+    def test_react_select_extraction_tracks_multi_value_chips(self):
+        self.assertIn(".select__multi-value", qa.EXTRACT_JS)
+        self.assertIn("[class*=multiValue]", qa.EXTRACT_JS)
 
     def test_disability_allowed_when_profile_has_explicit_text(self):
         control = {"id": "dis", "label": "Voluntary disability status", "value": ""}

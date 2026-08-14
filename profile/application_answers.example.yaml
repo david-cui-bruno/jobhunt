@@ -6,6 +6,8 @@ identity:
   date_of_birth: null
   pronouns: null
   gender: null
+  race_ethnicity: null
+  veteran: null
   disability:
     current: null
     history: null
