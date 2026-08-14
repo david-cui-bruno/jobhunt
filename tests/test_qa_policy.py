@@ -114,6 +114,92 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertEqual(["allowed"], [a["id_or_name"] for a in allowed])
         self.assertEqual({c["id"] for c in controls if c["id"] != "allowed"}, {a["id_or_name"] for a in blocked})
 
+    def test_interview_and_finra_facts_do_not_overreach(self):
+        approved = {
+            "company_facts": {
+                "Jane Street": {
+                    "prior_interview": False,
+                    "prior_application": True,
+                },
+                "Chicago Trading Company": {
+                    "finra_registered": False,
+                    "finra_licenses": True,
+                    "securities_exam_planned": True,
+                },
+            },
+        }
+        yes_no = ["Yes", "No"]
+        jane = [
+            {"id": "interview", "name": "", "label": "Have you interviewed with Jane Street before?", "options": yes_no, "value": ""},
+            {"id": "applied", "name": "", "label": "Have you applied to Jane Street before?", "options": yes_no, "value": ""},
+        ]
+        self.assertEqual(
+            [
+                {"id_or_name": "interview", "answer": "No"},
+                {"id_or_name": "applied", "answer": "Yes"},
+            ],
+            qa.explicit_approved_answers(
+                jane, company_context="Jane Street", approved_answers=approved,
+            ),
+        )
+        finra = [
+            {"id": "registered", "name": "", "label": "Are you currently registered with FINRA?", "options": yes_no, "value": ""},
+            {"id": "license", "name": "", "label": "Do you hold any FINRA licenses?", "options": yes_no, "value": ""},
+            {"id": "exam", "name": "", "label": "Do you plan to take the SIE exam?", "options": yes_no, "value": ""},
+        ]
+        self.assertEqual(
+            [
+                {"id_or_name": "registered", "answer": "No"},
+                {"id_or_name": "license", "answer": "Yes"},
+                {"id_or_name": "exam", "answer": "Yes"},
+            ],
+            qa.explicit_approved_answers(
+                finra,
+                company_context="Chicago Trading Company",
+                approved_answers=approved,
+            ),
+        )
+
+    def test_age_and_current_location_use_approved_profile_facts(self):
+        controls = [
+            {"id": "age", "name": "", "label": "Are you 18 years of age or older?", "options": ["Yes", "No"], "value": ""},
+            {"id": "location", "name": "", "label": "Current location", "value": ""},
+            {"id": "university-location", "name": "", "label": "Please select the location of your current university", "options": ["Providence, RI", "Boston, MA"], "value": ""},
+        ]
+        self.assertEqual(
+            [
+                {"id_or_name": "age", "answer": "Yes"},
+                {"id_or_name": "location", "answer": "Providence, RI"},
+                {"id_or_name": "university-location", "answer": "Providence, RI"},
+            ],
+            qa.explicit_approved_answers(controls, approved_answers=self.APPROVED),
+        )
+
+    def test_profile_answers_education_citizenship_tests_and_full_time_date(self):
+        controls = [
+            {"id": "discipline", "name": "", "label": "Undergrad Discipline(s)", "options": ["Computer Science", "Physics"], "value": ""},
+            {"id": "diploma", "name": "", "label": "High School Diploma", "options": ["Yes", "No"], "value": ""},
+            {"id": "test", "name": "", "label": "Select your Standardized Test score type", "options": ["ACT", "SAT"], "value": ""},
+            {"id": "citizenship", "name": "", "label": "Please select the country where you hold citizenship / permanent residence", "options": ["Canada", "United States of America"], "value": ""},
+            {"id": "full-time", "name": "", "label": "When will you be available to work as a full-time, permanent employee?", "options": ["August 2027", "August 2028"], "value": ""},
+            {"id": "offers", "name": "", "label": "Do you currently have any offers from other firms?", "options": ["Yes", "No"], "value": ""},
+        ]
+        self.assertEqual(
+            [
+                {"id_or_name": "discipline", "answer": "Computer Science"},
+                {"id_or_name": "diploma", "answer": "Yes"},
+                {"id_or_name": "test", "answer": "SAT"},
+                {"id_or_name": "citizenship", "answer": "United States of America"},
+                {"id_or_name": "full-time", "answer": "August 2028"},
+                {"id_or_name": "offers", "answer": "Yes"},
+            ],
+            qa.explicit_approved_answers(controls, approved_answers=self.APPROVED),
+        )
+
+    def test_greenhouse_upload_scan_accepts_a_populated_file_input(self):
+        source = Path(greenhouse.__file__).read_text()
+        self.assertIn("fileInput?.files?.length", source)
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",

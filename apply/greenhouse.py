@@ -176,6 +176,8 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
                     if (/security|verification/i.test(el.id || el.name || '')) return;
                     // file upload group: satisfied when a filename chip is rendered
                     if (el.classList?.contains('file-upload')) {
+                        const fileInput = el.matches('input[type=file]') ? el : el.querySelector('input[type=file]');
+                        if (fileInput?.files?.length) return;
                         if (el.innerText.includes('.pdf') || el.querySelector('[class*=chip], [class*=file-name]')) return;
                         bad.push('Resume upload');
                         return;

@@ -59,6 +59,11 @@ company_facts:
     used_product: null
     prior_employment: null
     referral: null
+    prior_interview: null
+    prior_application: null
     prior_interview_or_application: null
+    finra_registered: null
+    finra_licenses: null
+    securities_exam_planned: null
     licenses_or_exams: null
     household_employment: null
