@@ -149,9 +149,20 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
                 browser.close()
                 return result
 
-        required_empty = page.evaluate("""
+        required_empty = page.evaluate(r"""
             () => {
                 const bad = [];
+                // Some Greenhouse forms keep an "If you selected Other" input
+                // visible and aria-required even when its parent answer is not
+                // Other.  Treat that branch as inactive unless any actual form
+                // control currently has the exact Other option selected.
+                const otherSelected =
+                    [...document.querySelectorAll('select')].some(s =>
+                        [...s.selectedOptions].some(o => /^other$/i.test(o.textContent.trim()))) ||
+                    [...document.querySelectorAll('input:checked')].some(x =>
+                        /^other$/i.test((x.labels?.[0]?.innerText || x.value || '').trim())) ||
+                    [...document.querySelectorAll('.select__single-value, .select__multi-value, [class*=singleValue], [class*=multiValue]')]
+                        .some(x => /^other$/i.test(x.innerText.trim()));
                 document.querySelectorAll('[aria-required="true"], [required]').forEach(el => {
                     // Conditional Greenhouse controls remain required in the DOM
                     // even while their parent question is hidden.  They are not
@@ -188,6 +199,8 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
                         if ([...document.querySelectorAll('input')].filter(x => x.name === el.name).some(x => x.checked)) return;
                     }
                     const lbl = el.labels?.[0]?.innerText || el.getAttribute('aria-label') || el.name || el.id;
+                    if (/\bif (?:you )?(?:selected?|chose|choose)?\s*other\b|\bif other\b/i.test(lbl || '')
+                            && !otherSelected) return;
                     bad.push(lbl?.slice(0, 80) || 'unknown');
                 });
                 return [...new Set(bad)];

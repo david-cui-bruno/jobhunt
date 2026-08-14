@@ -131,6 +131,12 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertIn("el.getClientRects().length === 0", source)
         self.assertIn("el.closest('[hidden], [aria-hidden=\"true\"]')", source)
 
+    def test_greenhouse_required_scan_ignores_inactive_other_branch(self):
+        source = Path(greenhouse.__file__).read_text()
+        self.assertIn("const otherSelected", source)
+        self.assertIn("&& !otherSelected", source)
+        self.assertIn("selected?|chose|choose", source)
+
     def test_hrt_timeline_and_discovery_answers_are_deterministic(self):
         controls = [
             {
