@@ -104,7 +104,8 @@ class WorkdayAnswerTests(unittest.TestCase):
         self.assertIn("_workday_auth_gate_visible", source)
         self.assertIn(
             "maybe_create_account(page, company_key)\n"
-            "            maybe_sign_in(page, company_key)",
+            "        _open_email_auth(page, create_account=False)\n"
+            "        maybe_sign_in(page, company_key)",
             source,
         )
 

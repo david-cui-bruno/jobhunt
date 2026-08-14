@@ -719,16 +719,21 @@ def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tup
     # create the missing account with the same saved credentials, then continue
     # through the normal tenant-verified activation flow.
     error = _workday_auth_error(page).lower()
-    if "wrong email address or password" in error or "account might be locked" in error:
-        create = _visible_locator_in_frames(
-            page, "[data-automation-id='createAccountLink']"
-        )
-        if create is not None:
-            create.click(timeout=5000, force=True)
-            page.wait_for_timeout(700)
-            maybe_create_account(page, company_key)
-            maybe_sign_in(page, company_key)
-            page.wait_for_timeout(1200)
+    create = _visible_locator_in_frames(
+        page, "[data-automation-id='createAccountLink']"
+    )
+    stale_local_record = record is not None and create is not None
+    if stale_local_record and (
+        not error
+        or "wrong email address or password" in error
+        or "account might be locked" in error
+    ):
+        create.click(timeout=5000, force=True)
+        page.wait_for_timeout(700)
+        maybe_create_account(page, company_key)
+        _open_email_auth(page, create_account=False)
+        maybe_sign_in(page, company_key)
+        page.wait_for_timeout(1200)
 
     if not _verification_required(page):
         if _workday_auth_gate_visible(page):
