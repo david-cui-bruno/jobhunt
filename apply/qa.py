@@ -768,7 +768,12 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             elif isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
         elif re.search(r"\bnotice period\b", question):
-            answer = (approved.get("legal") or {}).get("notice_period")
+            notice = (approved.get("legal") or {}).get("notice_period")
+            notice_boolean = _answer_boolean(notice)
+            if options and notice_boolean is not None:
+                answer = _render_boolean(notice_boolean, options)
+            else:
+                answer = notice
         elif re.search(r"\bpublications?\b", question):
             publications = (approved.get("professional") or {}).get("publications")
             if publications is False or publications == []:
@@ -1046,6 +1051,9 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
     if re.search(r"\bnotice period\b", question):
         expected = str(legal.get("notice_period") or "").strip()
+        expected_boolean = _answer_boolean(expected)
+        if control.get("options") and expected_boolean is not None:
+            return _answer_boolean(answer_text) is expected_boolean
         return bool(expected and expected.lower() == answer_text.strip().lower())
     if re.search(r"\bpublications?\b", question):
         publications = (approved.get("professional") or {}).get("publications")

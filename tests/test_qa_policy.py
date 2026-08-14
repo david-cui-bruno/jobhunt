@@ -1049,6 +1049,12 @@ class QaManualPolicyTest(unittest.TestCase):
                 "value": "",
             },
             {
+                "id": "notice-only-boolean",
+                "label": "Do you have a notice period?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+            {
                 "id": "hybrid-required",
                 "label": "Do you require a hybrid work schedule?",
                 "options": ["Yes", "No"],
@@ -1070,6 +1076,7 @@ class QaManualPolicyTest(unittest.TestCase):
         expected = {
             "high-school-year": "2024",
             "notice-boolean": "No",
+            "notice-only-boolean": "No",
             "hybrid-required": "No",
             "hybrid-willing": "Yes",
             "curly-driver": "Yes",
@@ -1096,6 +1103,7 @@ class QaManualPolicyTest(unittest.TestCase):
         wrong = {
             "high-school-year": "2028",
             "notice-boolean": "Yes",
+            "notice-only-boolean": "Yes",
             "hybrid-required": "Yes",
             "hybrid-willing": "No",
             "curly-driver": "No",
