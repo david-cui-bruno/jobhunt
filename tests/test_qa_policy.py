@@ -109,7 +109,11 @@ class QaManualPolicyTest(unittest.TestCase):
         ]
         answers = [{"id_or_name": c["id"], "answer": "model answer"} for c in controls]
 
-        allowed, blocked = qa.filter_manual_answers(controls, answers, profile_text="")
+        # This test exercises the fail-closed baseline, independent of any
+        # operator-approved answer bank loaded by the production environment.
+        allowed, blocked = qa.filter_manual_answers(
+            controls, answers, profile_text="", approved_answers={},
+        )
 
         self.assertEqual(["allowed"], [a["id_or_name"] for a in allowed])
         self.assertEqual({c["id"] for c in controls if c["id"] != "allowed"}, {a["id_or_name"] for a in blocked})
@@ -441,8 +445,16 @@ class QaManualPolicyTest(unittest.TestCase):
 
     def test_disability_allowed_when_profile_has_explicit_text(self):
         control = {"id": "dis", "label": "Voluntary disability status", "value": ""}
-        self.assertTrue(qa.answer_requires_manual(control, "No", profile_text=""))
-        self.assertFalse(qa.answer_requires_manual(control, "No", profile_text="disability: no"))
+        self.assertTrue(
+            qa.answer_requires_manual(
+                control, "No", profile_text="", approved_answers={},
+            )
+        )
+        self.assertFalse(
+            qa.answer_requires_manual(
+                control, "No", profile_text="disability: no", approved_answers={},
+            )
+        )
 
     def test_user_approved_answers_are_allowed_but_missing_deadlines_stay_manual(self):
         controls = [
