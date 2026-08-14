@@ -46,6 +46,11 @@ class WorkdayAnswerTests(unittest.TestCase):
         self.assertIn("SignInWithEmailButton", source)
         self.assertIn("createAccountLink", source)
         self.assertIn("_visible_locator_in_frames", source)
+        self.assertLess(
+            source.index("SignInWithEmailButton"),
+            source.index("utilityButtonSignIn"),
+        )
+        self.assertNotIn("_account_scope", source)
         self.assertIn("page.frames", inspect.getsource(workday._visible_locator_in_frames))
 
     def test_localized_workday_click_filters_are_supported(self) -> None:

@@ -583,26 +583,31 @@ def _visible_locator_in_frames(page, selector: str):
 
 def _open_email_auth(page, create_account: bool) -> None:
     """Open Workday's email auth form from the newer social-login chooser."""
-    scope = _account_scope(page)
-    if scope.locator(
+    form_selector = (
         "[data-automation-id='createAccountSubmitButton'], "
         "[data-automation-id='signInSubmitButton']"
-    ).count():
+    )
+    if _visible_locator_in_frames(page, form_selector) is not None:
         return
 
-    utility = _visible_locator_in_frames(
-        page, "[data-automation-id='utilityButtonSignIn']"
-    )
-    if utility is not None:
-        utility.click(timeout=5000)
-        page.wait_for_timeout(700)
     email_choice = _visible_locator_in_frames(
         page, "[data-automation-id='SignInWithEmailButton']"
     )
+    if email_choice is None:
+        utility = _visible_locator_in_frames(
+            page, "[data-automation-id='utilityButtonSignIn']"
+        )
+        if utility is not None:
+            utility.click(timeout=5000)
+            page.wait_for_timeout(700)
+        email_choice = _visible_locator_in_frames(
+            page, "[data-automation-id='SignInWithEmailButton']"
+        )
     if email_choice is not None:
-        # Workday renders a duplicate hidden auth view on some tenants. The
-        # visible copy can still be covered by the sibling modal container.
-        email_choice.click(timeout=5000, force=True)
+        try:
+            email_choice.click(timeout=5000)
+        except Exception:
+            email_choice.click(timeout=5000, force=True)
         page.wait_for_timeout(700)
     if create_account:
         create = _visible_locator_in_frames(
