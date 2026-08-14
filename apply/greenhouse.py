@@ -179,7 +179,9 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
                         const fileInput = el.matches('input[type=file]') ? el : el.querySelector('input[type=file]');
                         if (fileInput?.files?.length) return;
                         if (el.innerText.includes('.pdf') || el.querySelector('[class*=chip], [class*=file-name]')) return;
-                        bad.push('Resume upload');
+                        const uploadLabel = el.querySelector('.upload-label, .label')?.innerText
+                            || el.getAttribute('aria-labelledby') || 'Required file upload';
+                        bad.push(uploadLabel.replace(/\s+/g, ' ').trim().slice(0, 80));
                         return;
                     }
                     // required FIELDSET = checkbox/radio group: ok if any inner box checked

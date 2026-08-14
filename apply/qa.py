@@ -66,11 +66,11 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
         selected_identity["disability"] = identity.get("disability")
     if selected_identity:
         result["identity"] = selected_identity
-    if re.search(r"\b(graduation|graduate)\s+(?:date|month|year)|\b(high school|secondary school)\b", question):
+    if re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)|\b(high school|secondary school)\b", question):
         education = source.get("education") or {}
         profile_education = PROFILE.get("education") or {}
         selected_education = {}
-        if re.search(r"\b(graduation|graduate)\s+(?:date|month|year)\b", question):
+        if re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b", question):
             selected_education.update({
                 "expected_graduation_month": education.get("expected_graduation_month")
                     or profile_education.get("grad_month"),
@@ -266,7 +266,7 @@ Return ONLY the JSON array."""
 
 BLOCKED_QUESTION_PATTERNS = [
     r"\b(date of birth|dob|birth date|birthday|age)\b",
-    r"\b(18 or older|at least 18|(?:graduation|graduate) (?:date|month|year))\b",
+    r"\b(18 or older|at least 18|(?:graduation|graduate) (?:date|month(?:\s+and\s+year)?|year))\b",
     r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary))\b",
     r"\b(offer deadline|exploding offer|outstanding offer|competing offer|pending offer|deadline to accept)\b",
     r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b",
@@ -435,6 +435,14 @@ def _graduation_menu_answer(month: str, year: str, options: list[str]) -> str | 
     if not target:
         return None
     target_key = (target[2], target[0])
+
+    # Some employers offer academic terms rather than months. June belongs to
+    # the spring graduation term, while July through December map to fall.
+    season = "Spring" if target[0] <= 6 else "Fall"
+    season_answer = _first_matching_option([f"{season} {target[2]}"], options)
+    if season_answer:
+        return season_answer
+
     month_numbers = {
         name[:3].lower(): index for index, name in enumerate(
             ("January", "February", "March", "April", "May", "June", "July",
@@ -530,7 +538,16 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
         control = dict(original, company_context=company_context)
         question = _control_question_text(control).lower()
         options = [str(option) for option in control.get("options") or []]
-        answer: object | None = _approved_long_form_answer(question, approved)
+        organization_entry = next((
+            entry for entry in approved.get("long_form_answers") or []
+            if isinstance(entry, dict) and entry.get("key") == "university_organizations"
+            and str(entry.get("answer") or "").strip()
+        ), None)
+        if (organization_entry and options
+                and re.search(r"\bare you currently a member of any university organizations\b", question)):
+            answer: object | None = _render_boolean(True, options)
+        else:
+            answer = _approved_long_form_answer(question, approved)
         if answer is not None:
             pass
         elif re.search(r"\b(?:18(?:\+|\s+years? of age)?(?:\s+or older)?|at least (?:age )?18)\b", question):
@@ -555,7 +572,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             year = str(education.get("expected_graduation_year")
                        or profile_education.get("grad_year") or "")
             answer = _first_option_after(month, year, options)
-        elif re.search(r"\b(graduation|graduate)\s+(?:date|month|year)\b", question):
+        elif re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b", question):
             profile_education = PROFILE.get("education") or {}
             month = str(education.get("expected_graduation_month")
                         or profile_education.get("grad_month") or "")
@@ -791,6 +808,14 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     legal = approved.get("legal") or {}
     offers = approved.get("current_offers") or []
     answer_text = str(answer or "")
+    organization_entry = next((
+        entry for entry in approved.get("long_form_answers") or []
+        if isinstance(entry, dict) and entry.get("key") == "university_organizations"
+        and str(entry.get("answer") or "").strip()
+    ), None)
+    if (organization_entry and control.get("options")
+            and re.search(r"\bare you currently a member of any university organizations\b", question)):
+        return _answer_boolean(answer_text) is True
     approved_long_form = _approved_long_form_answer(question, approved)
     if approved_long_form is not None:
         return approved_long_form == answer_text.strip()
@@ -816,7 +841,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             [str(option) for option in control.get("options") or []],
         )
         return bool(expected and expected.lower() == answer_text.strip().lower())
-    if re.search(r"\b(graduation|graduate)\s+(?:date|month|year)\b", question):
+    if re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b", question):
         education = approved.get("education") or {}
         if control.get("hasDay") or re.search(r"\d{1,2}/\d{1,2}/\d{4}", answer_text):
             exact = education.get("exact_graduation_date")

@@ -199,6 +199,43 @@ class QaManualPolicyTest(unittest.TestCase):
     def test_greenhouse_upload_scan_accepts_a_populated_file_input(self):
         source = Path(greenhouse.__file__).read_text()
         self.assertIn("fileInput?.files?.length", source)
+        self.assertIn("uploadLabel.replace", source)
+
+    def test_semester_graduation_and_organization_membership_use_approved_facts(self):
+        approved = {
+            **self.APPROVED,
+            "long_form_answers": [{
+                "key": "university_organizations",
+                "match_all": ["currently a member", "university organizations"],
+                "answer": "Hack@Brown, Brown-RISD Game Developers, Full Stack@Brown, and Brown Product Management.",
+            }],
+        }
+        controls = [
+            {
+                "id": "graduation",
+                "label": "Please select your expected graduation month and year for your current studies.",
+                "options": ["Fall 2027", "Spring 2028", "Fall 2028"],
+                "value": "",
+            },
+            {
+                "id": "organizations",
+                "label": "Are you currently a member of any university organizations, such as clubs or societies?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+        ]
+        rendered = qa.explicit_approved_answers(controls, approved_answers=approved)
+        self.assertEqual(
+            [
+                {"id_or_name": "graduation", "answer": "Spring 2028"},
+                {"id_or_name": "organizations", "answer": "Yes"},
+            ],
+            rendered,
+        )
+        for control, answer in zip(controls, ("Spring 2028", "Yes")):
+            self.assertFalse(qa.answer_requires_manual(
+                control, answer, approved_answers=approved,
+            ))
 
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
