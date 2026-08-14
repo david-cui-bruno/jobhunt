@@ -102,6 +102,11 @@ class WorkdayAnswerTests(unittest.TestCase):
         source = inspect.getsource(workday.ensure_workday_account_access)
         self.assertIn("createAccountLink", source)
         self.assertIn("_workday_auth_gate_visible", source)
+        self.assertIn(
+            "maybe_create_account(page, company_key)\n"
+            "            maybe_sign_in(page, company_key)",
+            source,
+        )
 
     def test_prompt_includes_grounding_without_missing_stories_placeholder(self) -> None:
         response = io.StringIO(json.dumps({"content": [{"type": "text", "text": "[]"}]}))

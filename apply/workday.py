@@ -727,6 +727,7 @@ def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tup
             create.click(timeout=5000, force=True)
             page.wait_for_timeout(700)
             maybe_create_account(page, company_key)
+            maybe_sign_in(page, company_key)
             page.wait_for_timeout(1200)
 
     if not _verification_required(page):
