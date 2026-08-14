@@ -644,6 +644,68 @@ class QaManualPolicyTest(unittest.TestCase):
         )
         self.assertEqual(["wrong"], [answer["id_or_name"] for answer in blocked])
 
+    def test_large_greenhouse_menus_and_grad_ranges_use_grounded_facts(self):
+        approved = {
+            **self.APPROVED,
+            "education": {
+                **self.APPROVED["education"],
+                "high_school": "Plano West Senior High School, Plano, Texas",
+                "high_school_graduation_year": "2024",
+            },
+        }
+        controls = [
+            {
+                "id": "citizenship",
+                "label": "Please select the country where you hold citizenship / permanent residence.",
+                "options": ["Afghanistan", "France", "United States of America"],
+            },
+            {
+                "id": "high-school-date",
+                "label": (
+                    "You must have earned a high school diploma. Please confirm the "
+                    "month and year that reflects your high school graduation date."
+                ),
+                "options": ["Spring/Summer 2025", "Spring/Summer 2024", "Spring/Summer 2023"],
+            },
+            {
+                "id": "imc-grad",
+                "label": "When is your anticipated graduation date - please select a Graduation Date range:",
+                "options": ["August 2027 - December 2027", "January 2028 - July 2028"],
+            },
+            {
+                "id": "jump-grad",
+                "label": "What is your expected graduation date?",
+                "options": ["Winter 2028", "Spring/Summer 2028", "Fall 2028"],
+            },
+            {
+                "id": "university-country",
+                "label": "Please select the location of your current university.",
+                "options": ["France", "United States"],
+            },
+            {
+                "id": "current-school",
+                "label": "Please select your current school from the list below:",
+                "options": ["Arizona State University", "Brown University"],
+            },
+        ]
+
+        rendered = qa.explicit_approved_answers(controls, approved_answers=approved)
+        answers = {item["id_or_name"]: item["answer"] for item in rendered}
+
+        self.assertEqual("United States of America", answers["citizenship"])
+        self.assertEqual("Spring/Summer 2024", answers["high-school-date"])
+        self.assertEqual("January 2028 - July 2028", answers["imc-grad"])
+        self.assertEqual("Spring/Summer 2028", answers["jump-grad"])
+        self.assertEqual("United States", answers["university-country"])
+        self.assertEqual("Brown University", answers["current-school"])
+        allowed, blocked = qa.filter_manual_answers(
+            controls, rendered, approved_answers=approved,
+        )
+        self.assertEqual(set(answers), {item["id_or_name"] for item in allowed})
+        self.assertEqual([], blocked)
+        self.assertIn("slice(0, 1000)", qa.EXTRACT_JS)
+        self.assertIn("slice(0, 500)", qa.EXTRACT_JS)
+
     def test_explicit_facts_render_without_a_model_including_approved_estimate(self):
         controls = [
             {

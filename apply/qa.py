@@ -166,7 +166,7 @@ EXTRACT_JS = """
       if (!t && fe) t = (fe.innerText || '').split('\\n')[0] || '';
     }
     if (!t) t = el.placeholder || '';
-    return t.replace(/\\s+/g, ' ').trim().slice(0, 200);
+    return t.replace(/\\s+/g, ' ').trim().slice(0, 500);
   };
   const groupInfo = (el) => {
     // checkbox/radio group: same name; group question label = wrapper's first label-ish text
@@ -187,7 +187,7 @@ EXTRACT_JS = """
       }
     }
     const opts = boxes.map(b => b.labels?.[0]?.innerText?.trim() || b.value).filter(Boolean);
-    return { q: (q || '').replace(/\\s+/g, ' ').trim().slice(0, 250), opts };
+    return { q: (q || '').replace(/\\s+/g, ' ').trim().slice(0, 500), opts };
   };
   document.querySelectorAll('input, select, textarea, [role=combobox]').forEach(el => {
     if (el.type === 'hidden' || el.type === 'file') return;
@@ -200,7 +200,9 @@ EXTRACT_JS = """
     let options = [];
     let label = labelFor(el);
     if (el.tagName === 'SELECT') {
-      options = [...el.options].map(o => o.text.trim()).filter(Boolean).slice(0, 60);
+      // Large school/country menus must retain the candidate's grounded option.
+      // Explicitly answered controls are removed before the model prompt.
+      options = [...el.options].map(o => o.text.trim()).filter(Boolean).slice(0, 1000);
     }
     if (isGroup) {
       const g = groupInfo(el);
@@ -452,7 +454,9 @@ def _graduation_menu_answer(month: str, year: str, options: list[str]) -> str | 
     # Some employers offer academic terms rather than months. June belongs to
     # the spring graduation term, while July through December map to fall.
     season = "Spring" if target[0] <= 6 else "Fall"
-    season_answer = _first_matching_option([f"{season} {target[2]}"], options)
+    season_candidates = ([f"Spring/Summer {target[2]}", f"Spring {target[2]}"]
+                         if season == "Spring" else [f"Fall {target[2]}"])
+    season_answer = _first_matching_option(season_candidates, options)
     if season_answer:
         return season_answer
 
@@ -483,6 +487,19 @@ def _graduation_menu_answer(month: str, year: str, options: list[str]) -> str | 
             option_year = int(same_year.group(3))
             if (start_month and end_month and target[2] == option_year
                     and start_month <= target[0] <= end_month):
+                return option
+        repeated_year = re.search(
+            r"\b([A-Za-z]+)\s+(\d{4})\s*-\s*([A-Za-z]+)\s+(\d{4})\b",
+            option,
+            re.I,
+        )
+        if repeated_year:
+            start_month = month_number(repeated_year.group(1))
+            start_year = int(repeated_year.group(2))
+            end_month = month_number(repeated_year.group(3))
+            end_year = int(repeated_year.group(4))
+            if (start_month and end_month
+                    and (start_year, start_month) <= target_key <= (end_year, end_month)):
                 return option
     return None
 
@@ -529,6 +546,13 @@ def _is_current_school_control(control: dict) -> bool:
         value = re.sub(r"[\s*?:]+$", "", str(control.get(key) or "").strip().lower())
         if value in exact_labels:
             return True
+    question = _control_question_text(control).lower()
+    if re.search(
+        r"\b(?:select|choose)\b.*\bcurrent school\b|"
+        r"\bcurrent school\b.*\b(?:list|below)\b",
+        question,
+    ):
+        return True
     return False
 
 
@@ -591,6 +615,18 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             question,
         ):
             answer = education.get("high_school_graduation_year")
+        elif re.search(r"\bhigh school diploma\b", question):
+            # Current enrollment at Brown necessarily follows completion of
+            # secondary school. Date-range menus use the approved graduation year.
+            high_school_year = str(education.get("high_school_graduation_year") or "").strip()
+            if options and high_school_year:
+                answer = _first_matching_option([
+                    f"Spring/Summer {high_school_year}",
+                    f"Spring {high_school_year}",
+                    high_school_year,
+                ], options)
+            if answer is None:
+                answer = _render_boolean(True, options)
         elif re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b", question):
             profile_education = PROFILE.get("education") or {}
             month = str(education.get("expected_graduation_month")
@@ -600,6 +636,8 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             exact = education.get("exact_graduation_date")
             if control.get("hasDay"):
                 answer = exact
+            elif options and month and year:
+                answer = _graduation_menu_answer(month, year, options)
             elif "month" in question and "year" in question and month and year:
                 answer = _graduation_menu_answer(month, year, options)
             elif "year" in question and "date" not in question:
@@ -662,10 +700,6 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             candidates.extend(part.strip() for part in re.split(r"\s*&\s*|\s+and\s+", major)
                               if part.strip())
             answer = _first_matching_option(candidates, options) if options else major
-        elif re.search(r"\bhigh school diploma\b", question):
-            # Current enrollment at Brown necessarily follows completion of
-            # secondary school. This does not claim an unearned college degree.
-            answer = _render_boolean(True, options)
         elif re.search(r"\bstandardized test score type\b", question):
             answer = _first_matching_option(["SAT"], options) if options else "SAT"
         elif re.search(r"\bcountry.*\b(?:citizenship|permanent residence)\b", question):
@@ -820,7 +854,12 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = _render_boolean(expected, options)
         elif re.search(r"\blocation of your current university\b", question):
             location = PROFILE.get("location") or {}
+            country = str(location.get("country") or "")
+            us_country = country.upper() in {"USA", "US", "UNITED STATES"}
             candidates = [
+                "United States of America" if us_country else country,
+                "United States" if us_country else country,
+                country,
                 f"{location.get('city', '')}, {location.get('state', '')}".strip(", "),
                 str(location.get("city") or ""),
             ]
@@ -916,6 +955,20 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             "high_school_graduation_year"
         ) or "").strip()
         return bool(expected and expected == answer_text.strip())
+    if re.search(r"\bhigh school diploma\b", question):
+        options = [str(option) for option in control.get("options") or []]
+        high_school_year = str((approved.get("education") or {}).get(
+            "high_school_graduation_year"
+        ) or "").strip()
+        if options and high_school_year:
+            expected = _first_matching_option([
+                f"Spring/Summer {high_school_year}",
+                f"Spring {high_school_year}",
+                high_school_year,
+            ], options)
+            if expected:
+                return expected.lower() == answer_text.strip().lower()
+        return _answer_boolean(answer_text) is True
     if re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b", question):
         education = approved.get("education") or {}
         if control.get("hasDay") or re.search(r"\d{1,2}/\d{1,2}/\d{4}", answer_text):
@@ -925,7 +978,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         expected_month = education.get("expected_graduation_month") or profile_education.get("grad_month")
         expected_year = str(education.get("expected_graduation_year") or profile_education.get("grad_year") or "")
         options = [str(option) for option in control.get("options") or []]
-        if "month" in question and "year" in question and options:
+        if options:
             expected_option = _graduation_menu_answer(
                 str(expected_month or ""), expected_year, options,
             )
@@ -938,8 +991,6 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         if re.fullmatch(r"\s*\d{4}\s*", answer_text):
             return answer_text.strip() == expected_year
         return str(expected_month or "").lower() == answer_text.strip().lower()
-    if re.search(r"\bhigh school diploma\b", question):
-        return _answer_boolean(answer_text) is True
     if re.search(r"\b(high school|secondary school)\b", question):
         expected = _approved_high_school_answer(
             approved,
