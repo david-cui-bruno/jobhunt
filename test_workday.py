@@ -24,6 +24,7 @@ class WorkdayAnswerTests(unittest.TestCase):
             workday._workday_prompt_target(
                 "Company website",
                 ["Employee Referral", "Jobboards", "Valeo Websites"],
+                "valeo",
             ),
         )
         self.assertEqual(
@@ -31,14 +32,47 @@ class WorkdayAnswerTests(unittest.TestCase):
             workday._workday_prompt_target(
                 "Company website",
                 ["Other (Website)", "Valeo.hu", "Valeo Website"],
+                "valeo",
             ),
         )
         self.assertIsNone(
             workday._workday_prompt_target(
                 "Company website",
                 ["Other (Website)", "Careers Website", "Corporate Website"],
+                "valeo",
             )
         )
+
+    def test_company_website_leaf_is_safe_but_other_prefill_is_not(self):
+        approved = {
+            "company_facts": {
+                "Valeo": {"recruiting_source": "Company website"},
+            },
+        }
+        field = {
+            "faid": "source|0",
+            "label": "How Did You Hear About Us?*",
+            "kind": "multiselect",
+            "value": "Valeo Website",
+        }
+        self.assertEqual(
+            [],
+            workday.unsafe_prefilled_fields(
+                [field], "valeo", approved_answers=approved
+            ),
+        )
+        for unsafe_value in (
+            "Other (Website)", "Employee Referral", "LinkedIn Website"
+        ):
+            with self.subTest(value=unsafe_value):
+                self.assertEqual(
+                    ["How Did You Hear About Us?*"],
+                    workday.unsafe_prefilled_fields(
+                        [dict(field, value=unsafe_value)],
+                        "valeo",
+                        approved_answers=approved,
+                    ),
+                )
 
     def test_activation_link_must_match_the_exact_workday_tenant(self) -> None:
         good = "https://nelnet.wd1.myworkdayjobs.com/MyNelnet/activate/secret-token"

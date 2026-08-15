@@ -199,7 +199,20 @@ def _checkgroup_targets(answer: object, labels: list[str]) -> list[str]:
     return targets
 
 
-def _workday_prompt_target(answer: object, options: list[str]) -> str | None:
+def _trusted_website_option(option: str, company: str = "") -> bool:
+    """Whether a website option denotes the employer's own recruiting site."""
+    if re.search(r"\bother\b", option, re.I):
+        return False
+    words = set(re.findall(r"[a-z0-9]+", option.lower()))
+    if words & {"company", "corporate", "career", "careers", "employer"}:
+        return True
+    company_key = re.sub(r"[^a-z0-9]", "", company.lower())
+    option_key = re.sub(r"[^a-z0-9]", "", option.lower())
+    return bool(len(company_key) >= 3 and company_key in option_key)
+
+
+def _workday_prompt_target(answer: object, options: list[str],
+                           company: str = "") -> str | None:
     """Resolve a Workday prompt option without guessing among similar sources.
 
     Recruiting-source prompts are often hierarchical. An approved intent such as
@@ -210,20 +223,44 @@ def _workday_prompt_target(answer: object, options: list[str]) -> str | None:
     non-Other website option is unambiguous.
     """
     target = qa._best_option(str(answer), options)
-    if target:
-        return target
     normalized_answer = re.sub(r"[^a-z0-9]", "", str(answer).lower())
     if "website" not in normalized_answer:
-        return None
+        return target
     website_options = [
         option for option in options
         if "website" in re.sub(r"[^a-z0-9]", "", option.lower())
     ]
     specific = [
         option for option in website_options
-        if not re.search(r"\bother\b", option, re.I)
+        if _trusted_website_option(option, company)
     ]
+    if target in specific:
+        return target
     return specific[0] if len(specific) == 1 else None
+
+
+def _workday_rendered_answer_matches(field: dict, expected: object,
+                                     actual: object, company: str = "") -> bool:
+    """Compare an approved intent with the concrete value Workday renders.
+
+    A hierarchical recruiting-source control stores its employer-specific leaf
+    (for example ``Valeo Website``), not the approved generic intent
+    (``Company website``). Reuse the same fail-closed resolver used while
+    navigating the prompt so ``Other (Website)`` and ambiguous values remain
+    rejected.
+    """
+    expected_text = str(expected or "").strip()
+    actual_text = str(actual or "").strip()
+    if not expected_text or not actual_text:
+        return False
+    if expected_text.lower() == actual_text.lower():
+        return True
+    label = str(field.get("label") or "")
+    if not re.search(r"\bhow did you hear about\b", label, re.I):
+        return False
+    return _workday_prompt_target(
+        expected_text, [actual_text], company
+    ) == actual_text
 
 
 def wd_fill(page, field: dict, answer: object) -> bool:
@@ -353,7 +390,9 @@ def wd_fill(page, field: dict, answer: object) -> bool:
                 if not prompt.count():
                     prompt = page.locator("[role=option]:visible")
                 opts = [o.strip() for o in prompt.all_inner_texts()]
-                target = _workday_prompt_target(answer, opts)
+                target = _workday_prompt_target(
+                    answer, opts, str(field.get("company_context") or "")
+                )
                 if target is None:
                     break
                 matches = [index for index, option in enumerate(opts)
@@ -461,6 +500,15 @@ def unsafe_prefilled_fields(fields: list[dict], company: str,
             value,
             approved_answers=approved_answers,
         ):
+            approved = qa.explicit_approved_answers(
+                [dict(field, value="")],
+                key_field="faid",
+                company_context=company,
+                approved_answers=approved_answers,
+            )
+            if any(_workday_rendered_answer_matches(
+                    field, item.get("answer"), value, company) for item in approved):
+                continue
             unsafe.append(field.get("label") or field.get("faid") or "unknown field")
     return unsafe
 
@@ -902,9 +950,11 @@ def fill_current_page(page, company_key: str, slug: str) -> None:
         if not field:
             continue
         answer = item.get("answer")
-        current = str(field.get("value") or "").strip().lower()
-        if isinstance(answer, list) or current != str(answer or "").strip().lower():
-            wd_fill(page, field, answer)
+        current = str(field.get("value") or "").strip()
+        if (isinstance(answer, list)
+                or not _workday_rendered_answer_matches(
+                    field, answer, current, company_key)):
+            wd_fill(page, dict(field, company_context=company_key), answer)
             page.wait_for_timeout(250)
     fields = page.evaluate(WD_EXTRACT_JS)
     todo = [f for f in fields if not f["value"]]
@@ -914,7 +964,7 @@ def fill_current_page(page, company_key: str, slug: str) -> None:
     amap = {a["faid"]: a["answer"] for a in answers if "faid" in a}
     for f in todo:
         if f["faid"] in amap:
-            wd_fill(page, f, amap[f["faid"]])
+            wd_fill(page, dict(f, company_context=company_key), amap[f["faid"]])
             page.wait_for_timeout(250)
 
 
