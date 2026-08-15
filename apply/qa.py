@@ -554,6 +554,22 @@ def _hometown_value_matches(component: str, expected: object,
     return expected_text == actual_text
 
 
+def _long_form_company_matches(entry: dict, question: str,
+                               company_context: str = "") -> bool:
+    company = str(entry.get("company") or "").strip()
+    if not company:
+        return True
+    aliases = entry.get("company_aliases") or []
+    if not isinstance(aliases, list):
+        aliases = []
+    if company_context:
+        accepted = {_company_key(company)} | {
+            _company_key(alias) for alias in aliases if _company_key(alias)
+        }
+        return _company_key(company_context) in accepted
+    return _company_matches(company, question)
+
+
 def _approved_long_form_answer(question: str, approved: dict,
                                company_context: str = "") -> str | None:
     """Return a user-authored answer only when every configured phrase matches.
@@ -568,13 +584,8 @@ def _approved_long_form_answer(question: str, approved: dict,
     for entry in approved.get("long_form_answers") or []:
         if not isinstance(entry, dict):
             continue
-        company = str(entry.get("company") or "").strip()
-        if company:
-            if company_context:
-                if _company_key(company) != _company_key(company_context):
-                    continue
-            elif not _company_matches(company, normalized):
-                continue
+        if not _long_form_company_matches(entry, normalized, company_context):
+            continue
         phrases = [
             re.sub(r"\s+", " ", str(phrase).strip().lower())
             for phrase in entry.get("match_all") or []
@@ -1636,7 +1647,9 @@ def answer_requires_manual(control: dict, answer: object, profile_text: str | No
             company = str(entry.get("company") or "").strip()
             scoped_answer = str(entry.get("answer") or "").strip()
             if (company and scoped_answer == str(answer or "").strip()
-                    and _company_key(company) != _company_key(company_context)):
+                    and not _long_form_company_matches(
+                        entry, question, company_context
+                    )):
                 return True
     if _blocked_answer_is_approved(control, answer, approved):
         return False

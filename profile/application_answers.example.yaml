@@ -74,6 +74,8 @@ long_form_answers:
   - key: example_accomplishment
     # Optional employer guard for answers researched or authored for one company.
     company: null
+    # Optional exact ATS board tokens that identify the same employer.
+    company_aliases: []
     match_all:
       - "most impressive thing"
       - "built or achieved"

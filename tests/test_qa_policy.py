@@ -7,6 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apply"))
 import qa  # noqa: E402
+import ashby  # noqa: E402
 import greenhouse  # noqa: E402
 import smartrecruiters  # noqa: E402
 import workday  # noqa: E402
@@ -563,6 +564,7 @@ class QaManualPolicyTest(unittest.TestCase):
         approved["long_form_answers"].append({
             "key": "oligo_specific_interest",
             "company": "Oligo Space",
+            "company_aliases": ["oligo"],
             "match_all": ["what stood out", "specific position"],
             "answer": answer,
         })
@@ -582,6 +584,17 @@ class QaManualPolicyTest(unittest.TestCase):
         )
         self.assertFalse(qa.answer_requires_manual(
             dict(prompt, company_context="Oligo Space"),
+            answer,
+            approved_answers=approved,
+        ))
+        self.assertEqual(
+            [{"id_or_name": "oligo-interest", "answer": answer}],
+            qa.explicit_approved_answers(
+                [prompt], company_context="oligo", approved_answers=approved,
+            ),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            dict(prompt, company_context="oligo"),
             answer,
             approved_answers=approved,
         ))
@@ -610,6 +623,17 @@ class QaManualPolicyTest(unittest.TestCase):
                 company_context="Other Company",
             ),
         )
+
+    def test_ashby_company_context_is_stable_across_application_urls(self):
+        self.assertEqual(
+            "oligo",
+            ashby._ashby_company_context(
+                "https://jobs.ashbyhq.com/oligo/107f5148/application?embed=true"
+            ),
+        )
+        self.assertEqual("", ashby._ashby_company_context(
+            "https://example.com/oligo/107f5148/application"
+        ))
 
     def test_company_employment_type_is_exact_and_does_not_cross_companies(self):
         approved = json.loads(json.dumps(self.APPROVED))
