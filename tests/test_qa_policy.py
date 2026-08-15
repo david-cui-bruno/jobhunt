@@ -571,6 +571,14 @@ class QaManualPolicyTest(unittest.TestCase):
             answer,
             approved_answers=approved,
         ))
+        self.assertEqual([], qa.explicit_approved_answers(
+            [prompt], company_context="Other Company", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            dict(prompt, company_context="Other Company"),
+            answer,
+            approved_answers=approved,
+        ))
         generic_elsewhere = {
             "id": "elsewhere",
             "label": "What stood out and led you to apply to this specific position?",

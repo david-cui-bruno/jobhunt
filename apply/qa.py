@@ -569,8 +569,12 @@ def _approved_long_form_answer(question: str, approved: dict,
         if not isinstance(entry, dict):
             continue
         company = str(entry.get("company") or "").strip()
-        if company and not _company_matches(company, normalized, company_context):
-            continue
+        if company:
+            if company_context:
+                if _company_key(company) != _company_key(company_context):
+                    continue
+            elif not _company_matches(company, normalized):
+                continue
         phrases = [
             re.sub(r"\s+", " ", str(phrase).strip().lower())
             for phrase in entry.get("match_all") or []
@@ -1624,6 +1628,16 @@ def answer_requires_manual(control: dict, answer: object, profile_text: str | No
     if not question:
         return False
     approved = APPLICATION_ANSWERS if approved_answers is None else approved_answers
+    company_context = str(control.get("company_context") or "").strip()
+    if company_context:
+        for entry in approved.get("long_form_answers") or []:
+            if not isinstance(entry, dict):
+                continue
+            company = str(entry.get("company") or "").strip()
+            scoped_answer = str(entry.get("answer") or "").strip()
+            if (company and scoped_answer == str(answer or "").strip()
+                    and _company_key(company) != _company_key(company_context)):
+                return True
     if _blocked_answer_is_approved(control, answer, approved):
         return False
     if _hometown_component(control, approved):
