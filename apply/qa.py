@@ -443,7 +443,7 @@ def _political_contribution_threshold_question(question: str) -> bool:
     """Recognize only the confirmed $150 / two-year political contribution fact."""
     return bool(
         re.search(r"\bpolitical contributions?\b", question)
-        and re.search(r"(?:\$\s*)?150\b", question)
+        and re.search(r"(?<![\d,])(?:\$\s*)?150(?!\d|[.,]\d)", question)
         and re.search(r"\b(?:last|past|prior|previous)\s+(?:two|2)\s+years?\b", question)
         and re.search(r"\b(?:greater than|more than|over|above|exceed(?:ing|ed)?)\b", question)
     )

@@ -496,11 +496,22 @@ class QaManualPolicyTest(unittest.TestCase):
             "label": "Have you ever made a political contribution?",
             "options": ["Yes", "No"],
         }
+        wrong_amounts = [
+            {
+                "id": f"political-{amount}",
+                "label": (
+                    f"Have you made any political contributions greater than {amount} "
+                    "in the last 2 years?"
+                ),
+                "options": ["Yes", "No"],
+            }
+            for amount in ("$1,150", "$150,000", "$2,150", "$150.50")
+        ]
 
         self.assertEqual(
             [{"id_or_name": "political", "answer": "No"}],
             qa.explicit_approved_answers(
-                [exact, generic], approved_answers=approved,
+                [exact, generic, *wrong_amounts], approved_answers=approved,
             ),
         )
         self.assertFalse(qa.answer_requires_manual(
@@ -512,6 +523,10 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertTrue(qa.answer_requires_manual(
             generic, "No", approved_answers=approved,
         ))
+        for wrong_amount in wrong_amounts:
+            self.assertTrue(qa.answer_requires_manual(
+                wrong_amount, "No", approved_answers=approved,
+            ))
         self.assertEqual(
             approved["legal"],
             qa.relevant_application_answers(
