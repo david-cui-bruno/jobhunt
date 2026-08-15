@@ -91,13 +91,56 @@ class ResumeQualityTests(unittest.TestCase):
         )
         self.assertEqual("security", role)
 
+    def test_common_ai_and_data_titles_choose_relevant_coursework(self) -> None:
+        self.assertEqual(
+            "ml",
+            tailor.infer_role_type(
+                "Applied Scientist Intern",
+                "Build generative AI and LLM systems.",
+            ),
+        )
+        self.assertEqual(
+            "data",
+            tailor.infer_role_type(
+                "Data Scientist Intern",
+                "Analyze product experiments with machine learning.",
+            ),
+        )
+
+    def test_jd_skill_matching_is_case_insensitive(self) -> None:
+        result = tailor.build_grounded_resume(
+            "Software Engineer Intern",
+            "Build services on linux and postgresql.",
+        )
+        skills = result[result.rfind("\\section{Skills}"):]
+        self.assertIn("Linux", skills)
+        self.assertIn("PostgreSQL", skills)
+
+    def test_unknown_page_count_fails_closed(self) -> None:
+        def compile_without_page_count(_tex: str, out_pdf: Path) -> bool:
+            out_pdf.write_bytes(b"%PDF-1.4")
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(tailor, "OUT_DIR", Path(tmp)), \
+                mock.patch.object(tailor, "compile_pdf", side_effect=compile_without_page_count), \
+                mock.patch.object(tailor, "measure_fill", return_value=0.9), \
+                mock.patch.object(tailor, "LAST_PAGE_COUNT", 7):
+            self.assertIsNone(tailor.tailor(
+                "test:unknown-pages", "Example", "Software Engineer Intern", "Python",
+            ))
+
     def test_tailor_never_calls_freeform_resume_generation(self) -> None:
+        def compile_one_page(_tex: str, out_pdf: Path) -> bool:
+            out_pdf.write_bytes(b"%PDF-1.4")
+            tailor.LAST_PAGE_COUNT = 1
+            return True
+
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(tailor, "OUT_DIR", Path(tmp)), \
                 mock.patch.object(tailor, "_api", side_effect=AssertionError("model called")), \
-                mock.patch.object(tailor, "compile_pdf", return_value=True), \
-                mock.patch.object(tailor, "measure_fill", return_value=0.9), \
-                mock.patch.object(tailor, "LAST_PAGE_COUNT", 1):
+                mock.patch.object(tailor, "compile_pdf", side_effect=compile_one_page), \
+                mock.patch.object(tailor, "measure_fill", return_value=0.9):
             result = tailor.tailor(
                 "test:grounded", "Dmg Media", "AI Engineer Intern",
                 "Python and machine learning",

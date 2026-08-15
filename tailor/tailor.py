@@ -246,8 +246,9 @@ def infer_role_type(title: str, jd: str) -> str:
                      r"security (?:engineer|researcher|analyst)|penetration tester)\b"),
         ("embedded", r"\b(?:embedded|firmware|microcontroller|rtos|fpga|hardware)"),
         ("ml", r"\b(?:machine learning|deep learning|artificial intelligence|ai engineer|"
-               r"computer vision|pytorch|tensorflow|research scientist)\b"),
-        ("data", r"\b(?:data engineer|analytics engineer|data science|etl|warehouse)\b"),
+               r"generative ai|computer vision|pytorch|tensorflow|research scientist|"
+               r"nlp engineer|gpu programming)\b"),
+        ("data", r"\b(?:data engineer|analytics engineer|data scientist|data science|etl|warehouse)\b"),
         ("full-stack", r"\b(?:full[ -]?stack|frontend|front[ -]?end|react native)\b"),
         ("backend", r"\b(?:backend|back[ -]?end|distributed systems?|platform engineer|"
                   r"infrastructure|cloud engineer)\b"),
@@ -267,6 +268,8 @@ def infer_role_type(title: str, jd: str) -> str:
                      r"security|security (?:engineer|researcher|analyst)|vulnerability "
                      r"research|penetration testing|threat detection|malware analysis|"
                      r"cryptograph(?:y|ic)|exploit development)\b"),
+        ("ml", r"\b(?:generative ai|large language models?|llms?|nlp|natural language "
+               r"processing|gpu programming)\b"),
         *title_patterns[1:],
     ]
     return next(
@@ -382,7 +385,7 @@ def jd_skills_covered(tex: str, jd: str) -> tuple[bool, list[str]]:
         return False, ["<no Skills section>"]
     missing = []
     for skill, pat in CLAIMABLE.items():
-        if not re.search(pat, jd):
+        if not re.search(pat, jd, re.IGNORECASE):
             continue
         # token match in the section: "C" must not match the c in "Docker",
         # and "C" must not match "C++"
@@ -578,6 +581,7 @@ def enforce_coverage(tex: str, jd: str) -> str:
 
 def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
     """Build, compile, and audit a deterministic grounded resume."""
+    global LAST_PAGE_COUNT
     # Include the posting identity so a later role with the same company/title
     # cannot overwrite the exact artifact recorded for an earlier application.
     digest = hashlib.sha256(posting_id.encode("utf-8")).hexdigest()[:10]
@@ -627,16 +631,21 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
         }, indent=2) + "\n")
 
     def finish(include_skill_coverage: bool) -> Path | None:
+        global LAST_PAGE_COUNT
         tex = build_grounded_resume(title, jd, include_skill_coverage)
         why: list = []
         if not validate(tex, why):
             print(f"[tailor] validate failed: {'; '.join(why)}", file=sys.stderr)
             return None
-        if not compile_pdf(tex, out_pdf):
+        LAST_PAGE_COUNT = 0
+        if not compile_pdf(tex, out_pdf) or not out_pdf.is_file():
             print("[tailor] pdflatex failed", file=sys.stderr)
             return None
-        if LAST_PAGE_COUNT > 1:
-            print("[tailor] deterministic resume exceeds one page", file=sys.stderr)
+        if LAST_PAGE_COUNT != 1:
+            print(
+                f"[tailor] expected exactly one PDF page, measured {LAST_PAGE_COUNT}",
+                file=sys.stderr,
+            )
             return None
         out_tex.write_text(tex)
         write_quality(
