@@ -73,5 +73,9 @@ company_facts:
     securities_exam_planned: null
     licenses_or_exams: null
     household_employment: null
+    # Exact labels selected from employer forms. Keep these company-scoped so a
+    # recruiting source or employment preference is never inferred elsewhere.
+    recruiting_source: null
+    employment_type: null
     # Use only for a company/location whose fully-onsite requirement was approved.
     fully_onsite: null

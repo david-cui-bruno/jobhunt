@@ -312,6 +312,10 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(high school|secondary school)\b",
     r"\bcurrent school\s+(?:year|enrollment|status|grade|class|level)\b",
     r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b",
+    r"\b(?:how|where|when) did you (?:first )?hear about\b",
+    r"\b(?:employment|work)\s*(?:type|status|preference)\b|"
+    r"\b(?:seeking|looking for|interested in)\b.{0,60}\b(?:full[- ]?time|part[- ]?time)\b|"
+    r"\b(?:full[- ]?time|part[- ]?time)\b.{0,60}\b(?:employment|work)\b",
     # A model must not invent a detail for an optional branch whose parent
     # selection was not "Other".  If the branch is genuinely required, leaving
     # it blank makes the adapter stop for review instead of submitting fiction.
@@ -374,6 +378,29 @@ def _company_fact_first(control: dict, answers: dict, *fields: str) -> object:
         if value is not _MISSING:
             return value
     return _MISSING
+
+
+def _employment_type_question(control: dict) -> bool:
+    """Recognize questions that ask the candidate to choose full- or part-time work."""
+    question = _control_question_text(control).lower()
+    options = [re.sub(r"[^a-z]", "", str(option).lower())
+               for option in control.get("options") or []]
+    has_both_options = (any("fulltime" in option for option in options)
+                        and any("parttime" in option for option in options))
+    return bool(
+        re.search(r"\b(?:employment|work)\s*(?:type|status|preference)\b", question)
+        or re.search(
+            r"\b(?:seeking|looking for|interested in)\b.{0,60}"
+            r"\b(?:full[- ]?time|part[- ]?time)\b",
+            question,
+        )
+        or re.search(
+            r"\b(?:full[- ]?time|part[- ]?time)\b.{0,60}"
+            r"\b(?:employment|work)\b",
+            question,
+        )
+        or (has_both_options and re.search(r"\b(?:employment|work|seeking|type)\b", question))
+    )
 
 
 def _approved_long_form_answer(question: str, approved: dict) -> str | None:
@@ -729,15 +756,23 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             # The tracked discovery happened while David is enrolled at Brown.
             answer = _first_matching_option(["University Program"], options)
         elif re.search(r"\bhow did you hear about\b", question):
-            candidates = [
-                "Company website", "HRT Job Board", "University Job Board", "Job Board",
-            ]
+            approved_source = _company_fact(control, "recruiting_source", approved)
+            candidates = ([str(approved_source)] if isinstance(approved_source, str)
+                          and approved_source.strip() else [
+                              "Company website", "HRT Job Board",
+                              "University Job Board", "Job Board",
+                          ])
             # Workday's searchable dropdown options are often absent until the
             # control is opened. Give the filler the approved default so it can
             # select the live option, while static menus still require an exact
             # match from their observed choices.
             answer = (_first_matching_option(candidates, options)
                       if options else candidates[0])
+        elif _employment_type_question(control):
+            employment_type = _company_fact(control, "employment_type", approved)
+            if isinstance(employment_type, str) and employment_type.strip():
+                answer = (_first_matching_option([employment_type], options)
+                          if options else employment_type)
         elif re.search(r"\bgender\b", question):
             gender = str(identity.get("gender") or "").strip().lower()
             candidates = {
@@ -1023,6 +1058,30 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             [str(option) for option in control.get("options") or []],
         )
         return bool(expected and expected.lower() == answer_text.strip().lower())
+    if re.search(r"\bwhen did you first hear about\b", question):
+        expected = (_first_matching_option(
+            ["University Program"],
+            [str(option) for option in control.get("options") or []],
+        ) or "University Program")
+        return expected.strip().lower() == answer_text.strip().lower()
+    if re.search(r"\bhow did you hear about\b", question):
+        approved_source = _company_fact(control, "recruiting_source", approved)
+        candidates = ([str(approved_source)] if isinstance(approved_source, str)
+                      and approved_source.strip() else [
+                          "Company website", "HRT Job Board",
+                          "University Job Board", "Job Board",
+                      ])
+        options = [str(option) for option in control.get("options") or []]
+        expected = _first_matching_option(candidates, options) if options else candidates[0]
+        return bool(expected and expected.strip().lower() == answer_text.strip().lower())
+    if _employment_type_question(control):
+        employment_type = _company_fact(control, "employment_type", approved)
+        if not isinstance(employment_type, str) or not employment_type.strip():
+            return False
+        options = [str(option) for option in control.get("options") or []]
+        expected = (_first_matching_option([employment_type], options)
+                    if options else employment_type)
+        return bool(expected and expected.strip().lower() == answer_text.strip().lower())
     if re.search(
         r"\b(?:what year|when)\b.*\bgraduat(?:e|ed)\b.*\bhigh school\b|"
         r"\bhigh school\b.*\b(?:graduation|graduat(?:e|ed))\b.*\byear\b",

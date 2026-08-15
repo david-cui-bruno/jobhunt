@@ -370,6 +370,69 @@ class QaManualPolicyTest(unittest.TestCase):
             rendered,
         )
 
+    def test_company_recruiting_source_overrides_default_and_rejects_conflict(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["company_facts"]["Valeo"] = {
+            "recruiting_source": "Employee Referral",
+        }
+        control = {
+            "id": "source",
+            "label": "How Did You Hear About Us?*",
+            "kind": "multi",
+            "options": ["Company Website", "Employee Referral"],
+            "value": "",
+            "company_context": "Valeo",
+        }
+
+        self.assertEqual(
+            [{"id_or_name": "source", "answer": "Employee Referral"}],
+            qa.explicit_approved_answers(
+                [control], company_context="Valeo", approved_answers=approved,
+            ),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Employee Referral", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Company Website", approved_answers=approved,
+        ))
+
+    def test_company_employment_type_is_exact_and_does_not_cross_companies(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["company_facts"]["TransMarket Group"] = {
+            "employment_type": "Full-time",
+        }
+        control = {
+            "id": "employment-type",
+            "label": "What employment type are you seeking?",
+            "kind": "multi",
+            "options": ["Full-time", "Part-time"],
+            "value": "",
+            "company_context": "TransMarket Group",
+        }
+
+        self.assertEqual(
+            [{"id_or_name": "employment-type", "answer": "Full-time"}],
+            qa.explicit_approved_answers(
+                [control], company_context="TransMarket Group",
+                approved_answers=approved,
+            ),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Full-time", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Part-time", approved_answers=approved,
+        ))
+
+        other = dict(control, company_context="Other Company")
+        self.assertEqual([], qa.explicit_approved_answers(
+            [other], company_context="Other Company", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            other, "Full-time", approved_answers=approved,
+        ))
+
     def test_greenhouse_school_and_combined_grad_menu_use_known_profile_facts(self):
         controls = [
             {
