@@ -1,22 +1,17 @@
-"""Tailor: rewrites the base LaTeX resume against a job description using Claude.
+"""Build a truthful, deterministic LaTeX resume for each job description.
 
-Three-stage pipeline (2026-08-07 redesign after single-pass output read like the
-base resume with a shuffled skills line):
-  1. PLAN    - analyze the JD: extract requirements, map each to a truthful asset
-               (base resume or whitelist), pick angle + project order. Also names
-               unclaimable requirements so the writer stops papering over gaps.
-  2. WRITE   - rewrite the LaTeX following that plan.
-  3. CRITIQUE- grade the draft against the JD requirement-by-requirement; if weak,
-               one revision pass with the critique as instructions.
-Guardrails (code, not model): fixed employer order, sanitizer for ->/~ text-mode
-traps, JD-skill coverage check with mechanical insert, compile gate, base fallback.
-  - Never invent employers, projects, metrics, or skills.
-  - Output compiled with pdflatex; failure -> retry once, else base resume.
+The model-generated rewrite path was retired after a production resume changed
+identity fields and project facts despite prompt-only guardrails. Tailoring now
+starts from the reviewed base resume and changes only two code-controlled areas:
+verified coursework ordering and allowlisted JD skill coverage. The header,
+education identity, employers, dates, bullets, projects, and contact information
+are therefore immutable by construction.
 """
 from __future__ import annotations
 
 import json
 import datetime
+import hashlib
 import os
 import re
 import shutil
@@ -223,15 +218,49 @@ COURSE_VARIANTS = {
     "security": "Software Security \\& Exploitation, Computer Systems Security, Operating Systems (Weenix kernel), Computer Networks, Compilers, Distributed Systems, Multiprocessor Synchronization, Theory of Computation",
 }
 
+DEFAULT_COURSES = (
+    "Data Structures \\& Algorithms, Computer Systems, Computer Vision, "
+    "Linear Algebra, Statistics, Databases, Machine Learning, Computer Architecture, "
+    "Deep Learning"
+)
+
 
 def apply_course_variant(tex: str, role_type: str) -> str:
-    for key, courses in COURSE_VARIANTS.items():
-        if key in role_type:
-            return re.sub(
-                r"(\\resumeItem\{Coursework\}\s*\{)[^}]+(\})",
-                lambda m: m.group(1) + courses + m.group(2),
-                tex, count=1)
-    return tex
+    courses = next(
+        (value for key, value in COURSE_VARIANTS.items() if key in role_type),
+        DEFAULT_COURSES,
+    )
+    return re.sub(
+        r"(\\resumeItem\{Coursework\}\s*\{)[^}]+(\})",
+        lambda m: m.group(1) + courses + m.group(2),
+        tex, count=1,
+    )
+
+
+def infer_role_type(title: str, jd: str) -> str:
+    """Classify the small deterministic variant set without model output."""
+    text = f"{title}\n{jd}".lower()
+    patterns = [
+        ("security", r"\b(?:security|exploit|vulnerability|threat|cryptograph)"),
+        ("embedded", r"\b(?:embedded|firmware|microcontroller|rtos|fpga|hardware)"),
+        ("ml", r"\b(?:machine learning|deep learning|artificial intelligence|ai engineer|"
+               r"computer vision|pytorch|tensorflow|research scientist)\b"),
+        ("data", r"\b(?:data engineer|analytics engineer|data science|etl|warehouse)\b"),
+        ("full-stack", r"\b(?:full[ -]?stack|frontend|front[ -]?end|react native)\b"),
+        ("backend", r"\b(?:backend|back[ -]?end|distributed systems?|platform engineer|"
+                  r"infrastructure|cloud engineer)\b"),
+    ]
+    return next((role for role, pattern in patterns if re.search(pattern, text)), "general")
+
+
+def build_grounded_resume(title: str, jd: str, include_skill_coverage: bool = True) -> str:
+    """Return a resume whose mutable content comes only from reviewed code data."""
+    role = infer_role_type(title, jd)
+    tex = apply_course_variant(BASE_TEX, role)
+    tex = apply_grad_date(tex, title)
+    if include_skill_coverage:
+        tex = enforce_coverage(tex, jd)
+    return sanitize(tex)
 
 
 # Graduation is an education fact, not a per-role marketing choice. David
@@ -482,7 +511,7 @@ def log_skill_gaps(posting_id: str, company: str, plan: str) -> None:
 
 
 SHRINK_PROMPT = """This LaTeX resume compiles to {pages} pages; it MUST fit exactly 1 page.
-Cut the weakest content for this job until it fits: drop the least relevant project entirely, trim bullets to at most 2 lines, compress the coursework line to the 5-6 most relevant courses. Do NOT touch employers, dates, or personal info. Keep employer order Framewise Health, Freya, Sotatek. Keep $\\rightarrow$/$\\sim$ hygiene.
+Cut the weakest content for this job until it fits: drop the least relevant project entirely or trim bullets to at most 2 lines. Never alter the verified 8-9 course Coursework line. Do NOT touch employers, dates, or personal info. Keep employer order Framewise Health, Freya, Sotatek. Keep $\\rightarrow$/$\\sim$ hygiene.
 
 JOB POSTING (for relevance judgment):
 {jd}
@@ -526,28 +555,25 @@ def enforce_coverage(tex: str, jd: str) -> str:
 
 
 def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
-    """Plan -> write -> critique -> (revise) -> guardrails -> compile.
-    Returns path to tailored PDF, or None on failure (caller falls back to base)."""
-    if not API_KEY:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set: refusing to run (would silently "
-            "fall back to the base resume for every posting)")
-    safe = re.sub(r"[^A-Za-z0-9]+", "_", f"{company}_{title}")[:80]
+    """Build, compile, and audit a deterministic grounded resume."""
+    # Include the posting identity so a later role with the same company/title
+    # cannot overwrite the exact artifact recorded for an earlier application.
+    digest = hashlib.sha256(posting_id.encode("utf-8")).hexdigest()[:10]
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", f"{company}_{title}")[:68].strip("_")
+    safe = f"{safe}_{digest}"
     out_pdf = OUT_DIR / f"{safe}.pdf"
     out_tex = OUT_DIR / f"{safe}.tex"
     out_plan = OUT_DIR / f"{safe}.plan.txt"
     out_quality = OUT_DIR / f"{safe}.quality.json"
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    plan = ""
-    plan_error = ""
-    critique_verdict = "not_run"
-    if jd.strip():
-        try:
-            plan = make_plan(company, title, jd)
-            out_plan.write_text(plan)  # auditable: why the resume looks how it looks
-        except Exception as exc:
-            plan = ""
-            plan_error = f"{type(exc).__name__}: {exc}"[:500]
+    role = infer_role_type(title, jd)
+    plan = (
+        f"ROLE_TYPE: {role}\n"
+        "MODE: deterministic grounded template\n"
+        "MUTABLE_FIELDS: verified coursework order; allowlisted JD skill coverage\n"
+    )
+    out_plan.write_text(plan)
 
     def write_quality(tex: str, source: str, review_required: bool, reason: str = "") -> None:
         why: list[str] = []
@@ -566,9 +592,9 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
             "source": source,
             "review_required": review_required,
             "reason": reason,
-            "plan_generated": bool(plan),
-            "plan_error": plan_error,
-            "critique_verdict": critique_verdict,
+            "plan_generated": False,
+            "plan_error": "",
+            "critique_verdict": "not_applicable_deterministic",
             "structural_validation": "passed" if structurally_valid else "failed",
             "validation_errors": why,
             "page_count": LAST_PAGE_COUNT,
@@ -578,13 +604,8 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
             "expected_grad_date": GRAD_DATE,
         }, indent=2) + "\n")
 
-    def finish(tex: str) -> Path | None:
-        tex = sanitize(tex)
-        role = parse_role_type(plan)
-        tex = apply_education_variant(tex, role)
-        tex = apply_course_variant(tex, role)
-        tex = apply_grad_date(tex, title)
-        tex = enforce_coverage(tex, jd)
+    def finish(include_skill_coverage: bool) -> Path | None:
+        tex = build_grounded_resume(title, jd, include_skill_coverage)
         why: list = []
         if not validate(tex, why):
             print(f"[tailor] validate failed: {'; '.join(why)}", file=sys.stderr)
@@ -592,101 +613,24 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
         if not compile_pdf(tex, out_pdf):
             print("[tailor] pdflatex failed", file=sys.stderr)
             return None
-        # hard one-page gate with up to 2 shrink passes
-        for _ in range(2):
-            pages = LAST_PAGE_COUNT
-            if pages <= 1:
-                break
-            print(f"[tailor] {pages} pages; shrinking", file=sys.stderr)
-            try:
-                smaller = sanitize(shrink_to_one_page(tex, jd, pages))
-            except Exception:
-                return None
-            swhy: list = []
-            if not validate(smaller, swhy):
-                print(f"[tailor] shrink validate failed: {'; '.join(swhy)}", file=sys.stderr)
-                return None
-            if not compile_pdf(smaller, out_pdf):
-                return None
-            tex = smaller
         if LAST_PAGE_COUNT > 1:
-            print("[tailor] still >1 page after shrinks", file=sys.stderr)
+            print("[tailor] deterministic resume exceeds one page", file=sys.stderr)
             return None
-        # whitespace gate: if content ends high on the page, expand with
-        # truthful bullets (measured, not guessed; 0.88 leaves normal margins)
-        if jd.strip():
-            for _ in range(2):
-                fill = measure_fill(out_pdf)
-                if fill is None:
-                    print("[tailor] page fill measurement unavailable; marking for review", file=sys.stderr)
-                    break
-                if fill >= 0.88:
-                    break
-                print(f"[tailor] page only {fill:.0%} full; expanding", file=sys.stderr)
-                try:
-                    bigger = sanitize(expand_to_fill(tex, jd, plan, fill))
-                except Exception:
-                    break
-                ewhy: list = []
-                if not validate(enforce_coverage(bigger, jd), ewhy):
-                    print(f"[tailor] expand validate failed: {'; '.join(ewhy)}", file=sys.stderr)
-                    break
-                if not compile_pdf(bigger, out_pdf) or LAST_PAGE_COUNT > 1:
-                    compile_pdf(tex, out_pdf)  # restore the good one
-                    break
-                tex = bigger
         out_tex.write_text(tex)
-        log_skill_gaps(posting_id, company, plan)
         write_quality(
             tex,
-            source="tailored",
-            review_required=bool(jd.strip() and not plan),
-            reason="tailoring plan unavailable" if jd.strip() and not plan else "",
+            source="deterministic_grounded",
+            review_required=False,
         )
         return out_pdf
 
-    for attempt in range(2):
-        try:
-            tex = call_claude(company, title, jd, plan=plan)
-        except Exception:
-            continue
-        tex = sanitize(tex)
-        # self-critique loop: up to 2 revision passes while the recruiter-check says WEAK
-        if jd.strip():
-            for _ in range(2):
-                try:
-                    strong, crit = critique(company, title, jd, tex)
-                    critique_verdict = "strong" if strong else "weak"
-                except Exception:
-                    critique_verdict = "error"
-                    break
-                if strong:
-                    break
-                try:
-                    revised = sanitize(revise_with_critique(company, title, jd, tex, crit, plan))
-                except Exception:
-                    break
-                # only adopt a revision that still passes structural rules
-                if validate(enforce_coverage(revised, jd)):
-                    tex = revised
-                else:
-                    break
-        result = finish(tex)
-        if result:
-            return result
-    # Fallbacks are usable but must be visibly distinguishable from successful
-    # tailoring. Apply the truthful graduation date even on this path.
-    fallback_tex = apply_grad_date(BASE_TEX, title)
-    if compile_pdf(fallback_tex, out_pdf):
-        out_tex.write_text(fallback_tex)
-        write_quality(
-            fallback_tex,
-            source="base_fallback",
-            review_required=True,
-            reason="tailored candidates failed validation or compilation",
-        )
-        return out_pdf
-    return None
+    result = finish(include_skill_coverage=True)
+    if result:
+        return result
+    # A long JD can name many allowlisted skills and push the Skills line over
+    # one page. Preserve all factual sections and retry without optional skill
+    # insertions; coursework still stays at 8-9 verified courses.
+    return finish(include_skill_coverage=False)
 
 
 if __name__ == "__main__":

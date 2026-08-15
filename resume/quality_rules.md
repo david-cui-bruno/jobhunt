@@ -36,11 +36,16 @@ ATS / FORMATTING
   list. No second bullet, no extra bolded labels ("Systems Coursework",
   "Relevant Coursework", per-course project blurbs). Course project detail
   belongs in Projects, not Education.
+- Coursework must contain 8-9 verified, role-relevant courses. Never drop it and
+  never compress it below 8 courses to make room elsewhere.
+- The header is immutable. It contains only the reviewed email, phone, city,
+  LinkedIn, GitHub, and name rows from the base template. Never add citizenship,
+  visa, relocation, work-location, or availability prose to the resume header.
 - En dashes for date ranges.
 
 CONTEXT NOTES FOR THIS CANDIDATE
 - GPA 4.0: always keep visible (wiki: include if >3.75).
-- "U.S. Citizen" displayed in header removes sponsorship ambiguity (wiki-endorsed).
-- Coursework line is low-value per wiki; MAY be dropped for space when a JD-relevant
-  bullet needs room. Keep ML/DL courses when applying to ML roles.
+- Citizenship, sponsorship, relocation, and availability belong in application
+  questions, not in the resume.
+- Coursework is intentionally retained at 8-9 verified courses for every role.
 - TartanHacks bold: keep (award signal, counts as an impact bold).
