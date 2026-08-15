@@ -18,6 +18,28 @@ import workday
 
 
 class WorkdayAnswerTests(unittest.TestCase):
+    def test_company_website_source_navigates_hierarchy_without_other_fallback(self):
+        self.assertEqual(
+            "Valeo Websites",
+            workday._workday_prompt_target(
+                "Company website",
+                ["Employee Referral", "Jobboards", "Valeo Websites"],
+            ),
+        )
+        self.assertEqual(
+            "Valeo Website",
+            workday._workday_prompt_target(
+                "Company website",
+                ["Other (Website)", "Valeo.hu", "Valeo Website"],
+            ),
+        )
+        self.assertIsNone(
+            workday._workday_prompt_target(
+                "Company website",
+                ["Other (Website)", "Careers Website", "Corporate Website"],
+            )
+        )
+
     def test_activation_link_must_match_the_exact_workday_tenant(self) -> None:
         good = "https://nelnet.wd1.myworkdayjobs.com/MyNelnet/activate/secret-token"
         evil = "https://evil.example/activate/stolen"

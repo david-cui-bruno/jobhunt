@@ -199,6 +199,33 @@ def _checkgroup_targets(answer: object, labels: list[str]) -> list[str]:
     return targets
 
 
+def _workday_prompt_target(answer: object, options: list[str]) -> str | None:
+    """Resolve a Workday prompt option without guessing among similar sources.
+
+    Recruiting-source prompts are often hierarchical. An approved intent such as
+    ``Company website`` first needs the employer-specific ``... Websites``
+    category, followed by its singular ``... Website`` leaf. The generic matcher
+    does not stem website/websites, and choosing the first website-like option can
+    incorrectly select ``Other (Website)``. Only use a semantic fallback when one
+    non-Other website option is unambiguous.
+    """
+    target = qa._best_option(str(answer), options)
+    if target:
+        return target
+    normalized_answer = re.sub(r"[^a-z0-9]", "", str(answer).lower())
+    if "website" not in normalized_answer:
+        return None
+    website_options = [
+        option for option in options
+        if "website" in re.sub(r"[^a-z0-9]", "", option.lower())
+    ]
+    specific = [
+        option for option in website_options
+        if not re.search(r"\bother\b", option, re.I)
+    ]
+    return specific[0] if len(specific) == 1 else None
+
+
 def wd_fill(page, field: dict, answer: object) -> bool:
     """Fill one Workday formField. Address by fkit id when unique (index shifts as
     the DOM mutates), else fall back to extraction index."""
@@ -318,34 +345,25 @@ def wd_fill(page, field: dict, answer: object) -> bool:
                 page.wait_for_timeout(1600)
             except Exception:
                 pass
-            opt = page.locator("[data-automation-id='promptOption'], [role=option]")
-            opts = [o.strip() for o in opt.all_inner_texts()]
-            target = qa._best_option(str(answer), opts)
-            if target is None and opts:
-                # hierarchical prompt: navigate category -> leaf (up to 2 levels)
-                try:
-                    inp.fill("")
-                except Exception:
-                    pass
-                page.wait_for_timeout(800)
-                for level in range(2):
-                    opts = [o.strip() for o in opt.all_inner_texts()]
-                    pick = qa._best_option(str(answer), opts) or next(
-                        (o for o in opts if o.lower() in ("career websites", "job boards", "other")), None)
-                    if not pick:
-                        break
-                    page.locator(f"[data-automation-id='promptOption']:has-text(\"{pick[:40]}\")").first.click(timeout=4000)
-                    page.wait_for_timeout(1200)
-                    if ff.locator("[data-automation-id='selectedItem']").count():
-                        return True
-                opts = [o.strip() for o in opt.all_inner_texts()]
-                # Never choose an arbitrary first option. An unmatched answer
-                # must remain empty so the required-field gate routes it to
-                # manual input instead of submitting a false value.
-                target = qa._best_option(str(answer), opts)
-            if target:
-                page.locator(f"[data-automation-id='promptOption']:has-text(\"{target[:40]}\"), [role=option]:has-text(\"{target[:40]}\")").first.click(timeout=4000)
-                page.wait_for_timeout(600)
+            # Hierarchical prompt: navigate approved category -> approved leaf.
+            # Use only visible Workday prompt options and click by exact index so
+            # duplicated/substring labels from unrelated controls cannot win.
+            for _ in range(3):
+                prompt = page.locator("[data-automation-id='promptOption']:visible")
+                if not prompt.count():
+                    prompt = page.locator("[role=option]:visible")
+                opts = [o.strip() for o in prompt.all_inner_texts()]
+                target = _workday_prompt_target(answer, opts)
+                if target is None:
+                    break
+                matches = [index for index, option in enumerate(opts)
+                           if option.strip() == target.strip()]
+                if len(matches) != 1:
+                    break
+                prompt.nth(matches[0]).click(timeout=4000)
+                page.wait_for_timeout(1200)
+                if ff.locator("[data-automation-id='selectedItem']").count():
+                    return True
             page.keyboard.press("Escape")
             return bool(ff.locator("[data-automation-id='selectedItem']").count())
     except Exception:
