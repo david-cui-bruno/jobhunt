@@ -406,7 +406,8 @@ class QaManualPolicyTest(unittest.TestCase):
     def test_global_generic_recruiting_sources_choose_an_observed_option(self):
         approved = json.loads(json.dumps(self.APPROVED))
         approved["preferences"]["recruiting_sources"] = [
-            "Social media", "Searching for jobs online", "Google",
+            "Social media", "Google", "LinkedIn", "Indeed", "Handshake",
+            "Searching for jobs online", "Other Job Board",
         ]
         freeform = {
             "id": "source",
@@ -422,16 +423,26 @@ class QaManualPolicyTest(unittest.TestCase):
             "label": "How Did You Hear About Us?*",
             "options": [],
         }
+        stepstone = {
+            "id": "stepstone-source",
+            "label": "How did you hear about this position?*",
+            "options": [
+                "StepStone Career Board", "Referred", "LinkedIn",
+                "Direct Outreach (LinkedIn Inmail)", "Indeed", "Handshake",
+                "Other Job Board", "On-campus Event", "Other",
+            ],
+        }
 
         self.assertEqual(
             {
                 "source": "Social media (Instagram, Facebook, X)",
                 "dynamic": "Social media",
+                "stepstone-source": "LinkedIn",
             },
             {
                 item["id_or_name"]: item["answer"]
                 for item in qa.explicit_approved_answers(
-                    [freeform, dynamic], approved_answers=approved,
+                    [freeform, dynamic, stepstone], approved_answers=approved,
                 )
             },
         )
@@ -439,6 +450,9 @@ class QaManualPolicyTest(unittest.TestCase):
             freeform,
             "Social media (Instagram, Facebook, X)",
             approved_answers=approved,
+        ))
+        self.assertFalse(qa.answer_requires_manual(
+            stepstone, "LinkedIn", approved_answers=approved,
         ))
         self.assertTrue(qa.answer_requires_manual(
             freeform, "LinkedIn post", approved_answers=approved,
