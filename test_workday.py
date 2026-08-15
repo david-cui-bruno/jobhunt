@@ -5,7 +5,9 @@ import io
 import inspect
 import json
 import sys
+import types
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest import mock
 
@@ -39,6 +41,42 @@ class WorkdayAnswerTests(unittest.TestCase):
                 message, "psu.wd1.myworkdayjobs.com"
             )
         )
+
+    def test_activation_lookup_supports_branded_sender_domains(self) -> None:
+        good = "https://valeo.wd3.myworkdayjobs.com/valeo_jobs/activate/token"
+        encoded = base64.urlsafe_b64encode(
+            f'<a href="{good}">verify</a>'.encode()
+        ).decode().rstrip("=")
+        message = {
+            "internalDate": "2000000000000",
+            "payload": {
+                "mimeType": "text/html",
+                "body": {"data": encoded},
+                "headers": [
+                    {"name": "From", "value": "Workday - Valeo <workday@valeo.com>"}
+                ],
+            },
+        }
+        calls: list[str] = []
+
+        def fake_call(path: str) -> dict:
+            calls.append(path)
+            if path.startswith("/messages?q="):
+                return {"messages": [{"id": "branded-sender"}]}
+            return message
+
+        fake_mailer = types.SimpleNamespace(_call=fake_call)
+        with mock.patch.dict(sys.modules, {"mailer": fake_mailer}):
+            self.assertEqual(
+                good,
+                workday.fetch_workday_activation_url(
+                    "valeo", "valeo.wd3.myworkdayjobs.com", not_before=0
+                ),
+            )
+
+        query = urllib.parse.unquote(calls[0])
+        self.assertIn('subject:"Verify your candidate account"', query)
+        self.assertNotIn("from:", query)
 
     def test_new_workday_social_auth_chooser_is_supported(self) -> None:
         source = inspect.getsource(workday._open_email_auth)

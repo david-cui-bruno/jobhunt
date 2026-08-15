@@ -659,9 +659,13 @@ def fetch_workday_activation_url(company_key: str, expected_host: str,
     import mailer
 
     after = max(not_before - 300, int(time.time()) - 2 * 86400)
+    # Workday tenants do not use one stable sender convention. Most send from
+    # ``<tenant>@otp.workday.com``, while branded tenants can use addresses such
+    # as ``workday@valeo.com``. Search by the exact activation subject, then rely
+    # on workday_activation_url_from_message's exact-host check to bind the
+    # result to this tenant.
     query = urllib.parse.quote(
-        f'after:{after} from:{company_key}@otp.workday.com '
-        'subject:"Verify your candidate account"'
+        f'in:anywhere after:{after} subject:"Verify your candidate account"'
     )
     for attempt in range(6):
         data = mailer._call(f"/messages?q={query}&maxResults=10")
