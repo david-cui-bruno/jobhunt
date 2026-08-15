@@ -239,9 +239,11 @@ def apply_course_variant(tex: str, role_type: str) -> str:
 
 def infer_role_type(title: str, jd: str) -> str:
     """Classify the small deterministic variant set without model output."""
-    text = f"{title}\n{jd}".lower()
-    patterns = [
-        ("security", r"\b(?:security|exploit|vulnerability|threat|cryptograph)"),
+    title_text = title.lower()
+    jd_text = jd.lower()
+    title_patterns = [
+        ("security", r"\b(?:cyber ?security|information security|application security|"
+                     r"security (?:engineer|researcher|analyst)|penetration tester)\b"),
         ("embedded", r"\b(?:embedded|firmware|microcontroller|rtos|fpga|hardware)"),
         ("ml", r"\b(?:machine learning|deep learning|artificial intelligence|ai engineer|"
                r"computer vision|pytorch|tensorflow|research scientist)\b"),
@@ -250,7 +252,27 @@ def infer_role_type(title: str, jd: str) -> str:
         ("backend", r"\b(?:backend|back[ -]?end|distributed systems?|platform engineer|"
                   r"infrastructure|cloud engineer)\b"),
     ]
-    return next((role for role, pattern in patterns if re.search(pattern, text)), "general")
+    title_match = next(
+        (role for role, pattern in title_patterns if re.search(pattern, title_text)),
+        None,
+    )
+    if title_match:
+        return title_match
+
+    # Job descriptions often contain generic phrases such as "security best
+    # practices" or "security clearance". Those are not evidence that the role
+    # is a security position, so the JD fallback requires domain-specific terms.
+    jd_patterns = [
+        ("security", r"\b(?:(?:application|product|cloud|network|information|cyber) "
+                     r"security|security (?:engineer|researcher|analyst)|vulnerability "
+                     r"research|penetration testing|threat detection|malware analysis|"
+                     r"cryptograph(?:y|ic)|exploit development)\b"),
+        *title_patterns[1:],
+    ]
+    return next(
+        (role for role, pattern in jd_patterns if re.search(pattern, jd_text)),
+        "general",
+    )
 
 
 def build_grounded_resume(title: str, jd: str, include_skill_coverage: bool = True) -> str:

@@ -70,6 +70,27 @@ class ResumeQualityTests(unittest.TestCase):
         self.assertIn("Deep Learning", courses)
         self.assertIn("Operating Systems", courses[-1])
 
+    def test_security_boilerplate_does_not_override_ml_title(self) -> None:
+        role = tailor.infer_role_type(
+            "Machine Learning Engineer Intern",
+            "Build model infrastructure following security best practices.",
+        )
+        self.assertEqual("ml", role)
+
+    def test_security_clearance_does_not_override_backend_title(self) -> None:
+        role = tailor.infer_role_type(
+            "Backend Engineer Intern",
+            "This position may require a government security clearance.",
+        )
+        self.assertEqual("backend", role)
+
+    def test_security_role_title_still_selects_security_courses(self) -> None:
+        role = tailor.infer_role_type(
+            "Application Security Engineer Intern",
+            "Review services and collaborate with backend engineers.",
+        )
+        self.assertEqual("security", role)
+
     def test_tailor_never_calls_freeform_resume_generation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(tailor, "OUT_DIR", Path(tmp)), \
