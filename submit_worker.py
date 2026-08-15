@@ -72,11 +72,15 @@ def main() -> int:
         print(json.dumps(result, default=str))
         return 0
     except Exception as exc:
+        from submission_state import submit_was_attempted
+        attempted = submit_was_attempted()
         print(json.dumps({
-            "outcome": "retryable_failure",
+            "outcome": "manual" if attempted else "retryable_failure",
             "ok": False,
             "submitted": False,
-            "retryable": True,
+            "retryable": not attempted,
+            "click_attempted": attempted,
+            "submission_uncertain": attempted,
             "reason": f"adapter crash: {type(exc).__name__}: {exc}",
             "detected_ats": detected,
         }))
@@ -88,11 +92,18 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
+        try:
+            from submission_state import submit_was_attempted
+            attempted = submit_was_attempted()
+        except Exception:
+            attempted = False
         print(json.dumps({
-            "outcome": "retryable_failure",
+            "outcome": "manual" if attempted else "retryable_failure",
             "ok": False,
             "submitted": False,
-            "retryable": True,
+            "retryable": not attempted,
+            "click_attempted": attempted,
+            "submission_uncertain": attempted,
             "reason": f"worker crash: {type(exc).__name__}: {exc}",
             "elapsed_s": round(time.monotonic() - started, 3),
         }))

@@ -15,6 +15,7 @@ import yaml
 from playwright.sync_api import sync_playwright, Page, TimeoutError as PWTimeout
 
 import qa
+from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
 from timeouts import configure_page
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -228,6 +229,7 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
 
         # submit
         try:
+            mark_submit_attempted()
             page.locator("button:has-text('Submit application'), input[type=submit]").first.click(timeout=5000)
             page.wait_for_timeout(4000)
             # email verification gate: Greenhouse sends a 6-char code to the applicant email
@@ -235,7 +237,7 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
             if "verification code" in body or "security code" in body:
                 code = _fetch_gh_code()
                 if not code:
-                    result["reason"] = "verification code email not found"
+                    mark_unconfirmed(result, "verification code email not found after submit click")
                     _shot(page, slug, "fail_code")
                     browser.close()
                     return result
@@ -263,12 +265,12 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
                 page.wait_for_timeout(4000)
             _shot(page, slug, "submitted")
             body = page.inner_text("body").lower()
-            if "thank" in body or "received" in body or "submitted" in body:
+            if confirmation_observed(body, page.url):
                 result.update(ok=True, submitted=True, reason="confirmed")
             else:
-                result.update(ok=True, submitted=True, reason="submitted (no confirm text found)")
+                mark_unconfirmed(result)
         except PWTimeout:
-            result["reason"] = "submit button not found"
+            mark_unconfirmed(result, "submit click timed out; verify possible prior submission")
         browser.close()
     return result
 

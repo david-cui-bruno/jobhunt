@@ -31,6 +31,20 @@ class WorkdayQualityTests(unittest.TestCase):
         )
         self.assertIsNone(workday._workday_date_parts("graduating 2028", has_day=False))
 
+    def test_full_date_uses_its_month_in_month_year_widgets(self) -> None:
+        self.assertEqual(
+            workday._workday_date_parts("09/08/2026", has_day=False),
+            ("09", "", "2026"),
+        )
+        self.assertEqual(
+            workday._workday_date_parts("06/01/2006", has_day=False),
+            ("06", "", "2006"),
+        )
+        self.assertEqual(
+            workday._workday_date_parts("05/25/2027", has_day=False),
+            ("05", "", "2027"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

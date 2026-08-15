@@ -28,6 +28,7 @@ import yaml
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 import qa
+from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
 from timeouts import configure_page
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -157,6 +158,12 @@ def _workday_date_parts(answer: str, has_day: bool) -> tuple[str, str, str] | No
         if not full:
             return None
         return full.group(1).zfill(2), full.group(2).zfill(2), full.group(3)
+    # A grounded full date may be rendered into a Workday widget that only asks
+    # for month/year.  Parse it before the shorter pattern, otherwise the
+    # DD/YYYY tail of 09/08/2026 is misread as August 2026.
+    if full:
+        month = int(full.group(1))
+        return (str(month).zfill(2), "", full.group(3)) if 1 <= month <= 12 else None
     if month_year:
         month = int(month_year.group(1))
         return (str(month).zfill(2), "", month_year.group(2)) if 1 <= month <= 12 else None
@@ -1015,13 +1022,15 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                     browser.close()
                     return result
                 sub = page.locator("button:has-text('Submit'), [data-automation-id='pageFooterNextButton']").first
+                mark_submit_attempted()
                 sub.click(timeout=8000)
                 page.wait_for_timeout(6000)
                 _shot(page, slug, "submitted")
                 body = page.inner_text("body").lower()
-                confirmed = any(w in body for w in ("thank", "congratulations", "submitted", "received"))
-                result.update(ok=True, submitted=True,
-                              reason="confirmed" if confirmed else "submitted (no confirm text)")
+                if confirmation_observed(body, page.url):
+                    result.update(ok=True, submitted=True, reason="confirmed")
+                else:
+                    mark_unconfirmed(result)
                 browser.close()
                 return result
 

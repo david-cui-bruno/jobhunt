@@ -12,6 +12,7 @@ import yaml
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 import qa
+from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
 from timeouts import configure_page
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -125,15 +126,17 @@ def apply_lever(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
             return result
 
         try:
+            mark_submit_attempted()
             page.locator("button#btn-submit, button:has-text('Submit application')").first.click(timeout=5000)
             page.wait_for_timeout(5000)
             _shot(page, slug, "submitted")
             body = page.inner_text("body").lower()
-            ok_text = any(w in body for w in ("thank", "received", "application has been"))
-            result.update(ok=True, submitted=True,
-                          reason="confirmed" if ok_text else "submitted (no confirm text)")
+            if confirmation_observed(body, page.url):
+                result.update(ok=True, submitted=True, reason="confirmed")
+            else:
+                mark_unconfirmed(result)
         except PWTimeout:
-            result["reason"] = "submit button not found"
+            mark_unconfirmed(result, "submit click timed out; verify possible prior submission")
         browser.close()
     return result
 

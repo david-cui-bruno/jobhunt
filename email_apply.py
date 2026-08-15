@@ -57,13 +57,18 @@ def _record_sent(conn: sqlite3.Connection, posting_id: str, to_addr: str,
                  pdf: Path, message_id: str | None = None) -> None:
     if message_id:
         conn.execute("INSERT OR IGNORE INTO sent_messages VALUES (?)", (message_id,))
-    conn.execute("UPDATE postings SET status='submitted' WHERE posting_id=?", (posting_id,))
+    changed = conn.execute(
+        "UPDATE postings SET status='submitted' WHERE posting_id=? AND status='submitting'",
+        (posting_id,),
+    ).rowcount
+    if changed != 1:
+        raise RuntimeError("email submission claim lost after send; verify manually")
     conn.execute(
-        "INSERT OR REPLACE INTO applications VALUES (?,?,?,?,?,?)",
+        "INSERT INTO applications VALUES (?,?,?,?,?,?)",
         (posting_id, str(pdf), "email", int(time.time()), f"emailed {to_addr}", ""))
 
 DRAFT_PROMPT = """Draft a short application email for this posting. Candidate: David Cui,
-Brown CS+Econ '27 (GPA 4.0), ex-YC founding CTO (Framewise Health), SWE intern at Freya (YC S25,
+Brown CS+Econ, expected June 2028 (GPA 4.0), ex-YC founding CTO (Framewise Health), SWE intern at Freya (YC S25,
 real-time LLM voice agents) and Sotatek (fraud-detection ML). USACO/AIME background.
 
 POSTING (from HN Who's Hiring):
@@ -120,11 +125,36 @@ def compose_ready_email_postings(limit: int = 3) -> list[str]:
     conn.execute("CREATE TABLE IF NOT EXISTS sent_messages (message_id TEXT PRIMARY KEY)")
     rows = conn.execute(
         "SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING(posting_id) "
-        "WHERE p.status='ready' AND p.url LIKE '%news.ycombinator.com%' LIMIT ?",
+        "WHERE p.status='ready' AND p.url LIKE '%news.ycombinator.com%' "
+        "AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.posting_id=p.posting_id) "
+        "AND NOT EXISTS (SELECT 1 FROM email_apps ea WHERE ea.posting_id=p.posting_id) "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM applications a2 JOIN postings p2 USING(posting_id) "
+        "  WHERE lower(trim(p2.company))=lower(trim(p.company))"
+        ") LIMIT ?",
         (limit,)).fetchall()
     done = []
     for r in rows:
         if conn.execute("SELECT 1 FROM email_apps WHERE posting_id=?", (r["posting_id"],)).fetchone():
+            continue
+        pdf = _runtime_path(r["resume_pdf"])
+        import submit as submit_mod
+        quality_ok, quality_reason = submit_mod._resume_quality_ready(
+            pdf, r["posting_id"]
+        )
+        if not quality_ok:
+            conn.execute(
+                "UPDATE postings SET status='manual' WHERE posting_id=? AND status='ready'",
+                (r["posting_id"],),
+            )
+            if "last_error" in {
+                column[1] for column in conn.execute("PRAGMA table_info(postings)")
+            }:
+                conn.execute(
+                    "UPDATE postings SET last_error=? WHERE posting_id=?",
+                    (f"resume quality gate: {quality_reason}", r["posting_id"]),
+                )
+            conn.commit()
             continue
         text = fetch_hn_text(r["url"])
         if not text:
@@ -152,12 +182,77 @@ def compose_ready_email_postings(limit: int = 3) -> list[str]:
             continue
         if not d.get("subject"):
             continue
-        pdf = _runtime_path(r["resume_pdf"])
-        resp = _send_application(to_addr, d["subject"], d["body"], pdf)
-        conn.execute("INSERT INTO email_apps VALUES (?,?,?,?,?,'sent')",
-                     (r["posting_id"], resp.get("id", ""), to_addr, None, int(time.time())))
-        _record_sent(conn, r["posting_id"], to_addr, pdf, resp.get("id"))
-        conn.commit()
+        # Commit a durable point-of-no-return before calling Gmail. If the
+        # process dies after Gmail accepts the message but before the ledger
+        # commit, this row prevents an automatic duplicate send.
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute(
+                "SELECT 1 FROM applications WHERE posting_id=?",
+                (r["posting_id"],),
+            ).fetchone() or conn.execute(
+                "SELECT 1 FROM email_apps WHERE posting_id=?",
+                (r["posting_id"],),
+            ).fetchone() or conn.execute(
+                "SELECT 1 FROM applications a JOIN postings prior USING(posting_id) "
+                "WHERE lower(trim(prior.company))=lower(trim(?)) LIMIT 1",
+                (r["company"],),
+            ).fetchone() or conn.execute(
+                "SELECT 1 FROM postings WHERE posting_id<>? "
+                "AND lower(trim(company))=lower(trim(?)) "
+                "AND status IN ('submitting','sprinting') LIMIT 1",
+                (r["posting_id"], r["company"]),
+            ).fetchone():
+                conn.rollback()
+                continue
+            changed = conn.execute(
+                "UPDATE postings SET status='submitting' "
+                "WHERE posting_id=? AND status='ready'",
+                (r["posting_id"],),
+            ).rowcount
+            if changed != 1:
+                conn.rollback()
+                continue
+            conn.execute(
+                "INSERT INTO email_apps VALUES (?,?,?,?,?,'sending')",
+                (r["posting_id"], None, to_addr, None, int(time.time())),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+        try:
+            resp = _send_application(to_addr, d["subject"], d["body"], pdf)
+            conn.execute("BEGIN IMMEDIATE")
+            _record_sent(conn, r["posting_id"], to_addr, pdf, resp.get("id"))
+            conn.execute(
+                "UPDATE email_apps SET draft_id=?, status='sent' WHERE posting_id=?",
+                (resp.get("id", ""), r["posting_id"]),
+            )
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            # Gmail/network failures after the request begins have an unknown
+            # external outcome. Quarantine instead of risking a second email.
+            conn.execute(
+                "UPDATE email_apps SET status='uncertain' WHERE posting_id=?",
+                (r["posting_id"],),
+            )
+            conn.execute(
+                "UPDATE postings SET status='manual' WHERE posting_id=? AND status='submitting'",
+                (r["posting_id"],),
+            )
+            if "last_error" in {
+                row[1] for row in conn.execute("PRAGMA table_info(postings)")
+            }:
+                conn.execute(
+                    "UPDATE postings SET last_error=? WHERE posting_id=?",
+                    (f"email send uncertain: {type(exc).__name__}: {exc}"[:1000],
+                     r["posting_id"]),
+                )
+            conn.commit()
+            continue
         done.append(r["company"])
     conn.close()
     return done
@@ -172,10 +267,45 @@ def _send_draft(conn, r, thread) -> bool:
     if not (m_sub and m_body):
         return False
     pdf = _runtime_path(r["resume_pdf"])
-    resp = _send_application(r["to_addr"], m_sub.group(1), m_body.group(1), pdf)
-    conn.execute("UPDATE email_apps SET status='sent' WHERE posting_id=?", (r["posting_id"],))
-    _record_sent(conn, r["posting_id"], r["to_addr"], pdf, resp.get("id"))
-    return True
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        posting_claimed = conn.execute(
+            "UPDATE postings SET status='submitting' "
+            "WHERE posting_id=? AND status='ready'",
+            (r["posting_id"],),
+        ).rowcount
+        email_claimed = conn.execute(
+            "UPDATE email_apps SET status='sending' "
+            "WHERE posting_id=? AND status='awaiting_approval'",
+            (r["posting_id"],),
+        ).rowcount
+        if posting_claimed != 1 or email_claimed != 1:
+            conn.rollback()
+            return False
+        conn.commit()
+
+        resp = _send_application(r["to_addr"], m_sub.group(1), m_body.group(1), pdf)
+        conn.execute("BEGIN IMMEDIATE")
+        _record_sent(conn, r["posting_id"], r["to_addr"], pdf, resp.get("id"))
+        conn.execute(
+            "UPDATE email_apps SET draft_id=?, status='sent' WHERE posting_id=?",
+            (resp.get("id", ""), r["posting_id"]),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        conn.execute(
+            "UPDATE email_apps SET status='uncertain' WHERE posting_id=?",
+            (r["posting_id"],),
+        )
+        conn.execute(
+            "UPDATE postings SET status='manual' "
+            "WHERE posting_id=? AND status='submitting'",
+            (r["posting_id"],),
+        )
+        conn.commit()
+        return False
 
 
 def poll_approvals() -> list[str]:

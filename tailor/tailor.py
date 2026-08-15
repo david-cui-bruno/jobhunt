@@ -601,7 +601,7 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
     )
     out_plan.write_text(plan)
 
-    def write_quality(tex: str, source: str, review_required: bool, reason: str = "") -> None:
+    def write_quality(tex: str, source: str, review_required: bool, reason: str = "") -> bool:
         why: list[str] = []
         structurally_valid = validate(tex, why)
         covered, missing_skills = jd_skills_covered(tex, jd)
@@ -629,6 +629,7 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
             "missing_claimable_skills": missing_skills,
             "expected_grad_date": GRAD_DATE,
         }, indent=2) + "\n")
+        return review_required
 
     def finish(include_skill_coverage: bool) -> Path | None:
         global LAST_PAGE_COUNT
@@ -648,11 +649,17 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
             )
             return None
         out_tex.write_text(tex)
-        write_quality(
+        review_required = write_quality(
             tex,
             source="deterministic_grounded",
             review_required=False,
         )
+        if review_required:
+            print(
+                f"[tailor] quality review required: {out_quality}",
+                file=sys.stderr,
+            )
+            return None
         return out_pdf
 
     result = finish(include_skill_coverage=True)

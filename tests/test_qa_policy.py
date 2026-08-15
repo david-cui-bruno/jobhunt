@@ -1065,11 +1065,22 @@ class QaManualPolicyTest(unittest.TestCase):
             },
         ]
 
-        rendered = qa.explicit_approved_answers(
-            controls,
-            company_context="Nextiva Akuna Capital",
-            approved_answers=approved,
-        )
+        company_contexts = {
+            "nextiva-employee": "Nextiva",
+            "nextiva-onsite": "Nextiva",
+            "akuna-application": "Akuna Capital",
+        }
+        policy_controls = [
+            dict(item, company_context=company_contexts.get(item["id"], ""))
+            for item in controls
+        ]
+        rendered = []
+        for control in policy_controls:
+            rendered.extend(qa.explicit_approved_answers(
+                [control],
+                company_context=control["company_context"],
+                approved_answers=approved,
+            ))
 
         self.assertEqual(
             {
@@ -1093,7 +1104,7 @@ class QaManualPolicyTest(unittest.TestCase):
             )
         ]
         allowed, blocked = qa.filter_manual_answers(
-            [dict(item, company_context="Nextiva Akuna Capital") for item in controls],
+            policy_controls,
             right_answers,
             approved_answers=approved,
         )
@@ -1108,7 +1119,8 @@ class QaManualPolicyTest(unittest.TestCase):
             for item, answer in zip(wrong_controls, ["No", "Yes", "A paper", "No", "Yes"])
         ]
         allowed, blocked = qa.filter_manual_answers(
-            [dict(item, company_context="Nextiva Akuna Capital") for item in wrong_controls],
+            [dict(item, company_context=company_contexts.get(item["id"], ""))
+             for item in wrong_controls],
             wrong_answers,
             approved_answers=approved,
         )
@@ -1268,6 +1280,83 @@ class QaManualPolicyTest(unittest.TestCase):
             control,
             "I resolved the disagreement by aligning on shared evidence.",
             approved_answers=approved,
+        ))
+
+    def test_number_eighteen_is_not_mistaken_for_an_age_question(self):
+        controls = [
+            {
+                "id": "experience",
+                "label": "Do you have 18 months of professional work experience?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+            {
+                "id": "lifting",
+                "label": "Can you lift 18 kg?",
+                "options": ["Yes", "No"],
+                "value": "",
+            },
+        ]
+        self.assertEqual([], qa.explicit_approved_answers(
+            controls, approved_answers=self.APPROVED,
+        ))
+        for control in controls:
+            self.assertFalse(qa._blocked_answer_is_approved(
+                control, "Yes", self.APPROVED,
+            ))
+
+        actual_age = {
+            "id": "age",
+            "label": "Are you 18 or older?",
+            "options": ["Yes", "No"],
+            "value": "",
+        }
+        self.assertEqual(
+            [{"id_or_name": "age", "answer": "Yes"}],
+            qa.explicit_approved_answers([actual_age], approved_answers=self.APPROVED),
+        )
+
+    def test_company_facts_do_not_cross_company_or_word_boundaries(self):
+        self.assertTrue(qa._company_matches("Sentry", "Have you used Sentry?"))
+        self.assertFalse(qa._company_matches("Meta", "Describe your metadata work."))
+        self.assertFalse(qa._company_matches(
+            "Crowe", "Have you worked here before?", "Crowell & Moring",
+        ))
+        self.assertFalse(qa._company_matches(
+            "Sentry", "Have you used our platform?", "Sentry Insurance",
+        ))
+        self.assertTrue(qa._company_matches(
+            "Sentry", "Have you used our platform?", "Sentry",
+        ))
+
+    def test_similarly_named_school_is_not_selected(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["education"]["high_school"] = (
+            "Plano West Senior High School, Plano, Texas"
+        )
+        self.assertIsNone(qa._approved_high_school_answer(
+            approved, ["Plano Senior High School", "Plano East Senior High School"],
+        ))
+        self.assertEqual(
+            "Plano West Senior High School",
+            qa._approved_high_school_answer(
+                approved,
+                ["Plano West Senior High School", "Plano Senior High School"],
+            ),
+        )
+
+    def test_pay_expectations_cannot_accept_an_invented_number(self):
+        control = {
+            "id": "pay",
+            "label": "What are your pay expectations?",
+            "value": "",
+        }
+        self.assertTrue(qa.answer_requires_manual(
+            control, "$55/hour", approved_answers=self.APPROVED,
+        ))
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Open to the employer-published range and market rate.",
+            approved_answers=self.APPROVED,
         ))
 
     def test_get_answers_logs_allowed_and_blocked_with_context_without_api(self):

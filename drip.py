@@ -35,7 +35,9 @@ CLAIM_TRANSITIONS = {
     ("sprinting", "submitting"),
     ("tailoring", "queued"),
     ("tailoring", "ready"),
+    ("tailoring", "manual"),
     ("sprinting", "queued"),
+    ("sprinting", "manual"),
     ("sprinting", "filtered_out"),
     ("submitting", "ready"),
     ("submitting", "manual"),
@@ -121,6 +123,56 @@ def recover_stale_claims(conn: sqlite3.Connection) -> int:
     return safe + uncertain
 
 
+def promote_legacy_tailored(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Promote only legacy artifacts that satisfy the current resume gate."""
+    import submit as submit_mod
+
+    promoted = 0
+    quarantined = 0
+    rows = conn.execute(
+        "SELECT p.posting_id, p.company, e.resume_pdf "
+        "FROM postings p LEFT JOIN emails e USING(posting_id) "
+        "WHERE p.status='tailored'"
+    ).fetchall()
+    for row in rows:
+        if row["resume_pdf"]:
+            resume_pdf = submit_mod._runtime_path(row["resume_pdf"], ROOT)
+            quality_ok, quality_reason = submit_mod._resume_quality_ready(
+                resume_pdf, row["posting_id"]
+            )
+        else:
+            quality_ok, quality_reason = False, "resume path is missing"
+
+        if quality_ok:
+            changed = conn.execute(
+                "UPDATE postings SET status='ready', last_attempt_at=? "
+                "WHERE posting_id=? AND status='tailored'",
+                (int(time.time()), row["posting_id"]),
+            ).rowcount
+            if changed == 1:
+                promoted += 1
+                print(f"[drip] verified legacy resume queued: {row['company']}")
+            continue
+
+        changed = conn.execute(
+            "UPDATE postings SET status='manual', outcome='manual', last_error=?, "
+            "last_attempt_at=? WHERE posting_id=? AND status='tailored'",
+            (
+                f"resume quality gate: {quality_reason}",
+                int(time.time()),
+                row["posting_id"],
+            ),
+        ).rowcount
+        if changed == 1:
+            quarantined += 1
+            print(
+                f"[drip] legacy resume quarantined for {row['company']}: "
+                f"{quality_reason}"
+            )
+    conn.commit()
+    return promoted, quarantined
+
+
 def run():
     now = datetime.datetime.now(ET)
     conn = sqlite3.connect(DB)
@@ -180,6 +232,21 @@ def run():
                 jd_text = fetch_jd(row["url"])
                 pdf = tailor(row["posting_id"], row["company"], row["title"], jd_text)
                 if pdf:
+                    import submit as submit_mod
+                    quality_ok, quality_reason = submit_mod._resume_quality_ready(
+                        Path(pdf), row["posting_id"]
+                    )
+                    if not quality_ok:
+                        conn.execute(
+                            "UPDATE postings SET status='manual', outcome='manual', last_error=? "
+                            "WHERE posting_id=? AND status='tailoring'",
+                            (f"resume quality gate: {quality_reason}", row["posting_id"]),
+                        )
+                        conn.commit()
+                        print(
+                            f"[drip] resume quarantined for {row['company']}: {quality_reason}"
+                        )
+                        continue
                     conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
                                  (row["posting_id"], None, None,
                                   str(pdf), str(pdf.with_suffix('.tex')), int(time.time())))
@@ -197,11 +264,9 @@ def run():
                 release_claim(conn, row["posting_id"], "tailoring")
                 print(f"[drip] tailoring failed for {row['company']}: {type(e).__name__}: {e}")
 
-    # 4) Drain legacy tailored rows immediately. New rows enter ready directly.
-    for r in conn.execute("SELECT posting_id, company FROM postings WHERE status='tailored'").fetchall():
-        conn.execute("UPDATE postings SET status='ready' WHERE posting_id=?", (r["posting_id"],))
-        print(f"[drip] legacy tailored row queued: {r['company']}")
-    conn.commit()
+    # 4) Legacy rows may reference pre-deterministic resumes. Never queue one
+    # without the same quality metadata required by the submit lane.
+    promote_legacy_tailored(conn)
 
     # 4b) weekly funnel stats (Sunday 6pm)
     try:

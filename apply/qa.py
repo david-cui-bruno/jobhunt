@@ -42,12 +42,23 @@ def _company_key(value: object) -> str:
 
 def _company_matches(company: object, question: str, company_context: str = "") -> bool:
     key = _company_key(company)
-    question_key = _company_key(question)
     context_key = _company_key(company_context)
-    return bool(key and (
-        key in question_key
-        or (context_key and (key in context_key or context_key in key))
-    ))
+    if not key:
+        return False
+    # When the caller knows which employer owns the form, require an exact
+    # normalized match.  Substring matching leaked facts between distinct firms
+    # such as Crowe/Crowell & Moring and Sentry/Sentry Insurance.
+    if context_key == key:
+        return True
+    # A form can explicitly ask about another firm (for example an audit
+    # independence question about Deloitte).  Accept that only when the literal
+    # company name appears as whole tokens in the question.  This prevents short
+    # names such as "Meta" from matching ordinary words such as "metadata".
+    words = re.findall(r"[a-z0-9]+", str(company or "").lower())
+    if not words:
+        return False
+    pattern = r"(?<![a-z0-9])" + r"[^a-z0-9]+".join(map(re.escape, words)) + r"(?![a-z0-9])"
+    return re.search(pattern, str(question or "").lower()) is not None
 
 
 def relevant_application_answers(controls: list[dict], approved: dict | None = None,
@@ -280,7 +291,7 @@ Return ONLY the JSON array."""
 BLOCKED_QUESTION_PATTERNS = [
     r"\b(date of birth|dob|birth date|birthday|age)\b",
     r"\b(18 or older|at least 18|(?:graduation|graduate) (?:date|month(?:\s+and\s+year)?|year))\b",
-    r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary))\b",
+    r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary)|(?:pay|compensation) expectations?)\b",
     r"\b(offer deadline|exploding offer|outstanding offer|competing offer|pending offer|deadline to accept)\b",
     r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b",
     r"\b(referral|referred|refer you|know anyone|previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker)|current employee)\b",
@@ -431,6 +442,28 @@ def _exact_matching_option(candidates: list[str], options: list[str]) -> str | N
     return None
 
 
+def _institution_option(institution: str, options: list[str]) -> str | None:
+    """Match a known school without fuzzy-merging it into another institution.
+
+    School menus often add a location suffix, while the approved profile may
+    already include one.  A token-prefix match safely handles those suffixes,
+    but unlike the generic 0.6-overlap matcher it cannot turn Plano West Senior
+    High School into Plano Senior High School.  Ambiguous prefixes fail closed.
+    """
+    expected = re.findall(r"[a-z0-9]+", str(institution or "").casefold())
+    if not expected:
+        return None
+    matches = []
+    for option in options:
+        candidate = re.findall(r"[a-z0-9]+", str(option).casefold())
+        if not candidate:
+            continue
+        shorter = min(len(expected), len(candidate))
+        if expected[:shorter] == candidate[:shorter]:
+            matches.append(option)
+    return matches[0] if len(matches) == 1 else None
+
+
 def _year_only_graduation_answer(year: str, options: list[str]) -> str | None:
     """Map a known year only when an option expresses only that year."""
     if not year:
@@ -553,7 +586,7 @@ def _approved_high_school_answer(approved: dict, options: list[str]) -> str | No
         return None
     if not options:
         return school
-    direct = _best_option(school, options)
+    direct = _institution_option(school, options)
     if direct:
         return direct
     if re.search(r"\b(texas|tx|united states|usa|u\.s\.)\b", school, re.I):
@@ -569,7 +602,7 @@ def _approved_college_answer(options: list[str]) -> str | None:
     # Option harvesting is capped because global school menus contain thousands
     # of entries. If Brown is not in the initial slice, return the grounded
     # school name so fill_answers can type-search the async menu.
-    return _best_option(school, options) or school
+    return _institution_option(school, options) or school
 
 
 def _is_current_school_control(control: dict) -> bool:
@@ -628,7 +661,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             answer = _approved_long_form_answer(question, approved)
         if answer is not None:
             pass
-        elif re.search(r"\b(?:18(?:\+|\s+years? of age)?(?:\s+or older)?|at least (?:age )?18)\b", question):
+        elif re.search(r"(?:\b18\+|\b18\s+(?:years? of age(?:\s+or older)?|or older)\b|\bat least (?:age )?18\b)", question):
             birth = _date_parts(identity.get("date_of_birth"))
             if birth:
                 today = datetime.date.today()
@@ -962,7 +995,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     approved_long_form = _approved_long_form_answer(question, approved)
     if approved_long_form is not None:
         return approved_long_form == answer_text.strip()
-    if re.search(r"\b(?:18(?:\+|\s+years? of age)?(?:\s+or older)?|at least (?:age )?18)\b", question):
+    if re.search(r"(?:\b18\+|\b18\s+(?:years? of age(?:\s+or older)?|or older)\b|\bat least (?:age )?18\b)", question):
         birth = _date_parts(identity.get("date_of_birth"))
         actual = _answer_boolean(answer_text)
         if not birth or actual is None:
@@ -1058,7 +1091,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         disability = identity.get("disability") or {}
         expected = disability.get("history") if "history" in question else disability.get("current")
         return expected is not None and _answer_boolean(answer_text) is expected
-    if re.search(r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary))\b", question):
+    if re.search(r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary)|(?:pay|compensation) expectations?)\b", question):
         if not preferences.get("compensation_policy"):
             return False
         numeric = bool(re.search(r"\$|\b\d+(?:\.\d+)?\b", answer_text))

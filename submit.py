@@ -13,6 +13,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -154,56 +155,80 @@ def _mark_outcome(conn: sqlite3.Connection, posting_id: str, status: str,
 
 def _isolated_adapter(payload: dict) -> dict:
     """Run one adapter in a killable process with a hard per-posting deadline."""
-    proc = subprocess.Popen(
-        [sys.executable, str(ROOT / "submit_worker.py")],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=str(ROOT),
-        env={**os.environ, "JOBHUNT_PLAYWRIGHT_TIMEOUT_MS": str(PLAYWRIGHT_TIMEOUT_MS)},
-        start_new_session=True,
+    marker = Path(tempfile.gettempdir()) / (
+        f"jobhunt-submit-{os.getpid()}-{time.time_ns()}.attempted"
     )
     try:
-        stdout, stderr = proc.communicate(
-            json.dumps(payload), timeout=POSTING_TIMEOUT_SECONDS
+        proc = subprocess.Popen(
+            [sys.executable, str(ROOT / "submit_worker.py")],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(ROOT),
+            env={
+                **os.environ,
+                "JOBHUNT_PLAYWRIGHT_TIMEOUT_MS": str(PLAYWRIGHT_TIMEOUT_MS),
+                "JOBHUNT_SUBMISSION_ATTEMPT_MARKER": str(marker),
+            },
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.communicate()
-        return {
-            "outcome": "retryable_failure",
-            "ok": False,
-            "submitted": False,
-            "retryable": True,
-            "submission_uncertain": True,
-            "reason": f"posting timeout after {POSTING_TIMEOUT_SECONDS}s",
-        }
+            stdout, stderr = proc.communicate(
+                json.dumps(payload), timeout=POSTING_TIMEOUT_SECONDS
+            )
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+            return {
+                "outcome": "manual",
+                "ok": False,
+                "submitted": False,
+                "retryable": False,
+                "click_attempted": marker.is_file(),
+                "submission_uncertain": True,
+                "reason": f"posting timeout after {POSTING_TIMEOUT_SECONDS}s; verify possible prior submission",
+            }
 
-    if proc.returncode != 0:
-        return {
-            "outcome": "retryable_failure",
-            "ok": False,
-            "submitted": False,
-            "retryable": True,
-            "submission_uncertain": True,
-            "reason": f"worker exited {proc.returncode}: {stderr[-500:]}",
-        }
-    try:
-        result = json.loads(stdout.strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        return {
-            "outcome": "retryable_failure",
-            "ok": False,
-            "submitted": False,
-            "retryable": True,
-            "submission_uncertain": True,
-            "reason": f"worker returned invalid JSON: {stderr[-500:]}",
-        }
-    return result
+        if proc.returncode != 0:
+            return {
+                "outcome": "manual",
+                "ok": False,
+                "submitted": False,
+                "retryable": False,
+                "click_attempted": marker.is_file(),
+                "submission_uncertain": True,
+                "reason": f"worker exited {proc.returncode}: {stderr[-500:]}; verify possible prior submission",
+            }
+        try:
+            result = json.loads(stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return {
+                "outcome": "manual",
+                "ok": False,
+                "submitted": False,
+                "retryable": False,
+                "click_attempted": marker.is_file(),
+                "submission_uncertain": True,
+                "reason": f"worker returned invalid JSON: {stderr[-500:]}; verify possible prior submission",
+            }
+        attempted = marker.is_file() or bool(result.get("click_attempted"))
+        result["click_attempted"] = attempted
+        if attempted and not result.get("submitted"):
+            result.update(
+                outcome="manual",
+                retryable=False,
+                submission_uncertain=True,
+            )
+            reason = str(result.get("reason") or "adapter stopped after submit click")
+            if "verify" not in reason.lower():
+                result["reason"] = reason + "; verify possible prior submission"
+        return result
+    finally:
+        marker.unlink(missing_ok=True)
 
 
 def _outcome(result: dict) -> str:
@@ -216,6 +241,84 @@ def _outcome(result: dict) -> str:
     if result.get("retryable"):
         return "retryable_failure"
     return "failed"
+
+
+def _send_notice(subject: str, body: str) -> bool:
+    """Best-effort notification after durable state has already been recorded."""
+    try:
+        import mailer
+        mailer.send(subject, body)
+        return True
+    except Exception as exc:
+        print(f"[submit] notification failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return False
+
+
+def _company_already_applied(
+    conn: sqlite3.Connection, company: str, posting_id: str
+) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM applications a JOIN postings prior USING(posting_id) "
+        "WHERE a.posting_id=? OR lower(trim(prior.company))=lower(trim(?)) LIMIT 1",
+        (posting_id, company),
+    ).fetchone() is not None
+
+
+def _resume_quality_ready(resume_pdf: Path, posting_id: str) -> tuple[bool, str]:
+    """Fail closed unless the exact resume artifact passed deterministic review."""
+    if not resume_pdf.is_file():
+        return False, "resume PDF is missing"
+    quality_path = resume_pdf.with_suffix(".quality.json")
+    try:
+        quality = json.loads(quality_path.read_text())
+    except (OSError, ValueError, TypeError):
+        return False, "resume quality metadata is missing or invalid"
+    checks = (
+        (quality.get("posting_id") == posting_id, "quality metadata belongs to another posting"),
+        (quality.get("source") == "deterministic_grounded", "resume source is not deterministic"),
+        (quality.get("review_required") is False, "resume is flagged for human review"),
+        (quality.get("structural_validation") == "passed", "resume structural validation failed"),
+        (quality.get("page_count") == 1, "resume is not verified as exactly one page"),
+    )
+    for passed, reason in checks:
+        if not passed:
+            return False, reason
+    return True, ""
+
+
+def _claim_submission(
+    conn: sqlite3.Connection,
+    posting_id: str,
+    company: str,
+    from_status: str = "ready",
+) -> str:
+    """Atomically reserve one company's external-submission slot."""
+    if from_status not in {"ready", "sprinting"}:
+        raise ValueError(f"invalid submission source status: {from_status}")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if _company_already_applied(conn, company, posting_id):
+            conn.rollback()
+            return "already_applied"
+        active = conn.execute(
+            "SELECT 1 FROM postings "
+            "WHERE posting_id<>? AND lower(trim(company))=lower(trim(?)) "
+            "AND status IN ('submitting','sprinting') LIMIT 1",
+            (posting_id, company),
+        ).fetchone()
+        if active:
+            conn.rollback()
+            return "company_claimed"
+        changed = conn.execute(
+            "UPDATE postings SET status='submitting', last_attempt_at=? "
+            "WHERE posting_id=? AND status=?",
+            (int(time.time()), posting_id, from_status),
+        ).rowcount
+        conn.commit()
+        return "claimed" if changed == 1 else "claim_lost"
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> list[dict]:
@@ -232,18 +335,72 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
         "SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING(posting_id) "
         "WHERE p.status='ready' "
         "AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.posting_id=p.posting_id) "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM applications a2 JOIN postings p2 USING(posting_id) "
+        "  WHERE lower(trim(p2.company))=lower(trim(p.company))"
+        ") "
         "ORDER BY p.rowid DESC").fetchall()
     results = []
     done = 0
-    from drip import claim_posting
     for r in rows:
         if done >= limit or (dry_run and len(results) >= limit):
             break
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
         pdf = _runtime_path(r["resume_pdf"])
-        if not dry_run and not claim_posting(
-                conn, r["posting_id"], "submitting", from_status="ready"):
+        # Rows are selected as a batch, so a prior row in this same run may have
+        # just created a company-level application ledger entry. Re-check before
+        # claiming and touching an external form.
+        if _company_already_applied(conn, r["company"], r["posting_id"]):
+            if not dry_run:
+                conn.execute(
+                    "UPDATE postings SET status='filtered_out', outcome='stale', "
+                    "last_error='company already has an application' "
+                    "WHERE posting_id=? AND status='ready'",
+                    (r["posting_id"],),
+                )
+                conn.commit()
+            results.append({
+                "company": r["company"],
+                "ats": "unknown",
+                "outcome": "stale",
+                "reason": "company already has an application; not resubmitted",
+            })
             continue
+        quality_ok, quality_reason = _resume_quality_ready(pdf, r["posting_id"])
+        if not quality_ok:
+            if not dry_run:
+                conn.execute(
+                    "UPDATE postings SET status='manual', outcome='manual', last_error=? "
+                    "WHERE posting_id=? AND status='ready'",
+                    (f"resume quality gate: {quality_reason}", r["posting_id"]),
+                )
+                conn.commit()
+            results.append({
+                "company": r["company"],
+                "ats": "unknown",
+                "outcome": "manual",
+                "reason": f"resume quality gate: {quality_reason}",
+            })
+            continue
+        if not dry_run:
+            claim = _claim_submission(conn, r["posting_id"], r["company"])
+            if claim in {"already_applied", "company_claimed"}:
+                conn.execute(
+                    "UPDATE postings SET status='filtered_out', outcome='stale', "
+                    "last_error='company already applied or being submitted' "
+                    "WHERE posting_id=? AND status='ready'",
+                    (r["posting_id"],),
+                )
+                conn.commit()
+                results.append({
+                    "company": r["company"],
+                    "ats": "unknown",
+                    "outcome": "stale",
+                    "reason": "company already applied or being submitted; not resubmitted",
+                })
+                continue
+            if claim != "claimed":
+                continue
         if _posting_dead(r["url"]):
             _mark_outcome(conn, r["posting_id"], "filtered_out", "stale",
                           "liveness check marked posting stale", dry_run,
@@ -322,12 +479,20 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
                 continue
             conn.commit()
             done += 1
+        elif res.get("submission_uncertain") and not dry_run:
+            _send_notice(
+                f"[jobhunt] verify possible submission: {r['company']}",
+                f"{r['company']} — {r['title']}\n{r['url']}\n\n"
+                f"The adapter attempted Submit but could not verify the result: {reason}\n"
+                "This posting was quarantined and will not be retried automatically.",
+            )
         elif outcome == "manual" and res.get("unanswered") and not dry_run:
-            import mailer
-            mailer.send(f"[jobhunt] manual input needed: {r['company']}",
-                        f"{r['company']} — {r['title']}\n{r['url']}\n\n"
-                        f"Auto-fill couldn't answer: {res['unanswered']}\n"
-                        "Reply with answers and I'll retry, or apply manually.")
+            _send_notice(
+                f"[jobhunt] manual input needed: {r['company']}",
+                f"{r['company']} — {r['title']}\n{r['url']}\n\n"
+                f"Auto-fill couldn't answer: {res['unanswered']}\n"
+                "Reply with answers and I'll retry, or apply manually.",
+            )
         results.append({"company": r["company"], "ats": res.get("detected_ats", "unknown"),
                         "outcome": outcome, "reason": reason})
         # Keep attempts sequential and lightly staggered without imposing the old

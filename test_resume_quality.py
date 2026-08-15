@@ -130,6 +130,23 @@ class ResumeQualityTests(unittest.TestCase):
                 "test:unknown-pages", "Example", "Software Engineer Intern", "Python",
             ))
 
+    def test_unmeasurable_fill_writes_review_flag_and_returns_none(self) -> None:
+        def compile_one_page(_tex: str, out_pdf: Path) -> bool:
+            out_pdf.write_bytes(b"%PDF-1.4")
+            tailor.LAST_PAGE_COUNT = 1
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(tailor, "OUT_DIR", Path(tmp)), \
+                mock.patch.object(tailor, "compile_pdf", side_effect=compile_one_page), \
+                mock.patch.object(tailor, "measure_fill", return_value=None):
+            self.assertIsNone(tailor.tailor(
+                "test:review-required", "Example", "Software Engineer Intern", "Python",
+            ))
+            quality_files = list(Path(tmp).glob("*.quality.json"))
+            self.assertEqual(1, len(quality_files))
+            self.assertIn('"review_required": true', quality_files[0].read_text())
+
     def test_tailor_never_calls_freeform_resume_generation(self) -> None:
         def compile_one_page(_tex: str, out_pdf: Path) -> bool:
             out_pdf.write_bytes(b"%PDF-1.4")

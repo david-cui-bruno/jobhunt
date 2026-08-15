@@ -17,6 +17,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
 from timeouts import configure_page
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -150,10 +151,15 @@ def apply_waas(url: str, slug: str, dry_run: bool = True) -> dict:
             b.close()
             return result
         send = page.locator("button:has-text('Send'), button:has-text('Apply')").last
+        mark_submit_attempted()
         send.click(timeout=5000)
         page.wait_for_timeout(3000)
         page.screenshot(path=str(ROOT / "out" / "screenshots" / f"{slug}_waas_sent.png"), full_page=True)
-        result.update(ok=True, submitted=True, reason="sent")
+        body = page.inner_text("body")
+        if confirmation_observed(body, page.url):
+            result.update(ok=True, submitted=True, reason="confirmed")
+        else:
+            mark_unconfirmed(result)
         ctx.storage_state(path=str(STATE))
         b.close()
     return result

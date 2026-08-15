@@ -83,6 +83,21 @@ def run() -> list[dict]:
             continue
 
         import submit as submit_mod
+        quality_ok, quality_reason = submit_mod._resume_quality_ready(
+            Path(pdf), r["posting_id"]
+        )
+        if not quality_ok:
+            conn.execute(
+                "UPDATE postings SET status='manual', outcome='manual', last_error=? "
+                "WHERE posting_id=? AND status='sprinting'",
+                (f"resume quality gate: {quality_reason}", r["posting_id"]),
+            )
+            conn.commit()
+            print(
+                f"[sprint] resume quarantined for {r['company']}: {quality_reason}",
+                flush=True,
+            )
+            continue
         if submit_mod._posting_dead(r["url"]):
             transition_claim(conn, r["posting_id"], "sprinting", "filtered_out")
             continue
@@ -91,14 +106,27 @@ def run() -> list[dict]:
         conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
                      (r["posting_id"], None, None, str(pdf),
                       str(pdf.with_suffix(".tex")), int(time.time())))
+        conn.commit()
         # This marker separates a safely retryable tailoring crash from a browser
         # crash whose remote submission result may be unknowable.
-        if not transition_claim(conn, r["posting_id"], "sprinting", "submitting",
-                                commit=False):
+        claim = submit_mod._claim_submission(
+            conn, r["posting_id"], r["company"], from_status="sprinting"
+        )
+        if claim != "claimed":
             conn.rollback()
-            print(f"[sprint] claim lost; discarded late result: {r['company']}", flush=True)
+            if claim in {"already_applied", "company_claimed"}:
+                conn.execute(
+                    "UPDATE postings SET status='filtered_out', outcome='stale', "
+                    "last_error='company already applied or being submitted' "
+                    "WHERE posting_id=? AND status='sprinting'",
+                    (r["posting_id"],),
+                )
+                conn.commit()
+            print(
+                f"[sprint] submission claim unavailable ({claim}): {r['company']}",
+                flush=True,
+            )
             continue
-        conn.commit()
 
         # submit RIGHT NOW via the isolated adapter (same as submit.py)
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
@@ -123,10 +151,23 @@ def run() -> list[dict]:
                 expected_status="submitting", commit=False,
             )
             if changed:
-                conn.execute("INSERT OR REPLACE INTO applications VALUES (?,?,?,?,?,?)",
-                             (r["posting_id"], str(pdf), str(res.get("detected_ats", "unknown")),
-                              int(time.time()), reason, "sprint"))
-                conn.commit()
+                try:
+                    conn.execute("INSERT INTO applications VALUES (?,?,?,?,?,?)",
+                                 (r["posting_id"], str(pdf),
+                                  str(res.get("detected_ats", "unknown")),
+                                  int(time.time()), reason, "sprint"))
+                    conn.commit()
+                except sqlite3.IntegrityError:
+                    conn.rollback()
+                    conn.execute(
+                        "UPDATE postings SET status='manual', outcome='manual', "
+                        "last_error='application ledger conflict after sprint submit; verify' "
+                        "WHERE posting_id=? AND status='submitting'",
+                        (r["posting_id"],),
+                    )
+                    conn.commit()
+                    print(f"[sprint] ledger conflict after adapter: {r['company']}", flush=True)
+                    continue
             else:
                 conn.rollback()
                 print(f"[sprint] claim lost after adapter: {r['company']}", flush=True)
