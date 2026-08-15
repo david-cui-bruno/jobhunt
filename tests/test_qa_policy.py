@@ -403,6 +403,177 @@ class QaManualPolicyTest(unittest.TestCase):
             control, "Company Website", approved_answers=approved,
         ))
 
+    def test_global_generic_recruiting_sources_choose_an_observed_option(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["preferences"]["recruiting_sources"] = [
+            "Social media", "Searching for jobs online", "Google",
+        ]
+        freeform = {
+            "id": "source",
+            "label": "How did you hear about us?*",
+            "options": [
+                "Searching for jobs online",
+                "LinkedIn post",
+                "Social media (Instagram, Facebook, X)",
+            ],
+        }
+        dynamic = {
+            "id": "dynamic",
+            "label": "How Did You Hear About Us?*",
+            "options": [],
+        }
+
+        self.assertEqual(
+            {
+                "source": "Social media (Instagram, Facebook, X)",
+                "dynamic": "Social media",
+            },
+            {
+                item["id_or_name"]: item["answer"]
+                for item in qa.explicit_approved_answers(
+                    [freeform, dynamic], approved_answers=approved,
+                )
+            },
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            freeform,
+            "Social media (Instagram, Facebook, X)",
+            approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            freeform, "LinkedIn post", approved_answers=approved,
+        ))
+        relevant = qa.relevant_application_answers(
+            [freeform], approved=approved,
+        )
+        self.assertEqual(
+            approved["preferences"]["recruiting_sources"],
+            relevant["preferences"]["recruiting_sources"],
+        )
+
+        approved["company_facts"]["Valeo"] = {
+            "recruiting_source": "Company Website",
+        }
+        valeo = dict(
+            freeform,
+            company_context="Valeo",
+            options=["Company Website", "Social media"],
+        )
+        self.assertEqual(
+            [{"id_or_name": "source", "answer": "Company Website"}],
+            qa.explicit_approved_answers(
+                [valeo], company_context="Valeo", approved_answers=approved,
+            ),
+        )
+
+        for invalid in ([], "Social media"):
+            malformed = json.loads(json.dumps(self.APPROVED))
+            malformed["preferences"]["recruiting_sources"] = invalid
+            self.assertEqual([], qa.explicit_approved_answers(
+                [freeform], approved_answers=malformed,
+            ))
+            self.assertTrue(qa.answer_requires_manual(
+                freeform,
+                "Social media (Instagram, Facebook, X)",
+                approved_answers=malformed,
+            ))
+
+    def test_political_contribution_threshold_is_exact_and_fail_closed(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["legal"] = {
+            "political_contributions_over_150_last_two_years": False,
+        }
+        exact = {
+            "id": "political",
+            "label": (
+                "Have you made any political contributions greater than $150 "
+                "in the last 2 years?"
+            ),
+            "options": ["Yes", "No"],
+        }
+        generic = {
+            "id": "generic-political",
+            "label": "Have you ever made a political contribution?",
+            "options": ["Yes", "No"],
+        }
+
+        self.assertEqual(
+            [{"id_or_name": "political", "answer": "No"}],
+            qa.explicit_approved_answers(
+                [exact, generic], approved_answers=approved,
+            ),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            exact, "No", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            exact, "Yes", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            generic, "No", approved_answers=approved,
+        ))
+        self.assertEqual(
+            approved["legal"],
+            qa.relevant_application_answers(
+                [exact], approved=approved,
+            )["legal"],
+        )
+
+    def test_oligo_interest_answer_is_exact_and_company_scoped(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        answer = (
+            "Oligo stood out because Zenith connects agentic AI and embedded "
+            "simulation directly to spacecraft design and manufacturing, so model "
+            "outputs have to survive real engineering and hardware constraints rather "
+            "than remain demos. That matches how I like to build: I’ve developed "
+            "eval-driven multi-agent systems, trained PyTorch models with rigorous "
+            "leakage and claim checks, and built a fault-injected C vehicle network. "
+            "I’d be excited to apply that systems mindset to requirements reasoning "
+            "and simulation-aware ML on hardware that flies."
+        )
+        approved["long_form_answers"].append({
+            "key": "oligo_specific_interest",
+            "company": "Oligo Space",
+            "match_all": ["what stood out", "specific position"],
+            "answer": answer,
+        })
+        prompt = {
+            "id": "oligo-interest",
+            "label": (
+                "What stood out about Oligo Space that led you to apply to this "
+                "specific position?"
+            ),
+        }
+
+        self.assertEqual(
+            [{"id_or_name": "oligo-interest", "answer": answer}],
+            qa.explicit_approved_answers(
+                [prompt], company_context="Oligo Space", approved_answers=approved,
+            ),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            dict(prompt, company_context="Oligo Space"),
+            answer,
+            approved_answers=approved,
+        ))
+        generic_elsewhere = {
+            "id": "elsewhere",
+            "label": "What stood out and led you to apply to this specific position?",
+        }
+        self.assertEqual([], qa.explicit_approved_answers(
+            [generic_elsewhere],
+            company_context="Other Company",
+            approved_answers=approved,
+        ))
+        self.assertNotIn(
+            "long_form_answers",
+            qa.relevant_application_answers(
+                [generic_elsewhere],
+                approved=approved,
+                company_context="Other Company",
+            ),
+        )
+
     def test_company_employment_type_is_exact_and_does_not_cross_companies(self):
         approved = json.loads(json.dumps(self.APPROVED))
         approved["company_facts"]["TransMarket Group"] = {

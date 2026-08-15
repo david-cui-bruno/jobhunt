@@ -29,6 +29,9 @@ preferences:
   # within commuting distance of any particular office.
   onsite: null
   relocate: null
+  # Ordered generic answers explicitly approved for recruiting-source questions.
+  # A company-specific recruiting_source still takes precedence.
+  recruiting_sources: []
   relocation_assistance_required: null
   travel: null
   future_contact: null
@@ -57,6 +60,7 @@ legal:
   notice_period: null
   valid_drivers_license: null
   security_clearance: null
+  political_contributions_over_150_last_two_years: null
 professional:
   # Use false or [] only after the user confirms there are no publications.
   publications: null
@@ -68,6 +72,8 @@ professional:
 # answer is eligible. Keep the real populated values in the encrypted answer bank.
 long_form_answers:
   - key: example_accomplishment
+    # Optional employer guard for answers researched or authored for one company.
+    company: null
     match_all:
       - "most impressive thing"
       - "built or achieved"

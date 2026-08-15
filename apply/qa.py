@@ -115,6 +115,7 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
         "hybrid": r"\b(hybrid|on[- ]?site|in[- ]?office|days? (?:a|per) week|work schedule)\b",
         "onsite": r"\b(on[- ]?site|in[- ]?office|work schedule)\b",
         "relocate": r"\brelocat(?:e|ing|ion)\b",
+        "recruiting_sources": r"\bhow did you hear about\b",
         "relocation_assistance_required": r"\b(relocat(?:e|ion)|local to the area)\b",
         "travel": r"\btravel\b",
         "future_contact": r"\b(future contact|marketing|talent community)\b",
@@ -132,7 +133,7 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
     if re.search(
         r"\b(non[- ]?compete|conflict of interest|clearance|public trust|notice period|"
         r"driver[’']?s? licen[cs]e|restrictive (?:agreement|covenant)|"
-        r"moonlighting|outside employment)\b|"
+        r"moonlighting|outside employment|political contributions?)\b|"
         r"\bagreement with (?:your )?(?:current|any other) employer\b",
         question,
     ):
@@ -151,7 +152,7 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
             continue
         if any(_approved_long_form_answer(_control_question_text(control), {
                 "long_form_answers": [entry],
-        }) is not None for control in controls):
+        }, company_context) is not None for control in controls):
             long_form_answers.append(entry)
     if long_form_answers:
         result["long_form_answers"] = long_form_answers
@@ -315,6 +316,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(FINRA|SIE|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b",
     r"\b(member of your household|household member|family member|relative)\b.*\b(employed|worked|employee)\b",
     r"\b(non[- ]?compete|notice period|conflict of interest|restrictive (?:agreement|covenant)|moonlighting|outside employment)\b|\bagreement with (?:your )?(?:current|any other) employer\b",
+    r"\bpolitical contributions?\b",
     r"\bdriver[’']?s? licen[cs]e\b",
     r"\bpublications?\b",
     r"\b(?:professional |employment )?references?\b",
@@ -418,6 +420,32 @@ def _employment_type_question(control: dict) -> bool:
             question,
         )
         or (has_both_options and re.search(r"\b(?:employment|work|seeking|type)\b", question))
+    )
+
+
+def _recruiting_source_candidates(control: dict, approved: dict) -> list[str]:
+    """Return company-specific or globally approved generic discovery sources."""
+    company_source = _company_fact(control, "recruiting_source", approved)
+    if isinstance(company_source, str) and company_source.strip():
+        return [company_source.strip()]
+    preferences = approved.get("preferences") or {}
+    if "recruiting_sources" in preferences:
+        generic = preferences.get("recruiting_sources")
+        if not isinstance(generic, list):
+            return []
+        return [str(item).strip() for item in generic if str(item).strip()]
+    return [
+        "Company website", "HRT Job Board", "University Job Board", "Job Board",
+    ]
+
+
+def _political_contribution_threshold_question(question: str) -> bool:
+    """Recognize only the confirmed $150 / two-year political contribution fact."""
+    return bool(
+        re.search(r"\bpolitical contributions?\b", question)
+        and re.search(r"(?:\$\s*)?150\b", question)
+        and re.search(r"\b(?:last|past|prior|previous)\s+(?:two|2)\s+years?\b", question)
+        and re.search(r"\b(?:greater than|more than|over|above|exceed(?:ing|ed)?)\b", question)
     )
 
 
@@ -526,7 +554,8 @@ def _hometown_value_matches(component: str, expected: object,
     return expected_text == actual_text
 
 
-def _approved_long_form_answer(question: str, approved: dict) -> str | None:
+def _approved_long_form_answer(question: str, approved: dict,
+                               company_context: str = "") -> str | None:
     """Return a user-authored answer only when every configured phrase matches.
 
     Long-form application answers are private answer-bank data, not model prose.
@@ -538,6 +567,9 @@ def _approved_long_form_answer(question: str, approved: dict) -> str | None:
         return None
     for entry in approved.get("long_form_answers") or []:
         if not isinstance(entry, dict):
+            continue
+        company = str(entry.get("company") or "").strip()
+        if company and not _company_matches(company, normalized, company_context):
             continue
         phrases = [
             re.sub(r"\s+", " ", str(phrase).strip().lower())
@@ -813,7 +845,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 and re.search(r"\bare you currently a member of any university organizations\b", question)):
             answer: object | None = _render_boolean(True, options)
         else:
-            answer = _approved_long_form_answer(question, approved)
+            answer = _approved_long_form_answer(question, approved, company_context)
         if answer is not None:
             pass
         elif hometown_component:
@@ -900,18 +932,14 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             # The tracked discovery happened while David is enrolled at Brown.
             answer = _first_matching_option(["University Program"], options)
         elif re.search(r"\bhow did you hear about\b", question):
-            approved_source = _company_fact(control, "recruiting_source", approved)
-            candidates = ([str(approved_source)] if isinstance(approved_source, str)
-                          and approved_source.strip() else [
-                              "Company website", "HRT Job Board",
-                              "University Job Board", "Job Board",
-                          ])
+            candidates = _recruiting_source_candidates(control, approved)
             # Workday's searchable dropdown options are often absent until the
             # control is opened. Give the filler the approved default so it can
             # select the live option, while static menus still require an exact
             # match from their observed choices.
-            answer = (_first_matching_option(candidates, options)
-                      if options else candidates[0])
+            if candidates:
+                answer = (_first_matching_option(candidates, options)
+                          if options else candidates[0])
         elif _employment_type_question(control):
             employment_type = _company_fact(control, "employment_type", approved)
             if isinstance(employment_type, str) and employment_type.strip():
@@ -1079,6 +1107,12 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             expected = (approved.get("legal") or {}).get("valid_drivers_license")
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
+        elif _political_contribution_threshold_question(question):
+            expected = (approved.get("legal") or {}).get(
+                "political_contributions_over_150_last_two_years"
+            )
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
         elif re.search(
             r"\b(non[- ]?compete|restrictive (?:agreement|covenant)|conflict of interest|"
             r"moonlighting|outside employment)\b|"
@@ -1233,7 +1267,9 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     if (organization_entry and control.get("options")
             and re.search(r"\bare you currently a member of any university organizations\b", question)):
         return _answer_boolean(answer_text) is True
-    approved_long_form = _approved_long_form_answer(question, approved)
+    approved_long_form = _approved_long_form_answer(
+        question, approved, str(control.get("company_context") or ""),
+    )
     if approved_long_form is not None:
         return approved_long_form == answer_text.strip()
     hometown_component = _hometown_component(control, approved)
@@ -1274,12 +1310,9 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         ) or "University Program")
         return expected.strip().lower() == answer_text.strip().lower()
     if re.search(r"\bhow did you hear about\b", question):
-        approved_source = _company_fact(control, "recruiting_source", approved)
-        candidates = ([str(approved_source)] if isinstance(approved_source, str)
-                      and approved_source.strip() else [
-                          "Company website", "HRT Job Board",
-                          "University Job Board", "Job Board",
-                      ])
+        candidates = _recruiting_source_candidates(control, approved)
+        if not candidates:
+            return False
         options = [str(option) for option in control.get("options") or []]
         expected = _first_matching_option(candidates, options) if options else candidates[0]
         return bool(expected and expected.strip().lower() == answer_text.strip().lower())
@@ -1470,6 +1503,9 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return _company_answer_is_approved(control, "household_employment", approved, answer)
     if re.search(r"\bdriver[’']?s? licen[cs]e\b", question):
         expected = legal.get("valid_drivers_license")
+        return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
+    if _political_contribution_threshold_question(question):
+        expected = legal.get("political_contributions_over_150_last_two_years")
         return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
     if re.search(
         r"\b(non[- ]?compete|restrictive (?:agreement|covenant)|conflict of interest|"
