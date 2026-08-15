@@ -624,6 +624,49 @@ class QaManualPolicyTest(unittest.TestCase):
             ),
         )
 
+    def test_oligo_intro_is_grounded_exact_and_company_scoped(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        answer = (
+            "I’m David, a Brown University Computer Science and Economics student "
+            "graduating in June 2028 who likes building AI systems that have to work "
+            "reliably in the real world. As co-founder and CTO of Framewise Health, I "
+            "built a Temporal/Python/Supabase pipeline and React Native/Next.js "
+            "products; at Freya, I worked on sub-300 ms LLM voice agents supporting "
+            "200+ concurrent calls; and at Sotatek, I built fraud-detection ML and ETL "
+            "pipelines processing 10,000+ transactions a day. I’m most energized by "
+            "the intersection of ML, distributed systems, and high-consequence "
+            "engineering, which is why Oligo’s simulation-aware AI for spacecraft "
+            "design is especially compelling to me."
+        )
+        approved["long_form_answers"].append({
+            "key": "oligo_candidate_intro",
+            "company": "Oligo Space",
+            "company_aliases": ["oligo"],
+            "match_all": ["tell us about yourself"],
+            "answer": answer,
+        })
+        prompt = {"id": "intro", "label": "Tell us about yourself!"}
+
+        self.assertEqual(
+            [{"id_or_name": "intro", "answer": answer}],
+            qa.explicit_approved_answers(
+                [prompt], company_context="oligo", approved_answers=approved,
+            ),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            dict(prompt, company_context="Oligo Space"),
+            answer,
+            approved_answers=approved,
+        ))
+        self.assertEqual([], qa.explicit_approved_answers(
+            [prompt], company_context="Other Company", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            dict(prompt, company_context="Other Company"),
+            answer,
+            approved_answers=approved,
+        ))
+
     def test_ashby_company_context_is_stable_across_application_urls(self):
         self.assertEqual(
             "oligo",

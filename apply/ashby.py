@@ -50,6 +50,25 @@ def _ashby_submission_rejection(body_text: str) -> str:
     return ""
 
 
+def _fill_basics(page, profile: dict) -> None:
+    """Fill stable Ashby profile fields without treating split names as one field."""
+    for label, value, exact in [
+        ("First Name", profile["name"]["first"], False),
+        ("Last Name", profile["name"]["last"], False),
+        ("Name", f"{profile['name']['first']} {profile['name']['last']}", True),
+        ("Email", profile["email"], False),
+        ("Phone", profile["phone"], False),
+        ("LinkedIn", profile["links"]["linkedin"], False),
+        ("GitHub", profile["links"]["github"], False),
+    ]:
+        try:
+            element = page.get_by_label(label, exact=exact).first
+            if element.count() and element.is_visible() and not element.input_value():
+                element.fill(value)
+        except Exception:
+            pass
+
+
 def apply_ashby(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
     p = PROFILE
     result = {"ok": False, "submitted": False, "reason": "", "unanswered": []}
@@ -74,19 +93,7 @@ def apply_ashby(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
             return result
 
         # basics via label matching (Ashby ids are generated)
-        for label, val in [
-            ("Name", f"{p['name']['first']} {p['name']['last']}"),
-            ("Email", p["email"]),
-            ("Phone", p["phone"]),
-            ("LinkedIn", p["links"]["linkedin"]),
-            ("GitHub", p["links"]["github"]),
-        ]:
-            try:
-                el = page.get_by_label(label, exact=False).first
-                if el.count() and el.is_visible() and not el.input_value():
-                    el.fill(val)
-            except Exception:
-                pass
+        _fill_basics(page, p)
 
         answers = None
         filled_qa, failed_qa = [], []
