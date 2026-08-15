@@ -10,6 +10,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import yaml
 from playwright.sync_api import sync_playwright, Page, TimeoutError as PWTimeout
@@ -37,6 +38,15 @@ def _fill_if_present(page: Page, selector: str, value: str) -> bool:
 def _shot(page: Page, slug: str, stage: str):
     SHOTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(SHOTS / f"{slug}_{stage}.png"), full_page=True)
+
+
+def _greenhouse_company_context(url: str) -> str:
+    """Return the exact Greenhouse board token for company-scoped facts."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host != "greenhouse.io" and not host.endswith(".greenhouse.io"):
+        return ""
+    return unquote(parsed.path.strip("/").split("/", 1)[0])
 
 
 def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
@@ -113,7 +123,11 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
             controls = page.evaluate(qa.EXTRACT_JS)
             if answers is None:
                 qa.harvest_select_options(page, controls)
-                answers = qa.get_answers(controls, context={"slug": slug, "url": url})
+                answers = qa.get_answers(controls, context={
+                    "company": _greenhouse_company_context(url),
+                    "slug": slug,
+                    "url": url,
+                })
             live = {c["id"] or c["name"] for c in controls if not c["value"] and not c.get("chosen")}
             todo = [a for a in answers if a["id_or_name"] in live] if qa_pass else answers
             if qa_pass and not todo:

@@ -403,6 +403,56 @@ def _employment_type_question(control: dict) -> bool:
     )
 
 
+def _hometown_component(control: dict, answers: dict) -> str | None:
+    """Map only a confirmed hometown question group to one component.
+
+    The main city prompt names the hometown explicitly. Greenhouse renders the
+    following region and country controls with generic labels, so those labels
+    are eligible only for a company with an approved hometown mapping and only
+    when they are custom-question controls, not the phone country selector.
+    """
+    label = str(control.get("label") or "").strip()
+    if re.search(r"\bhometown\b", label, re.I):
+        return "city"
+    identifier = str(control.get("id") or control.get("name") or "")
+    hometown = _company_fact(control, "hometown", answers)
+    if not identifier.startswith("question_") or not isinstance(hometown, dict):
+        return None
+    normalized = re.sub(r"[\s:*]+", " ", label).strip().lower()
+    if normalized in {"city", "city/town", "town/city"}:
+        return "city"
+    if normalized in {"state/province/region", "state / province / region"}:
+        return "region"
+    if normalized == "country":
+        return "country"
+    return None
+
+
+def _company_hometown_value(control: dict, component: str,
+                            answers: dict) -> object:
+    hometown = _company_fact(control, "hometown", answers)
+    if not isinstance(hometown, dict):
+        return _MISSING
+    value = hometown.get(component)
+    return value if value is not None else _MISSING
+
+
+def _hometown_value_matches(component: str, expected: object,
+                            actual: object) -> bool:
+    expected_text = str(expected or "").strip().lower()
+    actual_text = str(actual or "").strip().lower()
+    if not expected_text or not actual_text:
+        return False
+    if component == "country":
+        us_aliases = {
+            "us", "u.s.", "usa", "u.s.a.", "united states",
+            "united states of america",
+        }
+        if expected_text in us_aliases:
+            return actual_text in us_aliases
+    return expected_text == actual_text
+
+
 def _approved_long_form_answer(question: str, approved: dict) -> str | None:
     """Return a user-authored answer only when every configured phrase matches.
 
@@ -676,6 +726,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
         control = dict(original, company_context=company_context)
         question = _control_question_text(control).lower()
         options = [str(option) for option in control.get("options") or []]
+        hometown_component = _hometown_component(control, approved)
         organization_entry = next((
             entry for entry in approved.get("long_form_answers") or []
             if isinstance(entry, dict) and entry.get("key") == "university_organizations"
@@ -688,6 +739,22 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             answer = _approved_long_form_answer(question, approved)
         if answer is not None:
             pass
+        elif hometown_component:
+            expected = _company_hometown_value(
+                control, hometown_component, approved
+            )
+            if isinstance(expected, str) and expected.strip():
+                candidates = [expected]
+                if (hometown_component == "country"
+                        and expected.strip().lower() in {
+                            "us", "u.s.", "usa", "u.s.a.", "united states",
+                            "united states of america",
+                        }):
+                    candidates = [
+                        "United States", "United States of America", "USA", "US",
+                    ]
+                answer = (_first_matching_option(candidates, options)
+                          if options else candidates[0])
         elif re.search(r"(?:\b18\+|\b18\s+(?:years? of age(?:\s+or older)?|or older)\b|\bat least (?:age )?18\b)", question):
             birth = _date_parts(identity.get("date_of_birth"))
             if birth:
@@ -1036,6 +1103,15 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     approved_long_form = _approved_long_form_answer(question, approved)
     if approved_long_form is not None:
         return approved_long_form == answer_text.strip()
+    hometown_component = _hometown_component(control, approved)
+    if hometown_component:
+        expected = _company_hometown_value(
+            control, hometown_component, approved
+        )
+        return (expected is not _MISSING
+                and _hometown_value_matches(
+                    hometown_component, expected, answer_text
+                ))
     if re.search(r"(?:\b18\+|\b18\s+(?:years? of age(?:\s+or older)?|or older)\b|\bat least (?:age )?18\b)", question):
         birth = _date_parts(identity.get("date_of_birth"))
         actual = _answer_boolean(answer_text)
@@ -1313,6 +1389,8 @@ def answer_requires_manual(control: dict, answer: object, profile_text: str | No
     approved = APPLICATION_ANSWERS if approved_answers is None else approved_answers
     if _blocked_answer_is_approved(control, answer, approved):
         return False
+    if _hometown_component(control, approved):
+        return True
     if re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
         if profile_text and re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation)\b", profile_text, re.I):
             return False

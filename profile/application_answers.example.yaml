@@ -77,5 +77,11 @@ company_facts:
     # recruiting source or employment preference is never inferred elsewhere.
     recruiting_source: null
     employment_type: null
+    # Company-specific hometown prompts may split city, region, and country into
+    # separate controls. Populate only from an explicit user answer.
+    hometown:
+      city: null
+      region: null
+      country: null
     # Use only for a company/location whose fully-onsite requirement was approved.
     fully_onsite: null

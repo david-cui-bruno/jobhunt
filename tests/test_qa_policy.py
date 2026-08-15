@@ -433,6 +433,139 @@ class QaManualPolicyTest(unittest.TestCase):
             other, "Full-time", approved_answers=approved,
         ))
 
+    def test_company_hometown_is_exact_and_does_not_fill_phone_country(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["company_facts"]["TransMarket Group"] = {
+            "hometown": {
+                "city": "Prosper",
+                "region": "Texas",
+                "country": "United States",
+            },
+        }
+        controls = [
+            {
+                "id": "question_12685141007",
+                "label": "Where is your hometown?*",
+                "company_context": "transmarketgroup",
+                "options": [],
+            },
+            {
+                "id": "question_12685142007",
+                "label": "State/Province/Region:*",
+                "company_context": "transmarketgroup",
+                "options": [],
+            },
+            {
+                "id": "question_12685143007",
+                "label": "Country:*",
+                "company_context": "transmarketgroup",
+                "options": ["Canada", "United States"],
+            },
+            {
+                "id": "country",
+                "label": "Country*",
+                "company_context": "transmarketgroup",
+                "options": ["Canada", "United States"],
+            },
+        ]
+
+        self.assertEqual(
+            {
+                "question_12685141007": "Prosper",
+                "question_12685142007": "Texas",
+                "question_12685143007": "United States",
+            },
+            {
+                item["id_or_name"]: item["answer"]
+                for item in qa.explicit_approved_answers(
+                    controls,
+                    company_context="transmarketgroup",
+                    approved_answers=approved,
+                )
+            },
+        )
+        for control, right, wrong in zip(
+            controls[:3],
+            ("Prosper", "Texas", "USA"),
+            ("Providence", "Rhode Island", "Canada"),
+        ):
+            self.assertFalse(qa.answer_requires_manual(
+                control, right, approved_answers=approved,
+            ))
+            self.assertTrue(qa.answer_requires_manual(
+                control, wrong, approved_answers=approved,
+            ))
+
+        other_company = [dict(control, company_context="Other Company")
+                         for control in controls[:3]]
+        self.assertEqual([], qa.explicit_approved_answers(
+            other_company,
+            company_context="Other Company",
+            approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            other_company[0], "Prosper", approved_answers=approved,
+        ))
+
+    def test_valeo_prior_employment_is_exact_and_company_scoped(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["company_facts"]["Valeo"] = {"prior_employment": False}
+        control = {
+            "faid": "prior-employment",
+            "label": "Have you previously worked for Valeo?*",
+            "options": ["Yes", "No"],
+            "company_context": "valeo",
+        }
+        self.assertEqual(
+            [{"faid": "prior-employment", "answer": "No"}],
+            qa.explicit_approved_answers(
+                [control], key_field="faid", company_context="valeo",
+                approved_answers=approved,
+            ),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            control, "No", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Yes", approved_answers=approved,
+        ))
+        other_control = dict(
+            control,
+            label="Have you previously worked for us?*",
+            company_context="Other Company",
+        )
+        self.assertEqual([], qa.explicit_approved_answers(
+            [other_control],
+            key_field="faid", company_context="Other Company",
+            approved_answers=approved,
+        ))
+
+    def test_greenhouse_company_context_uses_exact_board_token(self):
+        self.assertEqual(
+            "transmarketgroup",
+            greenhouse._greenhouse_company_context(
+                "https://job-boards.greenhouse.io/transmarketgroup/jobs/5212335007"
+            ),
+        )
+        self.assertEqual(
+            "example",
+            greenhouse._greenhouse_company_context(
+                "https://boards.greenhouse.io/example/jobs/123"
+            ),
+        )
+        self.assertEqual(
+            "",
+            greenhouse._greenhouse_company_context(
+                "https://jobs.example.com/example/jobs/123"
+            ),
+        )
+        self.assertEqual(
+            "",
+            greenhouse._greenhouse_company_context(
+                "https://evilgreenhouse.io/example/jobs/123"
+            ),
+        )
+
     def test_greenhouse_school_and_combined_grad_menu_use_known_profile_facts(self):
         controls = [
             {
