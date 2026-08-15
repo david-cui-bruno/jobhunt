@@ -354,6 +354,22 @@ class QaManualPolicyTest(unittest.TestCase):
             )
         )
 
+    def test_dynamic_workday_recruiting_source_uses_approved_default(self):
+        rendered = qa.explicit_approved_answers(
+            [{
+                "faid": "source",
+                "label": "How Did You Hear About Us?*",
+                "kind": "multi",
+                "options": [],
+                "value": "",
+            }],
+            approved_answers=self.APPROVED,
+        )
+        self.assertEqual(
+            [{"id_or_name": "How Did You Hear About Us?*", "answer": "Company website"}],
+            rendered,
+        )
+
     def test_greenhouse_school_and_combined_grad_menu_use_known_profile_facts(self):
         controls = [
             {

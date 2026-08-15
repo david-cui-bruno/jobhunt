@@ -729,9 +729,15 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             # The tracked discovery happened while David is enrolled at Brown.
             answer = _first_matching_option(["University Program"], options)
         elif re.search(r"\bhow did you hear about\b", question):
-            answer = _first_matching_option([
+            candidates = [
                 "Company website", "HRT Job Board", "University Job Board", "Job Board",
-            ], options)
+            ]
+            # Workday's searchable dropdown options are often absent until the
+            # control is opened. Give the filler the approved default so it can
+            # select the live option, while static menus still require an exact
+            # match from their observed choices.
+            answer = (_first_matching_option(candidates, options)
+                      if options else candidates[0])
         elif re.search(r"\bgender\b", question):
             gender = str(identity.get("gender") or "").strip().lower()
             candidates = {
