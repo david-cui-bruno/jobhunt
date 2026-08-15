@@ -12,6 +12,7 @@ from unittest import mock
 import submit
 import submit_worker
 import drip
+from apply import ashby
 from apply import submission_state
 from apply import smartrecruiters
 from apply.jd import canonical_application_url, detect_ats
@@ -64,6 +65,41 @@ class SubmitSafetyTests(unittest.TestCase):
         self.assertFalse(result["retryable"])
         self.assertTrue(result["click_attempted"])
         self.assertTrue(result["submission_uncertain"])
+
+    def test_ashby_spam_rejection_is_definitive_and_manual(self) -> None:
+        body = (
+            "We couldn't submit your application. Your application submission "
+            "was flagged as possible spam. If you believe this was a mistake, "
+            "please submit your application again."
+        )
+        reason = ashby._ashby_submission_rejection(body)
+        self.assertIn("possible spam", reason)
+        self.assertIn("trusted browser and network", reason)
+        self.assertEqual("", ashby._ashby_submission_rejection(
+            "Legitimate applications are occasionally flagged by mistake."
+        ))
+
+        result = submit._enforce_submission_safety({
+            "ok": False,
+            "submitted": False,
+            "definitive_rejection": True,
+            "reason": reason,
+        }, attempted=True)
+        self.assertEqual("manual", result["outcome"])
+        self.assertFalse(result["retryable"])
+        self.assertFalse(result["submission_uncertain"])
+        self.assertNotIn("verify possible prior submission", result["reason"])
+
+    def test_unknown_post_click_failure_remains_ambiguous(self) -> None:
+        result = submit._enforce_submission_safety({
+            "ok": False,
+            "submitted": False,
+            "reason": "confirmation was not observed",
+        }, attempted=True)
+        self.assertEqual("manual", result["outcome"])
+        self.assertFalse(result["retryable"])
+        self.assertTrue(result["submission_uncertain"])
+        self.assertIn("verify possible prior submission", result["reason"])
 
     def test_worker_crash_after_submit_marker_is_never_retryable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -610,6 +646,75 @@ class SubmitSafetyTests(unittest.TestCase):
                 conn.execute(
                     "SELECT status,outcome,attempt_count FROM postings WHERE posting_id='one'"
                 ).fetchone(),
+            )
+            conn.close()
+
+    def test_definitive_external_rejection_is_manual_without_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / "tracker.db"
+            pdf = root / "resume.pdf"
+            pdf.write_bytes(b"pdf")
+            _write_quality(pdf, "one")
+            conn = sqlite3.connect(db)
+            conn.executescript(
+                """
+                CREATE TABLE postings (
+                    posting_id TEXT PRIMARY KEY, company TEXT, title TEXT,
+                    status TEXT, url TEXT, outcome TEXT, last_attempt_at INTEGER,
+                    attempt_count INTEGER NOT NULL DEFAULT 0, last_error TEXT
+                );
+                CREATE TABLE emails (posting_id TEXT PRIMARY KEY, resume_pdf TEXT);
+                CREATE TABLE applications (
+                    posting_id TEXT PRIMARY KEY, resume_path TEXT, ats TEXT,
+                    submitted_at INTEGER, confirmation TEXT, notes TEXT
+                );
+                INSERT INTO postings (posting_id,company,title,status,url)
+                VALUES ('one','Oligo Space','Intern','ready','https://ashby.example');
+                """
+            )
+            conn.execute("INSERT INTO emails VALUES ('one', ?)", (str(pdf),))
+            conn.commit()
+            conn.close()
+
+            reason = (
+                "Ashby rejected the submission as possible spam; retry manually "
+                "from a trusted browser and network"
+            )
+            result = {
+                "outcome": "manual",
+                "ok": False,
+                "submitted": False,
+                "retryable": False,
+                "click_attempted": True,
+                "submission_uncertain": False,
+                "definitive_rejection": True,
+                "reason": reason,
+                "detected_ats": "ashby",
+            }
+            with (
+                mock.patch.object(submit, "DB", db),
+                mock.patch.object(submit, "_user_is_gaming", return_value=False),
+                mock.patch.object(submit, "_posting_dead", return_value=False),
+                mock.patch.object(submit, "_isolated_adapter", return_value=result),
+                mock.patch.object(submit, "_send_notice") as notice,
+                mock.patch.object(submit.time, "sleep"),
+            ):
+                results = submit.submit_ready(limit=1)
+
+            self.assertEqual("manual", results[0]["outcome"])
+            notice.assert_not_called()
+            conn = sqlite3.connect(db)
+            self.assertEqual(
+                ("manual", "manual", 1, reason),
+                conn.execute(
+                    "SELECT status,outcome,attempt_count,last_error "
+                    "FROM postings WHERE posting_id='one'"
+                ).fetchone(),
+            )
+            self.assertEqual(
+                0,
+                conn.execute("SELECT count(*) FROM applications").fetchone()[0],
             )
             conn.close()
 

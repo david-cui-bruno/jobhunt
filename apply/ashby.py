@@ -4,6 +4,7 @@ jobs.ashbyhq.com/<org>/<uuid> -> application tab has a React form.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -33,6 +34,20 @@ def _ashby_company_context(url: str) -> str:
 def _shot(page, slug, stage):
     SHOTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(SHOTS / f"{slug}_{stage}.png"), full_page=True)
+
+
+def _ashby_submission_rejection(body_text: str) -> str:
+    """Return a safe manual-action reason for Ashby's explicit spam rejection."""
+    body = body_text or ""
+    if (
+        re.search(r"we couldn['’]t submit your application", body, re.IGNORECASE)
+        and re.search(r"flagged as possible spam", body, re.IGNORECASE)
+    ):
+        return (
+            "Ashby rejected the submission as possible spam; retry manually from "
+            "a trusted browser and network"
+        )
+    return ""
 
 
 def apply_ashby(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
@@ -132,7 +147,19 @@ def apply_ashby(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
             page.wait_for_timeout(5000)
             _shot(page, slug, "submitted")
             body = page.inner_text("body").lower()
-            if confirmation_observed(body, page.url):
+            rejection = _ashby_submission_rejection(body)
+            if rejection:
+                result.update(
+                    ok=False,
+                    submitted=False,
+                    outcome="manual",
+                    retryable=False,
+                    click_attempted=True,
+                    submission_uncertain=False,
+                    definitive_rejection=True,
+                    reason=rejection,
+                )
+            elif confirmation_observed(body, page.url):
                 result.update(ok=True, submitted=True, reason="confirmed")
             else:
                 mark_unconfirmed(result)

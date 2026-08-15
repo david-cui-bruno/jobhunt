@@ -216,8 +216,22 @@ def _isolated_adapter(payload: dict) -> dict:
                 "reason": f"worker returned invalid JSON: {stderr[-500:]}; verify possible prior submission",
             }
         attempted = marker.is_file() or bool(result.get("click_attempted"))
-        result["click_attempted"] = attempted
-        if attempted and not result.get("submitted"):
+        return _enforce_submission_safety(result, attempted)
+    finally:
+        marker.unlink(missing_ok=True)
+
+
+def _enforce_submission_safety(result: dict, attempted: bool) -> dict:
+    """Quarantine ambiguity while preserving explicit external rejections."""
+    result["click_attempted"] = attempted
+    if attempted and not result.get("submitted"):
+        if result.get("definitive_rejection"):
+            result.update(
+                outcome="manual",
+                retryable=False,
+                submission_uncertain=False,
+            )
+        else:
             result.update(
                 outcome="manual",
                 retryable=False,
@@ -226,9 +240,7 @@ def _isolated_adapter(payload: dict) -> dict:
             reason = str(result.get("reason") or "adapter stopped after submit click")
             if "verify" not in reason.lower():
                 result["reason"] = reason + "; verify possible prior submission"
-        return result
-    finally:
-        marker.unlink(missing_ok=True)
+    return result
 
 
 def _outcome(result: dict) -> str:
