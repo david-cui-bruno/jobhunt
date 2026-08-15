@@ -23,6 +23,7 @@ class QaManualPolicyTest(unittest.TestCase):
         },
         "preferences": {
             "hybrid": True,
+            "relocate": True,
             "relocation_assistance_required": False,
             "compensation_policy": "Use an employer-published range; otherwise open / market rate.",
         },
@@ -30,6 +31,11 @@ class QaManualPolicyTest(unittest.TestCase):
             "expected_graduation_month": "June",
             "expected_graduation_year": "2028",
             "exact_graduation_date": "06/01/2028",
+            "standardized_tests": {
+                "sat": 1570,
+                "act": None,
+                "act_taken": False,
+            },
         },
         "current_offers": [
             {"company": "Soren", "deadline_month": "September 2026", "deadline": None}
@@ -1540,6 +1546,247 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertTrue(qa._company_matches(
             "Sentry", "Have you used our platform?", "Sentry",
         ))
+
+    def test_confirmed_standardized_test_answers_render_and_validate_exactly(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["education"]["standardized_tests"] = {
+            "sat": 1570,
+            "act": None,
+            "act_taken": False,
+        }
+        controls = [
+            {
+                "id": "type",
+                "label": "Select your Standardized Test score type",
+                "options": ["ACT", "SAT"],
+            },
+            {
+                "id": "sat",
+                "label": "SAT score",
+                "options": ["1560 out of 1600", "1570 out of 1600"],
+            },
+            {
+                "id": "act",
+                "label": "ACT score",
+                "options": ["36 out of 36", "Did not take"],
+            },
+            {
+                "id": "sat-verb",
+                "label": "Have you sat for any professional exams?",
+            },
+            {
+                "id": "act-law",
+                "label": "Fair Credit Reporting Act disclosure",
+            },
+        ]
+
+        rendered = qa.explicit_approved_answers(controls, approved_answers=approved)
+        self.assertEqual(
+            {
+                "type": "SAT",
+                "sat": "1570 out of 1600",
+                "act": "Did not take",
+            },
+            {item["id_or_name"]: item["answer"] for item in rendered},
+        )
+        allowed, blocked = qa.filter_manual_answers(
+            controls,
+            [
+                {"id_or_name": "sat", "answer": "1570 out of 1600"},
+                {"id_or_name": "act", "answer": "Did not take"},
+                {"id_or_name": "act", "answer": "36 out of 36"},
+            ],
+            approved_answers=approved,
+        )
+        self.assertEqual(2, len(allowed))
+        self.assertEqual(["36 out of 36"], [item["answer"] for item in blocked])
+
+    def test_bitter_lesson_answer_requires_the_exact_confirmed_prompt(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        answer = (
+            "The Bitter Lesson. I re-read it after hearing Boris Turney discuss "
+            "during a YC talk how its ideas could apply to our YC startups."
+        )
+        approved["long_form_answers"].append({
+            "key": "recent_interesting_reading",
+            "match_all": [
+                "most interesting paper", "blog post", "documentation", "past month",
+            ],
+            "answer": answer,
+        })
+        exact = {
+            "id": "reading",
+            "label": (
+                "What's the most interesting paper, blog post, or documentation "
+                "you've read in the past month?"
+            ),
+        }
+        similar = {
+            "id": "favorite",
+            "label": "What is your favorite paper about PPO?",
+        }
+
+        self.assertEqual(
+            [{"id_or_name": "reading", "answer": answer}],
+            qa.explicit_approved_answers(
+                [exact, similar], approved_answers=approved,
+            ),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            exact, answer, approved_answers=approved,
+        ))
+        self.assertNotEqual(
+            answer,
+            next(iter([
+                item["answer"] for item in qa.explicit_approved_answers(
+                    [similar], approved_answers=approved,
+                )
+            ]), None),
+        )
+
+    def test_global_onsite_and_relocation_policy_selects_relocation_not_commute(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["preferences"].update({"onsite": True, "relocate": True})
+        onsite_option = "I’m open to relocating to the area and working onsite"
+        onsite = {
+            "id": "onsite",
+            "label": (
+                "This role is based at Nextiva’s Scottsdale headquarters and reflects "
+                "our in-office approach. How does this align with your ability to work onsite?"
+            ),
+            "options": [
+                "I’m within commuting distance and able to work onsite",
+                onsite_option,
+                "I’m not able to work onsite and am interested in fully remote roles",
+            ],
+        }
+        relocate = {
+            "id": "relocate",
+            "label": "Are you willing to relocate for this role?",
+            "options": ["Yes", "No"],
+        }
+        commute = {
+            "id": "commute",
+            "label": "Can you work onsite and are you within commuting distance?",
+            "options": [
+                "Yes, I am within commuting distance",
+                "No, I cannot work onsite",
+            ],
+        }
+        requires_hybrid = {
+            "id": "requires-hybrid",
+            "label": "Do you require a hybrid schedule?",
+            "options": ["Yes", "No"],
+        }
+
+        rendered = qa.explicit_approved_answers(
+            [onsite, relocate, commute, requires_hybrid], approved_answers=approved,
+        )
+        self.assertEqual(
+            {"onsite": onsite_option, "relocate": "Yes"},
+            {item["id_or_name"]: item["answer"] for item in rendered},
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            onsite, onsite_option, approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            onsite,
+            "I’m within commuting distance and able to work onsite",
+            approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            commute,
+            "Yes, I am within commuting distance",
+            approved_answers=approved,
+        ))
+
+    def test_references_available_upon_request_does_not_invent_contact_details(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["professional"] = {"references": "Available upon request."}
+        references = {"id": "refs", "label": "References"}
+        email = {"id": "email", "label": "Reference email address"}
+
+        self.assertEqual(
+            [{"id_or_name": "refs", "answer": "Available upon request."}],
+            qa.explicit_approved_answers(
+                [references, email], approved_answers=approved,
+            ),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            references, "Available upon request.", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            email, "invented@example.com", approved_answers=approved,
+        ))
+
+    def test_stepstone_no_referral_renders_na_only_for_conditional_name(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        approved["company_facts"]["StepStone"] = {"referral": False}
+        referral = {
+            "id": "referral",
+            "label": "Were you referred by a StepStone employee?",
+            "options": ["Yes", "No"],
+        }
+        detail = {
+            "id": "detail",
+            "label": (
+                "If referred by a StepStone employee, please list their full name below."
+            ),
+        }
+
+        rendered = qa.explicit_approved_answers(
+            [referral, detail],
+            company_context="StepStone",
+            approved_answers=approved,
+        )
+        self.assertEqual(
+            {"referral": "No", "detail": "N/A"},
+            {item["id_or_name"]: item["answer"] for item in rendered},
+        )
+        scoped_detail = dict(detail, company_context="StepStone")
+        self.assertFalse(qa.answer_requires_manual(
+            scoped_detail, "N/A", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            scoped_detail, "Jane Doe", approved_answers=approved,
+        ))
+        generic_detail = dict(
+            detail,
+            label="If referred by an employee, please list their full name below.",
+        )
+        self.assertEqual([], qa.explicit_approved_answers(
+            [generic_detail],
+            company_context="Other Company",
+            approved_answers=approved,
+        ))
+
+    def test_plural_outstanding_offers_and_university_reconfirmation_are_deterministic(self):
+        controls = [
+            {
+                "id": "offers",
+                "label": "Do you currently have any outstanding offers?",
+                "options": ["Yes", "No"],
+            },
+            {
+                "id": "school",
+                "label": "Please re-confirm the university you currently attend",
+                "options": ["Brown University", "Boston University"],
+            },
+            {
+                "id": "school-email",
+                "label": "Please confirm your university email address",
+                "options": ["Brown University", "Boston University"],
+            },
+        ]
+        self.assertEqual(
+            {"offers": "Yes", "school": "Brown University"},
+            {
+                item["id_or_name"]: item["answer"]
+                for item in qa.explicit_approved_answers(
+                    controls, approved_answers=self.APPROVED,
+                )
+            },
+        )
 
     def test_similarly_named_school_is_not_selected(self):
         approved = json.loads(json.dumps(self.APPROVED))

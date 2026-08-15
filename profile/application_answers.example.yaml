@@ -14,12 +14,21 @@ identity:
 education:
   high_school: null
   high_school_graduation_year: null
+  standardized_tests:
+    sat: null
+    act: null
+    # Set false only after the user confirms they did not take the ACT.
+    act_taken: null
   expected_graduation_month: null
   expected_graduation_year: null
   # An explicitly approved estimate is allowed when a form requires a day.
   exact_graduation_date: null
 preferences:
   hybrid: null
+  # General willingness facts. These do not claim the candidate is currently
+  # within commuting distance of any particular office.
+  onsite: null
+  relocate: null
   relocation_assistance_required: null
   travel: null
   future_contact: null
@@ -51,6 +60,9 @@ legal:
 professional:
   # Use false or [] only after the user confirms there are no publications.
   publications: null
+  # Exact response for direct reference-detail fields, for example
+  # "Available upon request." Never store invented names or contact details.
+  references: null
 # Exact user-authored answers for recurring free-text application prompts. Every
 # normalized phrase in match_all must appear in the form question before the
 # answer is eligible. Keep the real populated values in the encrypted answer bank.

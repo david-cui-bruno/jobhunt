@@ -77,7 +77,13 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
         selected_identity["disability"] = identity.get("disability")
     if selected_identity:
         result["identity"] = selected_identity
-    if re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)|\b(high school|secondary school)\b", question):
+    if re.search(
+        r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)|"
+        r"\b(high school|secondary school)\b|"
+        r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|test|take|taken)\b|"
+        r"\b(?:score|test|take|taken)\b.{0,30}\b(?:sat|act)\b",
+        question,
+    ):
         education = source.get("education") or {}
         profile_education = PROFILE.get("education") or {}
         selected_education = {}
@@ -94,11 +100,21 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
             selected_education["high_school_graduation_year"] = education.get(
                 "high_school_graduation_year"
             )
+        if re.search(
+            r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|test|take|taken)\b|"
+            r"\b(?:score|test|take|taken)\b.{0,30}\b(?:sat|act)\b",
+            question,
+        ):
+            selected_education["standardized_tests"] = education.get(
+                "standardized_tests"
+            ) or {}
         result["education"] = selected_education
     preferences = source.get("preferences") or {}
     selected_preferences = {}
     for key, pattern in {
         "hybrid": r"\b(hybrid|on[- ]?site|in[- ]?office|days? (?:a|per) week|work schedule)\b",
+        "onsite": r"\b(on[- ]?site|in[- ]?office|work schedule)\b",
+        "relocate": r"\brelocat(?:e|ing|ion)\b",
         "relocation_assistance_required": r"\b(relocat(?:e|ion)|local to the area)\b",
         "travel": r"\btravel\b",
         "future_contact": r"\b(future contact|marketing|talent community)\b",
@@ -121,7 +137,7 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
         question,
     ):
         result["legal"] = legal
-    if re.search(r"\bpublications?\b", question):
+    if re.search(r"\b(publications?|references?)\b", question):
         result["professional"] = source.get("professional") or {}
     companies = {}
     for company, facts in (source.get("company_facts") or {}).items():
@@ -292,7 +308,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(date of birth|dob|birth date|birthday|age)\b",
     r"\b(18 or older|at least 18|(?:graduation|graduate) (?:date|month(?:\s+and\s+year)?|year))\b",
     r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary)|(?:pay|compensation) expectations?)\b",
-    r"\b(offer deadline|exploding offer|outstanding offer|competing offer|pending offer|deadline to accept)\b",
+    r"\b(offer deadline|exploding offer|outstanding offers?|competing offers?|pending offers?|deadline to accept)\b",
     r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b",
     r"\b(referral|referred|refer you|know anyone|previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker)|current employee)\b",
     r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|prior application|previous application)\b",
@@ -301,6 +317,8 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(non[- ]?compete|notice period|conflict of interest|restrictive (?:agreement|covenant)|moonlighting|outside employment)\b|\bagreement with (?:your )?(?:current|any other) employer\b",
     r"\bdriver[’']?s? licen[cs]e\b",
     r"\bpublications?\b",
+    r"\b(?:professional |employment )?references?\b",
+    r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|test|take|taken)\b|\b(?:score|test|take|taken)\b.{0,30}\b(?:sat|act)\b",
     r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b",
     r"\b(exact|specific)\b.*\b(schedule|hours|availability|travel)\b|\b(work schedule|travel schedule|travel percentage|% travel|days per week|hours per week|available hours)\b",
     r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b",
@@ -308,7 +326,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(gender|race|ethnicity|racial|hispanic|latino|transgender|sexual orientation|veteran status|are you a veteran)\b",
     r"\bhave you (?:ever )?used\b.*\bbefore\b",
     r"\b(days? (?:a|per) week|in[- ]?office|on[- ]?site|hybrid schedule|willing to (?:come|work|join).*(?:office|on[- ]?site))\b",
-    r"\b(local to the area|relocation assistance)\b",
+    r"\b(local to the area|relocation assistance)\b|\b(?:willing|open|able)\b.{0,40}\brelocat(?:e|ing|ion)\b",
     r"\b(high school|secondary school)\b",
     r"\bcurrent school\s+(?:year|enrollment|status|grade|class|level)\b",
     r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b",
@@ -401,6 +419,61 @@ def _employment_type_question(control: dict) -> bool:
         )
         or (has_both_options and re.search(r"\b(?:employment|work|seeking|type)\b", question))
     )
+
+
+def _employee_referral_detail_question(control: dict) -> bool:
+    """Identify a conditional request for the referring employee's identity."""
+    question = _control_question_text(control).lower()
+    return bool(
+        re.search(r"\b(?:referred|referral)\b", question)
+        and re.search(r"\b(?:employee|team member)\b", question)
+        and re.search(
+            r"\b(?:full name|name below|name of|who referred|referrer(?:'s)? name)\b",
+            question,
+        )
+    )
+
+
+def _reference_details_question(control: dict) -> bool:
+    """Recognize requests for reference details without matching email fields."""
+    label = re.sub(
+        r"[\s*?:]+$", "", str(control.get("label") or "").strip().lower()
+    )
+    if label in {"references", "professional references", "employment references"}:
+        return True
+    question = _control_question_text(control).lower()
+    return bool(re.search(
+        r"\b(?:provide|list|share)\b.{0,30}\b(?:professional |employment )?references?\b",
+        question,
+    ))
+
+
+def _onsite_option(expected: bool, options: list[str], relocate: bool) -> str | None:
+    """Map onsite willingness without claiming the candidate already lives nearby."""
+    if expected and relocate and options:
+        relocation_option = _exact_matching_option([
+            "I'm open to relocating to the area and working onsite",
+            "I’m open to relocating to the area and working onsite",
+            "Open to relocating to the area and working onsite",
+        ], options)
+        if relocation_option:
+            return relocation_option
+        # A general willingness to relocate says nothing about current proximity.
+        # Never turn it into a claim that the candidate is local or commutable.
+        options = [
+            option for option in options
+            if not _claims_current_proximity(option)
+        ]
+    return _render_boolean(expected, options)
+
+
+def _claims_current_proximity(value: object) -> bool:
+    """Whether an answer asserts locality that relocation willingness cannot prove."""
+    return re.search(
+        r"\b(?:commut(?:e|ing)|local|within\s+\w*\s*distance)\b",
+        str(value or ""),
+        re.I,
+    ) is not None
 
 
 def _hometown_component(control: dict, answers: dict) -> str | None:
@@ -698,9 +771,13 @@ def _is_current_school_control(control: dict) -> bool:
         question,
     ):
         return False
+    if re.search(r"\b(?:email|e-mail|address|phone|student id)\b", question):
+        return False
     if re.search(
         r"\b(?:select|choose)\b.*\bcurrent school\b|"
-        r"\bcurrent school\b.*\b(?:list|below)\b",
+        r"\bcurrent school\b.*\b(?:list|below)\b|"
+        r"\b(?:re-?confirm|confirm)\b.*\b(?:current )?(?:school|university)\b"
+        r".*\b(?:attend|enrolled)\b",
         question,
     ):
         return True
@@ -880,7 +957,40 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                               if part.strip())
             answer = _first_matching_option(candidates, options) if options else major
         elif re.search(r"\bstandardized test score type\b", question):
-            answer = _first_matching_option(["SAT"], options) if options else "SAT"
+            tests = education.get("standardized_tests") or {}
+            candidates = []
+            if tests.get("sat") is not None:
+                candidates.append("SAT")
+            if tests.get("act") is not None:
+                candidates.append("ACT")
+            if candidates:
+                answer = (_first_matching_option(candidates, options)
+                          if options else candidates[0])
+        elif re.search(
+            r"\bsat\b.{0,30}\b(?:score|test|take|taken)\b|"
+            r"\b(?:score|test|take|taken)\b.{0,30}\bsat\b",
+            question,
+        ):
+            score = (education.get("standardized_tests") or {}).get("sat")
+            if score is not None:
+                candidates = [f"{score} out of 1600", str(score)]
+                answer = (_exact_matching_option(candidates, options)
+                          if options else str(score))
+        elif re.search(
+            r"\bact\b.{0,30}\b(?:score|test|take|taken)\b|"
+            r"\b(?:score|test|take|taken)\b.{0,30}\bact\b",
+            question,
+        ):
+            tests = education.get("standardized_tests") or {}
+            if tests.get("act_taken") is False:
+                candidates = ["Did not take", "Not taken", "I did not take the ACT"]
+                answer = (_exact_matching_option(candidates, options)
+                          if options else candidates[0])
+            elif tests.get("act") is not None:
+                score = tests["act"]
+                candidates = [f"{score} out of 36", str(score)]
+                answer = (_exact_matching_option(candidates, options)
+                          if options else str(score))
         elif re.search(r"\bcountry.*\b(?:citizenship|permanent residence)\b", question):
             if (PROFILE.get("work_authorization") or {}).get("us_citizen") is True:
                 answer = (_first_matching_option(
@@ -899,7 +1009,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = offers[0].get("deadline") or offers[0].get("deadline_month")
                 if control.get("hasDay") and not offers[0].get("deadline"):
                     answer = None
-        elif re.search(r"\b(outstanding offer|competing offer|pending offer|currently have any offers?|offers? from other firms?)\b", question):
+        elif re.search(r"\b(outstanding offers?|competing offers?|pending offers?|currently have any offers?|offers? from other firms?)\b", question):
             answer = _render_boolean(bool(offers), options)
             if offers and not options:
                 companies = ", ".join(str(offer.get("company")) for offer in offers if offer.get("company"))
@@ -919,6 +1029,10 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             expected = _company_fact(control, "prior_employment", approved)
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
+        elif _employee_referral_detail_question(control):
+            expected = _company_fact(control, "referral", approved)
+            if expected is False and not options:
+                answer = "N/A"
         elif re.search(r"\b(referral|referred|refer you|know anyone|current employee)\b", question):
             expected = _company_fact(control, "referral", approved)
             if isinstance(expected, bool):
@@ -987,6 +1101,12 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = _render_boolean(notice_boolean, options)
             else:
                 answer = notice
+        elif _reference_details_question(control):
+            references = str(
+                (approved.get("professional") or {}).get("references") or ""
+            ).strip()
+            if references:
+                answer = references
         elif re.search(r"\bpublications?\b", question):
             publications = (approved.get("professional") or {}).get("publications")
             if publications is False or publications == []:
@@ -995,6 +1115,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = "; ".join(str(item) for item in publications)
         elif re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|on[- ]?site|hybrid)\b", question):
             company_onsite = _company_fact(control, "fully_onsite", approved)
+            global_onsite = preferences.get("onsite")
             requires_hybrid = bool(re.search(
                 r"\brequir(?:e|es|ed|ing)\b.*\bhybrid\b|"
                 r"\bhybrid\b.*\brequir(?:e|es|ed|ing)\b",
@@ -1004,14 +1125,19 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             if requires_hybrid:
                 expected = False if company_onsite is True else _MISSING
             elif fully_onsite_question and company_onsite is _MISSING:
-                expected = _MISSING
+                expected = global_onsite
             elif (re.search(r"\b(on[- ]?site|in[- ]?office)\b", question)
                   and isinstance(company_onsite, bool)):
                 expected = company_onsite
+            elif (re.search(r"\b(on[- ]?site|in[- ]?office)\b", question)
+                  and isinstance(global_onsite, bool)):
+                expected = global_onsite
             else:
                 expected = preferences.get("hybrid")
             if isinstance(expected, bool):
-                answer = _render_boolean(expected, options)
+                answer = _onsite_option(
+                    expected, options, preferences.get("relocate") is True,
+                )
         elif re.search(r"\blocal to the area\b", question):
             # Workday's "No" choices encode whether relocation assistance is
             # required. Prefer a company-specific approved label, then the
@@ -1020,7 +1146,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             if isinstance(expected, str):
                 answer = _best_option(expected, options) if options else expected
             elif (preferences.get("relocation_assistance_required") is False
-                  and (PROFILE.get("preferences") or {}).get("relocate_ok")):
+                  and preferences.get("relocate") is True):
                 candidates = [
                     "No - I am willing to relocate & I do not require relocation assistance.",
                     "No, I am willing to relocate and do not require relocation assistance",
@@ -1029,6 +1155,13 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = _first_matching_option(candidates, options) if options else candidates[0]
         elif re.search(r"\brelocation assistance\b", question):
             expected = preferences.get("relocation_assistance_required")
+            if isinstance(expected, bool):
+                answer = _render_boolean(expected, options)
+        elif re.search(
+            r"\b(?:willing|open|able)\b.{0,40}\brelocat(?:e|ing|ion)\b",
+            question,
+        ):
+            expected = preferences.get("relocate")
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
         elif re.search(r"\blocation of your current university\b", question):
@@ -1059,7 +1192,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             answer = _render_boolean(expected, options)
         elif (re.search(r"\bwhich location\(s\).*open to working\b", question)
               and control.get("kind") == "checkgroup"
-              and (PROFILE.get("preferences") or {}).get("relocate_ok")):
+              and preferences.get("relocate") is True):
             # The profile explicitly says open to any listed office. Preserve a
             # list so Workday can select every checkbox instead of stringifying
             # it and accidentally choosing only one.
@@ -1200,6 +1333,45 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         if re.fullmatch(r"\s*\d{4}\s*", answer_text):
             return answer_text.strip() == expected_year
         return str(expected_month or "").lower() == answer_text.strip().lower()
+    if re.search(r"\bstandardized test score type\b", question):
+        tests = (approved.get("education") or {}).get("standardized_tests") or {}
+        candidates = []
+        if tests.get("sat") is not None:
+            candidates.append("SAT")
+        if tests.get("act") is not None:
+            candidates.append("ACT")
+        options = [str(option) for option in control.get("options") or []]
+        expected = (_first_matching_option(candidates, options)
+                    if options else (candidates[0] if candidates else None))
+        return bool(expected and expected.casefold() == answer_text.strip().casefold())
+    if re.search(
+        r"\bsat\b.{0,30}\b(?:score|test|take|taken)\b|"
+        r"\b(?:score|test|take|taken)\b.{0,30}\bsat\b",
+        question,
+    ):
+        score = ((approved.get("education") or {}).get("standardized_tests") or {}).get("sat")
+        if score is None:
+            return False
+        options = [str(option) for option in control.get("options") or []]
+        expected = (_exact_matching_option([f"{score} out of 1600", str(score)], options)
+                    if options else str(score))
+        return bool(expected and expected.casefold() == answer_text.strip().casefold())
+    if re.search(
+        r"\bact\b.{0,30}\b(?:score|test|take|taken)\b|"
+        r"\b(?:score|test|take|taken)\b.{0,30}\bact\b",
+        question,
+    ):
+        tests = (approved.get("education") or {}).get("standardized_tests") or {}
+        options = [str(option) for option in control.get("options") or []]
+        if tests.get("act_taken") is False:
+            candidates = ["Did not take", "Not taken", "I did not take the ACT"]
+        elif tests.get("act") is not None:
+            candidates = [f"{tests['act']} out of 36", str(tests["act"])]
+        else:
+            return False
+        expected = (_exact_matching_option(candidates, options)
+                    if options else candidates[0])
+        return bool(expected and expected.casefold() == answer_text.strip().casefold())
     if re.search(r"\b(high school|secondary school)\b", question):
         expected = _approved_high_school_answer(
             approved,
@@ -1250,7 +1422,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             elif (exact or month) and _date_parts(exact or month) == _date_parts(answer_text):
                 return True
         return False
-    if re.search(r"\b(outstanding offer|competing offer|pending offer|currently have any offers?|offers? from other firms?)\b", question):
+    if re.search(r"\b(outstanding offers?|competing offers?|pending offers?|currently have any offers?|offers? from other firms?)\b", question):
         parsed = _answer_boolean(answer_text)
         if parsed is not None:
             return parsed is bool(offers)
@@ -1262,6 +1434,9 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return _company_answer_is_approved(control, "used_product", approved, answer)
     if re.search(r"\b(previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker))\b", question):
         return _company_answer_is_approved(control, "prior_employment", approved, answer)
+    if _employee_referral_detail_question(control):
+        expected = _company_fact(control, "referral", approved)
+        return expected is False and answer_text.strip().casefold() == "n/a"
     if re.search(r"\b(referral|referred|refer you|know anyone|current employee)\b", question):
         return _company_answer_is_approved(control, "referral", approved, answer)
     if re.search(r"\b(previously interviewed|interviewed (?:at|with|for))\b", question):
@@ -1315,6 +1490,11 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         if control.get("options") and expected_boolean is not None:
             return _answer_boolean(answer_text) is expected_boolean
         return bool(expected and expected.lower() == answer_text.strip().lower())
+    if _reference_details_question(control):
+        expected = str(
+            (approved.get("professional") or {}).get("references") or ""
+        ).strip()
+        return bool(expected and expected.casefold() == answer_text.strip().casefold())
     if re.search(r"\bpublications?\b", question):
         publications = (approved.get("professional") or {}).get("publications")
         if publications is False or publications == []:
@@ -1329,6 +1509,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return preferences.get("travel") is not None
     if re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|on[- ]?site|hybrid)\b", question):
         company_onsite = _company_fact(control, "fully_onsite", approved)
+        global_onsite = preferences.get("onsite")
         requires_hybrid = bool(re.search(
             r"\brequir(?:e|es|ed|ing)\b.*\bhybrid\b|"
             r"\bhybrid\b.*\brequir(?:e|es|ed|ing)\b",
@@ -1338,26 +1519,46 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         if requires_hybrid:
             expected = False if company_onsite is True else _MISSING
         elif fully_onsite_question and company_onsite is _MISSING:
-            expected = _MISSING
+            expected = global_onsite
         elif (re.search(r"\b(on[- ]?site|in[- ]?office)\b", question)
               and isinstance(company_onsite, bool)):
             expected = company_onsite
+        elif (re.search(r"\b(on[- ]?site|in[- ]?office)\b", question)
+              and isinstance(global_onsite, bool)):
+            expected = global_onsite
         else:
             expected = preferences.get("hybrid")
-        return expected is not None and _answer_boolean(answer_text) is expected
+        if not isinstance(expected, bool):
+            return False
+        options = [str(option) for option in control.get("options") or []]
+        approved_option = _onsite_option(
+            expected, options, preferences.get("relocate") is True,
+        )
+        if approved_option:
+            return approved_option.casefold() == answer_text.strip().casefold()
+        if (expected is True and preferences.get("relocate") is True
+                and _claims_current_proximity(answer_text)):
+            return False
+        return _answer_boolean(answer_text) is expected
     if re.search(r"\blocal to the area\b", question):
         expected = _company_fact(control, "local_to_advertised_area_answer", approved)
         if isinstance(expected, str):
             return expected.strip().lower() == answer_text.strip().lower()
         return bool(
             preferences.get("relocation_assistance_required") is False
-            and (PROFILE.get("preferences") or {}).get("relocate_ok")
+            and preferences.get("relocate") is True
             and re.search(r"\bno\b", answer_text, re.I)
             and re.search(r"\brelocat(?:e|ion)\b", answer_text, re.I)
             and re.search(r"\b(?:do not|don't|without)\b.*\bassist", answer_text, re.I)
         )
     if re.search(r"\brelocation assistance\b", question):
         expected = preferences.get("relocation_assistance_required")
+        return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
+    if re.search(
+        r"\b(?:willing|open|able)\b.{0,40}\brelocat(?:e|ing|ion)\b",
+        question,
+    ):
+        expected = preferences.get("relocate")
         return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
     if re.search(r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b", question):
         expected = preferences.get("future_contact")
