@@ -79,6 +79,15 @@ class AshbyBasicFieldTests(unittest.TestCase):
 
         self.assertEqual("David Cui", page.fields["Name"].value)
 
+    def test_explicit_full_name_form_is_supported(self):
+        page = _SplitNamePage()
+        page.fields = {"Full Name": _Element()}
+
+        _fill_basics(page, self.PROFILE)
+
+        self.assertEqual("David Cui", page.fields["Full Name"].value)
+        self.assertIn(("Full Name", True), page.calls)
+
 
 if __name__ == "__main__":
     unittest.main()

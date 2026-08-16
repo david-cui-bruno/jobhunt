@@ -52,10 +52,12 @@ def _ashby_submission_rejection(body_text: str) -> str:
 
 def _fill_basics(page, profile: dict) -> None:
     """Fill stable Ashby profile fields without treating split names as one field."""
+    full_name = f"{profile['name']['first']} {profile['name']['last']}"
     for label, value, exact in [
         ("First Name", profile["name"]["first"], False),
         ("Last Name", profile["name"]["last"], False),
-        ("Name", f"{profile['name']['first']} {profile['name']['last']}", True),
+        ("Full Name", full_name, True),
+        ("Name", full_name, True),
         ("Email", profile["email"], False),
         ("Phone", profile["phone"], False),
         ("LinkedIn", profile["links"]["linkedin"], False),

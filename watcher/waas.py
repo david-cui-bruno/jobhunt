@@ -17,6 +17,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
 from timeouts import configure_page
 
@@ -27,6 +28,24 @@ MODEL = "claude-sonnet-5"
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 LIST_URL = "https://www.workatastartup.com/companies?jobType=intern&sortBy=created_desc&role=eng"
+
+
+def _company_name(label: str, company_url: str = "") -> str:
+    """Return the company name, never a directory CTA such as 'See all 8 jobs'."""
+    for line in (label or "").splitlines():
+        candidate = line.strip()
+        if not candidate or re.fullmatch(r"see all\s+\d+\s+jobs?\s*[›>]?,?", candidate, re.I):
+            continue
+        return candidate[:60]
+    parts = [unquote(part) for part in urlparse(company_url or "").path.split("/") if part]
+    if len(parts) >= 2 and parts[-2].lower() == "companies":
+        return parts[-1].replace("-", " ").replace("_", " ").title()[:60]
+    return ""
+
+
+def _send_button(page):
+    """Select only the final modal Send control, never a background Apply button."""
+    return page.get_by_role("button", name="Send", exact=True).last
 
 
 def _browser(pw):
@@ -63,12 +82,18 @@ def scrape(max_scroll: int = 6) -> int:
                     // company name: nearest heading above the job link
                     const card = a.closest('div[class*=company], div[class*=directory], div');
                     let comp = '';
+                    let compUrl = '';
                     let el = card;
                     for (let i = 0; i < 5 && el; i++, el = el.parentElement) {
                         const h = el.querySelector('a[href*="/companies/"] span, a[href*="/companies/"]');
-                        if (h && h.innerText.trim()) { comp = h.innerText.trim().split('\\n')[0]; break; }
+                        if (h && h.innerText.trim()) {
+                            comp = h.innerText.trim().split('\\n')[0];
+                            const link = h.closest('a') || h;
+                            compUrl = link.href || '';
+                            break;
+                        }
                     }
-                    out.push({url: a.href, title: t, company: comp.slice(0, 60)});
+                    out.push({url: a.href, title: t, company: comp.slice(0, 60), company_url: compUrl});
                 });
                 return out;
             }
@@ -82,6 +107,7 @@ def scrape(max_scroll: int = 6) -> int:
         seen.add(c["url"])
         if re.search(r"mechatronics|electrical|hardware|mechanical", c["title"], re.I):
             continue
+        c["company"] = _company_name(c.get("company", ""), c.get("company_url", ""))
         rows.append(c)
     conn = sqlite3.connect(DB)
     new = 0
@@ -102,7 +128,7 @@ def scrape(max_scroll: int = 6) -> int:
 
 
 NOTE_PROMPT = """Write a 90-120 word Work at a Startup application note to the founders for this job.
-Candidate: David Cui — Brown CS+Econ '27 (4.0), ex-founding CTO of Framewise Health (YC-backed,
+Candidate: David Cui — Brown CS+Econ, expected June 2028 (4.0), ex-founding CTO of Framewise Health (YC-backed,
 patient video pipeline: Temporal/Python/Supabase/Claude), SWE intern at Freya (YC S25, real-time
 LLM voice agents, p99 latency work), fraud-detection ML at Sotatek. USACO/AIME. Ships fast.
 
@@ -145,12 +171,16 @@ def apply_waas(url: str, slug: str, dry_run: bool = True) -> dict:
         if ta.count():
             ta.fill(note)
         page.wait_for_timeout(500)
+        send = _send_button(page)
+        if not send.count() or not send.is_visible():
+            result["reason"] = "final Send button not found"
+            b.close()
+            return result
         if dry_run:
             page.screenshot(path=str(ROOT / "out" / "screenshots" / f"{slug}_waas_filled.png"), full_page=True)
             result.update(ok=True, reason="dry run — note drafted, not sent")
             b.close()
             return result
-        send = page.locator("button:has-text('Send'), button:has-text('Apply')").last
         mark_submit_attempted()
         send.click(timeout=5000)
         page.wait_for_timeout(3000)

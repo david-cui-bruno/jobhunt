@@ -667,6 +667,95 @@ class QaManualPolicyTest(unittest.TestCase):
             approved_answers=approved,
         ))
 
+    def test_replit_project_answers_are_exact_grounded_and_company_scoped(self):
+        approved = json.loads(json.dumps(self.APPROVED))
+        description = (
+            "Framewise Health is a YC-backed healthcare startup I co-founded and "
+            "led technically. The product turns medical records into personalized, "
+            "clinician-reviewed patient education videos. I built the production "
+            "pipeline with Temporal, Python, Supabase, and Claude, plus React Native "
+            "and Next.js patient and provider applications. The system was designed "
+            "for stateful execution, retries, observability, and HIPAA-conscious data "
+            "handling across four pilot sites. The public link shows the product and "
+            "clinical use case; the underlying patient-data systems are private for "
+            "security and compliance."
+        )
+        interest = (
+            "Replit's mission to make software creation accessible and its focus "
+            "on turning an idea into deployed software are especially compelling "
+            "to me. As the technical co-founder of Framewise Health, I built a "
+            "production workflow that turned complex medical records into useful "
+            "patient education, and I have also worked on real-time LLM voice "
+            "systems at Freya. Those experiences made me care deeply about agent "
+            "reliability, orchestration, and product interfaces that let people "
+            "move from intent to a working result. I would be excited to bring that "
+            "builder perspective to Replit and learn from a team pushing AI-native "
+            "software creation forward."
+        )
+        entries = [
+            {
+                "key": "replit_project_url",
+                "company": "Replit",
+                "company_aliases": ["replit"],
+                "match_all": ["project url"],
+                "answer": "https://www.framewisehealth.com/",
+            },
+            {
+                "key": "replit_project_password",
+                "company": "Replit",
+                "company_aliases": ["replit"],
+                "match_all": ["project password"],
+                "answer": "N/A (public website; no password required)",
+            },
+            {
+                "key": "replit_project_description",
+                "company": "Replit",
+                "company_aliases": ["replit"],
+                "match_all": ["tell us about your submitted project"],
+                "answer": description,
+            },
+            {
+                "key": "replit_specific_interest",
+                "company": "Replit",
+                "company_aliases": ["replit"],
+                "match_all": ["why are you interested in replit"],
+                "answer": interest,
+            },
+        ]
+        approved["long_form_answers"].extend(entries)
+        controls = [
+            {"id": "url", "label": "Project URL"},
+            {"id": "password", "label": "Project Password"},
+            {"id": "description", "label": "Please tell us about your submitted project"},
+            {"id": "interest", "label": "Why are you interested in Replit?"},
+        ]
+
+        self.assertEqual(
+            [
+                {"id_or_name": "url", "answer": entries[0]["answer"]},
+                {"id_or_name": "password", "answer": entries[1]["answer"]},
+                {"id_or_name": "description", "answer": description},
+                {"id_or_name": "interest", "answer": interest},
+            ],
+            qa.explicit_approved_answers(
+                controls, company_context="replit", approved_answers=approved,
+            ),
+        )
+        self.assertEqual([], qa.explicit_approved_answers(
+            controls, company_context="Other Company", approved_answers=approved,
+        ))
+        for control, entry in zip(controls, entries):
+            self.assertFalse(qa.answer_requires_manual(
+                dict(control, company_context="Replit"),
+                entry["answer"],
+                approved_answers=approved,
+            ))
+            self.assertTrue(qa.answer_requires_manual(
+                dict(control, company_context="Other Company"),
+                entry["answer"],
+                approved_answers=approved,
+            ))
+
     def test_ashby_company_context_is_stable_across_application_urls(self):
         self.assertEqual(
             "oligo",
