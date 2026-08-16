@@ -671,53 +671,40 @@ class QaManualPolicyTest(unittest.TestCase):
         approved = json.loads(json.dumps(self.APPROVED))
         description = (
             "Framewise Health is a YC-backed healthcare startup I co-founded and "
-            "led technically. The product turns medical records into personalized, "
-            "clinician-reviewed patient education videos. I built the production "
-            "pipeline with Temporal, Python, Supabase, and Claude, plus React Native "
-            "and Next.js patient and provider applications. The system was designed "
-            "for stateful execution, retries, observability, and HIPAA-conscious data "
-            "handling across four pilot sites. The public link shows the product and "
-            "clinical use case; the underlying patient-data systems are private for "
-            "security and compliance."
+            "led technically. It turns medical records into clinician-reviewed "
+            "patient education videos. I built the production pipeline with Temporal, "
+            "Python, Supabase, and Claude, plus React Native and Next.js apps. "
+            "Patient-data systems remain private for security."
         )
         interest = (
-            "Replit's mission to make software creation accessible and its focus "
-            "on turning an idea into deployed software are especially compelling "
-            "to me. As the technical co-founder of Framewise Health, I built a "
-            "production workflow that turned complex medical records into useful "
-            "patient education, and I have also worked on real-time LLM voice "
-            "systems at Freya. Those experiences made me care deeply about agent "
-            "reliability, orchestration, and product interfaces that let people "
-            "move from intent to a working result. I would be excited to bring that "
-            "builder perspective to Replit and learn from a team pushing AI-native "
-            "software creation forward."
+            "Replit's mission to make software creation accessible resonates with "
+            "me. At Framewise Health and Freya, I built production workflows and "
+            "real-time LLM systems, making me care about reliable agents and "
+            "interfaces that turn intent into working software. I would bring that "
+            "builder perspective to Replit."
         )
         entries = [
             {
                 "key": "replit_project_url",
                 "company": "Replit",
-                "company_aliases": ["replit"],
                 "match_all": ["project url"],
                 "answer": "https://www.framewisehealth.com/",
             },
             {
                 "key": "replit_project_password",
                 "company": "Replit",
-                "company_aliases": ["replit"],
                 "match_all": ["project password"],
                 "answer": "N/A (public website; no password required)",
             },
             {
                 "key": "replit_project_description",
                 "company": "Replit",
-                "company_aliases": ["replit"],
                 "match_all": ["tell us about your submitted project"],
                 "answer": description,
             },
             {
                 "key": "replit_specific_interest",
                 "company": "Replit",
-                "company_aliases": ["replit"],
                 "match_all": ["why are you interested in replit"],
                 "answer": interest,
             },
