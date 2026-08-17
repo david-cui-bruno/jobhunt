@@ -1601,7 +1601,17 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             "female": {"female", "woman"}, "woman": {"female", "woman"},
             "non-binary": {"non-binary", "nonbinary"},
         }.get(expected, set())
-        return answer_text.strip().lower() in aliases
+        answer_norm = answer_text.strip().lower()
+        if answer_norm in aliases:
+            return True
+        # Combined labels like 'Man / Trans Man' (PSP 2026-08-17): truthful
+        # when every slash segment reads as the approved gender.
+        segments = [seg.strip() for seg in answer_norm.split("/") if seg.strip()]
+        return bool(aliases and len(segments) > 1 and all(
+            seg in aliases or any(seg.endswith(f" {alias}") or seg.startswith(f"{alias} ")
+                                  for alias in aliases)
+            for seg in segments
+        ))
     if re.search(r"\b(race|ethnicity|racial|hispanic|latino)\b", question):
         expected = str(identity.get("race_ethnicity") or "").strip().lower()
         if (expected and "hispanic" not in expected and "latino" not in expected
