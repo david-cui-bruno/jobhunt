@@ -1109,7 +1109,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 # Binary Hispanic/Latino question is derivable from the
                 # approved race fact (Asian -> No). DV Trading 2026-08-17.
                 answer = _render_boolean(False, options)
-        elif re.search(r"\bai[\s-]assisted\b.*\bscreening\b|\bautomated (?:resume )?screening\b", question) and re.search(r"\bopt(?:ing)?[\s-]?out\b", question):
+        elif re.search(r"\bai[\s\-\u2010-\u2015]assisted\b.*\bscreening\b|\bautomated (?:resume )?screening\b", question) and re.search(r"\bopt(?:ing)?[\s-]?out\b", question):
             answer = _ai_screening_choice(options)
         elif re.search(r"\b(transgender|sexual orientation)\b", question):
             # These identity facts have not been provided. Prefer the site's
@@ -1625,7 +1625,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             return True
         return (bool(expected and _demographic_label_matches(expected, answer_text))
                 or _decline_demographic_option([answer_text]) is not None)
-    if re.search(r"\bai[\s-]assisted\b.*\bscreening\b|\bautomated (?:resume )?screening\b", question) and re.search(r"\bopt(?:ing)?[\s-]?out\b", question):
+    if re.search(r"\bai[\s\-\u2010-\u2015]assisted\b.*\bscreening\b|\bautomated (?:resume )?screening\b", question) and re.search(r"\bopt(?:ing)?[\s-]?out\b", question):
         options = [str(option) for option in control.get("options") or []]
         expected = _ai_screening_choice(options) if options else None
         return bool(expected and expected.strip().casefold() == answer_text.strip().casefold())
