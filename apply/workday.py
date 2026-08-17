@@ -1157,16 +1157,26 @@ def maybe_sign_in(page, company_key: str) -> None:
             pass
 
 
+def _dropdown_needs_options(field: dict, company_key: str) -> bool:
+    """Dropdowns needing a listbox harvest: empty ones, and prefilled ones whose
+    value fails policy. Saved drafts can carry unapproved answers (Amgen
+    2026-08-17: 'How Did You Hear About Us?' = 'Corporate Website') and
+    rendering the approved replacement needs the option texts."""
+    if field.get("kind") != "dropdown":
+        return False
+    if not field.get("value"):
+        return True
+    return qa.answer_requires_manual(
+        dict(field, company_context=company_key), field["value"])
+
+
 def fill_current_page(page, company_key: str, slug: str) -> None:
     """One extraction + Claude answering + fill pass over the current wizard page."""
     fields = page.evaluate(WD_EXTRACT_JS)
     force_identity(page, fields)
     fields = page.evaluate(WD_EXTRACT_JS)
-    unsafe = unsafe_prefilled_fields(fields, company_key)
-    if unsafe:
-        raise UnsafePrefilledAnswers(unsafe)
     for f in fields:
-        if f["kind"] == "dropdown" and not f["value"]:
+        if _dropdown_needs_options(f, company_key):
             try:
                 fkit, _, idx_s = f["faid"].partition("|")
                 ff = page.locator(f"[data-fkit-id='{fkit}']").first if fkit != "x" else \
@@ -1208,6 +1218,19 @@ def fill_current_page(page, company_key: str, slug: str) -> None:
             wd_fill(page, dict(field, company_context=company_key), answer)
             page.wait_for_timeout(250)
     fields = page.evaluate(WD_EXTRACT_JS)
+    # Re-extraction drops harvested listbox options; restore them so policy
+    # checks can still render approved dropdown answers.
+    harvested = {f["faid"]: f.get("options") for f in by_faid.values() if f.get("options")}
+    for f in fields:
+        if not f.get("options") and f["faid"] in harvested:
+            f["options"] = harvested[f["faid"]]
+    # Check saved-draft/parser prefills only after the grounded pass had its
+    # chance to overwrite them with approved facts (Amgen 2026-08-17: draft
+    # carried 'Corporate Website' for the recruiting source; correct it
+    # rather than bouncing to manual). Anything still unapproved fails closed.
+    unsafe = unsafe_prefilled_fields(fields, company_key)
+    if unsafe:
+        raise UnsafePrefilledAnswers(unsafe)
     todo = [f for f in fields if not f["value"]]
     if not todo:
         return

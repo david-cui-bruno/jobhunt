@@ -506,6 +506,23 @@ class WorkdayAnswerTests(unittest.TestCase):
         self.assertNotIn("\n", path)
         self.assertTrue(path.endswith(".png"))
 
+    def test_dropdown_needs_options_for_unapproved_prefill(self) -> None:
+        """Amgen 2026-08-17: a saved draft prefilled 'Corporate Website' for
+        the recruiting source. The harvest pass must open such dropdowns so
+        the grounded pass can render and select the approved replacement."""
+        field = {
+            "faid": "source|0",
+            "label": "How Did You Hear About Us?*",
+            "kind": "dropdown",
+            "value": "Corporate Website",
+        }
+        self.assertTrue(workday._dropdown_needs_options(field, "amgen"))
+        # Empty dropdowns still harvest; approved prefills do not.
+        self.assertTrue(workday._dropdown_needs_options(
+            dict(field, value=""), "amgen"))
+        self.assertFalse(workday._dropdown_needs_options(
+            dict(field, label="Phone Device Type*", value="Mobile"), "amgen"))
+
 
 if __name__ == "__main__":
     unittest.main()
