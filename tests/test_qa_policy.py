@@ -495,6 +495,59 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertTrue(qa.answer_requires_manual(
             used_product, "Yes", approved_answers=self.APPROVED))
 
+    def test_vevraa_veteran_paragraph_declines(self):
+        """Cadence 2026-08-17: the VEVRAA veteran dropdown label never says
+        'veteran status', and 'disabled veterans' in the paragraph routed the
+        answer into the disability branch, blocking the whole page."""
+        control = {
+            "id": "vet",
+            "label": ("This employer is a Government contractor subject to the Vietnam "
+                      "Era Veterans' Readjustment Assistance Act of 1974, as amended by "
+                      "the Jobs for Veterans Act of 2002, 38 U.S.C. 4212 (VEVRAA), which "
+                      "requires Government contractors to take affirmative action to "
+                      "employ and advance in employment protected veterans... regarding "
+                      "disabled veterans and reasonable accommodations...*"),
+            "options": ["I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED "
+                        "VETERAN LISTED ABOVE",
+                        "I AM NOT A VETERAN", "I DO NOT WISH TO ANSWER"],
+            "value": "",
+        }
+        rendered = qa.explicit_approved_answers([control], approved_answers=self.APPROVED)
+        self.assertEqual(
+            [{"id_or_name": "vet", "answer": "I DO NOT WISH TO ANSWER"}], rendered,
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            control, "I DO NOT WISH TO ANSWER", approved_answers=self.APPROVED))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED "
+                     "VETERAN LISTED ABOVE", approved_answers=self.APPROVED))
+
+    def test_ai_screening_notice_consents_to_standard_process(self):
+        """Crowe 2026-08-17: required Just-In-Time Notice dropdown (consent vs
+        Opt Out for AI-assisted resume screening) tripped the used-our-product
+        pattern and blocked the run."""
+        control = {
+            "id": "jit",
+            "label": ("Just-In-Time Notice: We use an AI-assisted resume-screening "
+                      "tool to help recruiters manage applications... You may opt out "
+                      "of automated screening and request manual review at any time by "
+                      "contacting us...*"),
+            "options": ["I acknowledge and consent to the use of the AI-assisted "
+                        "screening tool", "Opt Out"],
+            "value": "",
+        }
+        rendered = qa.explicit_approved_answers([control], approved_answers=self.APPROVED)
+        self.assertEqual(
+            [{"id_or_name": "jit",
+              "answer": "I acknowledge and consent to the use of the AI-assisted "
+                        "screening tool"}],
+            rendered,
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            control,
+            "I acknowledge and consent to the use of the AI-assisted screening tool",
+            approved_answers=self.APPROVED))
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",

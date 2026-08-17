@@ -722,6 +722,23 @@ def _high_school_term_answer(year: str, options: list[str]) -> str | None:
     return broad_term or _year_only_graduation_answer(year, options)
 
 
+def _ai_screening_choice(options: list[str]) -> str | None:
+    """Choose the continue-with-standard-process option on AI-screening notices.
+
+    Crowe 2026-08-17: a required 'Just-In-Time Notice' dropdown offers consent
+    vs 'Opt Out' for their AI-assisted resume screening. Consenting to the
+    employer's standard review process is a process attestation (like privacy
+    consents), not a personal-data disclosure. Only answer when the menu has
+    exactly one non-opt-out choice."""
+    real = [option for option in options
+            if option.strip() and option.strip().lower() != "select one"]
+    keep = [option for option in real
+            if not re.search(r"\bopt[\s-]?out\b", option, re.I)]
+    if len(keep) == 1 and len(real) >= 2:
+        return keep[0]
+    return None
+
+
 def _decline_demographic_option(options: list[str]) -> str | None:
     return _first_matching_option([
         "I don't wish to answer",
@@ -986,6 +1003,13 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             answer = identity.get("date_of_birth")
         elif re.search(r"\b(preferred pronouns?|pronouns?)\b", question):
             answer = identity.get("pronouns")
+        elif re.search(r"\b(veteran status|are you a veteran|protected veterans?|vevraa)\b", question):
+            # Check before the disability branch: VEVRAA paragraphs mention
+            # 'disabled veterans', which otherwise routes this menu into
+            # disability semantics (Cadence 2026-08-17).
+            veteran = identity.get("veteran")
+            answer = (_render_boolean(veteran, options) if isinstance(veteran, bool) else
+                      _decline_demographic_option(options))
         elif re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
             disability = identity.get("disability") or {}
             expected = disability.get("history") if "history" in question else disability.get("current")
@@ -1080,14 +1104,12 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 # Binary Hispanic/Latino question is derivable from the
                 # approved race fact (Asian -> No). DV Trading 2026-08-17.
                 answer = _render_boolean(False, options)
+        elif re.search(r"\bai[\s-]assisted\b.*\bscreening\b|\bautomated (?:resume )?screening\b", question) and re.search(r"\bopt(?:ing)?[\s-]?out\b", question):
+            answer = _ai_screening_choice(options)
         elif re.search(r"\b(transgender|sexual orientation)\b", question):
             # These identity facts have not been provided. Prefer the site's
             # explicit decline option rather than allowing a model to infer one.
             answer = _decline_demographic_option(options)
-        elif re.search(r"\b(veteran status|are you a veteran)\b", question):
-            veteran = identity.get("veteran")
-            answer = (_render_boolean(veteran, options) if isinstance(veteran, bool) else
-                      _decline_demographic_option(options))
         elif re.search(r"\bhighest level of education\b", question):
             # David is currently pursuing a BS. Prefer an in-progress/some-college
             # label over a completed Bachelor's claim when the form offers one.
@@ -1588,9 +1610,13 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             return True
         return (bool(expected and _demographic_label_matches(expected, answer_text))
                 or _decline_demographic_option([answer_text]) is not None)
+    if re.search(r"\bai[\s-]assisted\b.*\bscreening\b|\bautomated (?:resume )?screening\b", question) and re.search(r"\bopt(?:ing)?[\s-]?out\b", question):
+        options = [str(option) for option in control.get("options") or []]
+        expected = _ai_screening_choice(options) if options else None
+        return bool(expected and expected.strip().casefold() == answer_text.strip().casefold())
     if re.search(r"\b(transgender|sexual orientation)\b", question):
         return _decline_demographic_option([answer_text]) is not None
-    if re.search(r"\b(veteran status|are you a veteran)\b", question):
+    if re.search(r"\b(veteran status|are you a veteran|protected veterans?|vevraa)\b", question):
         expected = identity.get("veteran")
         return ((isinstance(expected, bool) and _answer_boolean(answer_text) is expected)
                 or (not isinstance(expected, bool)
