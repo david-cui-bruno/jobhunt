@@ -49,6 +49,24 @@ def _greenhouse_company_context(url: str) -> str:
     return unquote(parsed.path.strip("/").split("/", 1)[0])
 
 
+def _embed_fallback_url(url: str) -> str | None:
+    """job-boards.greenhouse.io/<board>/jobs/<id> -> embed/job_app URL.
+
+    Some employers (e.g. Workato) configure a vanity redirect from their
+    Greenhouse board to a custom careers site, so the canonical job URL never
+    shows the form. The embed endpoint on the same host still renders the
+    standard application form.
+    """
+    m = re.match(
+        r"https://(job-boards(?:\.[a-z]+)?\.greenhouse\.io)/([A-Za-z0-9_-]+)/jobs/(\d+)",
+        url,
+    )
+    if not m:
+        return None
+    host, board, token = m.groups()
+    return f"https://{host}/embed/job_app?for={board}&token={token}"
+
+
 def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
     """Returns {ok, submitted, reason, screenshot}."""
     p = PROFILE
@@ -80,11 +98,25 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
             except Exception:
                 pass
 
-        filled = {}
-        filled["first"] = _fill_if_present(page, "input#first_name", p["name"]["first"])
-        filled["last"] = _fill_if_present(page, "input#last_name", p["name"]["last"])
-        filled["email"] = _fill_if_present(page, "input#email", p["email"])
-        filled["phone"] = _fill_if_present(page, "input#phone", p["phone"])
+        def _fill_core() -> dict:
+            f = {}
+            f["first"] = _fill_if_present(page, "input#first_name", p["name"]["first"])
+            f["last"] = _fill_if_present(page, "input#last_name", p["name"]["last"])
+            f["email"] = _fill_if_present(page, "input#email", p["email"])
+            f["phone"] = _fill_if_present(page, "input#phone", p["phone"])
+            return f
+
+        filled = _fill_core()
+
+        if not (filled["first"] and filled["email"]):
+            # Vanity-redirect boards: employer redirects the job-boards URL to a
+            # custom careers site. Retry on the embed endpoint, which still
+            # serves the standard form.
+            embed = _embed_fallback_url(url)
+            if embed and not page.url.startswith(embed):
+                page.goto(embed, wait_until="domcontentloaded", timeout=45000)
+                page.wait_for_timeout(2500)
+                filled = _fill_core()
 
         if not (filled["first"] and filled["email"]):
             result["reason"] = "core fields not found (nonstandard board)"
