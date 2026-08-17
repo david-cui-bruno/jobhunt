@@ -317,6 +317,29 @@ class QaManualPolicyTest(unittest.TestCase):
             control, "Referred by Roblox Employee", approved_answers=approved,
         ))
 
+    def test_ethnicity_declines_via_undisclosed_label(self):
+        """G-Research 2026-08-17: tenant's decline label is 'Undisclosed' and
+        its posting text instructs non-consenting applicants to select it."""
+        control = {
+            "id": "eth",
+            "label": "What is your ethnicity?*",
+            "options": ["Asian", "Black", "Hispanic or Latino", "Mixed",
+                        "Undisclosed", "White"],
+            "value": "",
+        }
+        rendered = qa.explicit_approved_answers(
+            [control], approved_answers=self.APPROVED,
+        )
+        self.assertEqual(
+            [{"id_or_name": "eth", "answer": "Undisclosed"}], rendered,
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Undisclosed", approved_answers=self.APPROVED,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Asian", approved_answers=self.APPROVED,
+        ))
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",

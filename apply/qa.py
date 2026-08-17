@@ -699,6 +699,11 @@ def _decline_demographic_option(options: list[str]) -> str | None:
         "I do not wish to answer",
         "Decline to self-identify",
         "Prefer not to say",
+        # G-Research 2026-08-17: their Workday tenant labels the decline
+        # choice "Undisclosed" (the posting text says non-consenting
+        # applicants should "select 'undisclosed'").
+        "Undisclosed",
+        "I'd rather not say",
     ], options)
 
 
