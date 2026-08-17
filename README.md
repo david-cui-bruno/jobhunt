@@ -2,6 +2,38 @@
 
 Automated job application pipeline for Summer 2027 internships.
 
+## Clone and verify
+
+The canonical branch is `main` in the private GitHub repository. Python 3.12
+is recommended for local and production use:
+
+```bash
+git clone https://github.com/david-cui-bruno/jobhunt.git
+cd jobhunt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m playwright install chromium
+python -m unittest discover -s . -p 'test*.py'
+```
+
+The clone contains the application code, tests, deployment manifests, resume
+source, and candidate profile. It intentionally does **not** contain runtime
+secrets, browser sessions, the SQLite tracker, generated PDFs, Terraform state,
+or the decrypted application-answer bank. Those are restored separately for a
+live deployment. Start from these checked-in templates when configuring a new
+machine:
+
+- `deploy/jobhunt.env.example`
+- `profile/application_answers.example.yaml`
+- `deploy/aws/backend.hcl.example`
+- `deploy/aws/terraform.tfvars.example`
+
+Run tests before configuring credentials or enabling any timers. The AWS and
+VPS installers leave outbound timers disabled until an operator verifies the
+environment, queue, browser session, and application-answer file.
+
 ## Architecture
 
 ```
