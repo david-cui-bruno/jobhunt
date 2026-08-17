@@ -1077,6 +1077,11 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             if candidates:
                 answer = (_first_matching_option(candidates, options)
                           if options else candidates[0])
+        elif re.search(r"\bhow many hours\b.{0,30}\bweek\b", question):
+            # Full-time internship schedule is 40h/week (NLR 2026-08-17); the
+            # model previously guessed 'Yes' here. Exact option or bare 40 only.
+            answer = (_exact_matching_option(["40", "40 hours", "40 hours per week"], options)
+                      if options else "40")
         elif _employment_type_question(control):
             employment_type = _company_fact(control, "employment_type", approved)
             if isinstance(employment_type, str) and employment_type.strip():

@@ -548,6 +548,34 @@ class QaManualPolicyTest(unittest.TestCase):
             "I acknowledge and consent to the use of the AI-assisted screening tool",
             approved_answers=self.APPROVED))
 
+    def test_combined_gender_labels_match_when_all_segments_agree(self):
+        """PSP 2026-08-17: menu bundles 'Man / Trans Man' as one option."""
+        control = {
+            "id": "g",
+            "label": "To which gender identity do you identify?*",
+            "options": ["Woman / Trans Woman", "Man / Trans Man", "Non-Binary",
+                        "Prefer not to say"],
+            "value": "",
+        }
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Man / Trans Man", approved_answers=self.APPROVED))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Woman / Trans Woman", approved_answers=self.APPROVED))
+        rendered = qa.explicit_approved_answers([control], approved_answers=self.APPROVED)
+        self.assertEqual(
+            [{"id_or_name": "g", "answer": "Man / Trans Man"}], rendered,
+        )
+
+    def test_hours_per_week_renders_forty(self):
+        """NLR 2026-08-17: quantity question now renders the approved 40."""
+        control = {"id": "h", "label": "How many hours per week can you work?*",
+                   "options": [], "value": ""}
+        rendered = qa.explicit_approved_answers([control], approved_answers=self.APPROVED)
+        self.assertEqual([{"id_or_name": "h", "answer": "40"}], rendered)
+        with_options = dict(control, options=["20", "30", "40"])
+        rendered = qa.explicit_approved_answers([with_options], approved_answers=self.APPROVED)
+        self.assertEqual([{"id_or_name": "h", "answer": "40"}], rendered)
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",
