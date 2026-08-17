@@ -523,6 +523,21 @@ class WorkdayAnswerTests(unittest.TestCase):
         self.assertFalse(workday._dropdown_needs_options(
             dict(field, label="Phone Device Type*", value="Mobile"), "amgen"))
 
+    def test_field_of_study_candidates_split_double_major(self) -> None:
+        """PSP 2026-08-17: 'Computer Science & Economics' is not a picklist
+        leaf; component majors are truthful fallbacks, full text first."""
+        field = {"faid": "fos|0", "label": "Field of Study*", "kind": "multiselect"}
+        self.assertEqual(
+            ["Computer Science & Economics", "Computer Science", "Economics"],
+            workday._multiselect_candidates(field, "Computer Science & Economics"),
+        )
+        unrelated = {"faid": "src|0", "label": "School or University*",
+                     "kind": "multiselect"}
+        self.assertEqual(
+            ["Brown University"],
+            workday._multiselect_candidates(unrelated, "Brown University"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

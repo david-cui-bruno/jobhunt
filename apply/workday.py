@@ -86,7 +86,9 @@ WD_EXTRACT_JS = """
       const d = dateWrap.querySelector('[data-automation-id="dateSectionDay-input"]');
       const y = dateWrap.querySelector('[data-automation-id="dateSectionYear-input"]');
       entry.hasDay = !!d;
-      entry.value = (m?.value && y?.value) ? `${m.value}/${d?.value ? d.value + '/' : ''}${y.value}` : '';
+      entry.hasMonth = !!m;
+      entry.value = m ? ((m.value && y?.value) ? `${m.value}/${d?.value ? d.value + '/' : ''}${y.value}` : '')
+                      : (y?.value || '');
     } else if (btn) {
       entry.kind = 'dropdown';
       entry.value = btn.innerText.replace(/\\s+/g,' ').trim();
@@ -279,6 +281,15 @@ def _multiselect_candidates(field: dict, answer: object) -> list[str]:
               if isinstance(answer, (list, tuple)) else [str(answer).strip()])
     values = [v for v in values if v]
     label = str(field.get("label") or "")
+    if re.search(r"\bfield of study\b|\bmajor\b", label, re.I):
+        # Double majors ("Computer Science & Economics") rarely exist as one
+        # picklist leaf; each component is a truthful selection on its own
+        # (PSP 2026-08-17). Try the full text first, then components.
+        for v in list(values):
+            for part in re.split(r"\s*(?:&|\band\b|/|,)\s*", v):
+                part = part.strip()
+                if part and part.lower() not in {x.lower() for x in values}:
+                    values.append(part)
     if re.search(r"\bhow did you hear about\b", label, re.I):
         control = dict(field)
         control.setdefault("company_context", "")
@@ -433,6 +444,19 @@ def wd_fill(page, field: dict, answer: object) -> bool:
     kind = field["kind"]
     try:
         if kind == "date":
+            # Year-only widgets (PSP education From/To 2026-08-17) have no
+            # month section; type just the year.
+            if field.get("hasMonth") is False:
+                year = re.search(r"(20\d{2}|19\d{2})", str(answer))
+                if not year:
+                    return False
+                yi = ff.locator("[data-automation-id='dateSectionYear-input']").first
+                yi.scroll_into_view_if_needed(timeout=4000)
+                page.wait_for_timeout(300)
+                yi.evaluate("el => el.focus()")
+                page.keyboard.type(year.group(1), delay=120)
+                page.wait_for_timeout(300)
+                return bool(yi.evaluate("el => el.value"))
             parts = _workday_date_parts(str(answer), bool(field.get("hasDay")))
             if parts is None:
                 return False
