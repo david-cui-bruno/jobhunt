@@ -179,6 +179,11 @@ EXTRACT_JS = """
   const labelFor = (el) => {
     let t = el.labels?.[0]?.innerText || el.getAttribute('aria-label') || '';
     if (!t) {
+      // ARIA standard (Workable et al.): aria-labelledby points at the label node
+      const ref = el.getAttribute('aria-labelledby');
+      if (ref) t = ref.split(/\s+/).map(id => document.getElementById(id)?.innerText || '').join(' ').trim();
+    }
+    if (!t) {
       // Lever cards: question text in .application-label above the field
       const q = el.closest('.application-question, li[class*=question]');
       t = q?.querySelector('.application-label, .text, label')?.innerText || '';
@@ -199,9 +204,19 @@ EXTRACT_JS = """
   const groupInfo = (el) => {
     // checkbox/radio group: same name; group question label = wrapper's first label-ish text
     const boxes = [...document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)];
+    // ARIA standard (Workable et al.): the group or its radiogroup wrapper
+    // carries aria-labelledby pointing at the question node
+    let q = '';
+    for (const cand of [el, el.closest('[role=radiogroup], [role=group], fieldset')]) {
+      const ref = cand?.getAttribute?.('aria-labelledby');
+      if (ref) {
+        q = ref.split(/\\s+/).map(id => document.getElementById(id)?.innerText || '').join(' ').trim();
+        if (q) break;
+      }
+    }
     // Ashby: question title label lives on the fieldEntry wrapper
     const fe = el.closest('[class*=_fieldEntry]');
-    let q = fe?.querySelector('[class*=question-title], label[class*=_label]')?.innerText || '';
+    if (!q) q = fe?.querySelector('[class*=question-title], label[class*=_label]')?.innerText || '';
     const wrap = el.closest('fieldset, [role=group], div[class*=question], div[class*=checkbox]')
       || boxes[0]?.parentElement?.parentElement;
     if (!q) q = wrap?.querySelector('legend, .label, label:not([for])')?.innerText || '';

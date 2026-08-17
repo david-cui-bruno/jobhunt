@@ -38,6 +38,9 @@ def _adapter(ats: str, url: str):
     if detected == "rippling":
         from rippling import apply_rippling
         return apply_rippling, False, detected, target_url
+    if detected == "workable":
+        from workable import apply_workable
+        return apply_workable, False, detected, target_url
     if "workatastartup.com" in url:
         from waas import apply_waas
         return apply_waas, True, "waas", target_url

@@ -95,6 +95,7 @@ def detect_ats(url: str) -> str:
     if "icims.com" in host: return "icims"
     if "smartrecruiters.com" in host: return "smartrecruiters"
     if "ats.rippling.com" in host: return "rippling"
+    if "apply.workable.com" in host: return "workable"
     return "other"
 
 

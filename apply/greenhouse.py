@@ -172,6 +172,28 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
         result["qa_failed"] = failed_qa
         page.wait_for_timeout(1000)
 
+        # Demographic/privacy consent attestations (recon 2026-08-17, Workato):
+        # Greenhouse renders a consent checkbox that is NOT aria-required; it is
+        # enforced client-side only after the submit click ("You answered some
+        # demographic questions. Please accept the terms to proceed"), so the
+        # required-fields scan cannot see it and the submission bounces.
+        # Policy: required attestations are approved (Yes/agree); marketing and
+        # talent-community opt-ins stay unchecked.
+        page.evaluate("""
+            () => {
+                const optOut = /future contact|marketing|talent community|job alert|keep me|stay in touch|receive (?:email|communication)/i;
+                const attest = /consent to .{0,80}(collect|process|stor)|privacy (notice|policy)|accurate|demographic data survey/i;
+                document.querySelectorAll('input[type=checkbox]').forEach(cb => {
+                    if (cb.checked || cb.offsetParent === null) return;
+                    const lbl = ((cb.labels?.[0]?.innerText || '') + ' ' +
+                                 (cb.closest('label')?.innerText || '')).trim();
+                    if (!lbl || optOut.test(lbl)) return;
+                    if (attest.test(lbl)) cb.click();
+                });
+            }
+        """)
+        page.wait_for_timeout(400)
+
         # NEW Greenhouse flow (recon 2026-08-09, The Nuclear Company): the email
         # verification code boxes render INLINE on the form pre-submit. Fetch the
         # code from Gmail and type it before the required-fields scan.
