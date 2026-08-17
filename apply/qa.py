@@ -79,6 +79,7 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
         result["identity"] = selected_identity
     if re.search(
         r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)|"
+        r"\b(?:when|what (?:month|year|term|semester))\b[^?]{0,40}\b(?:expect(?:ed)?|plan(?:ning)?|anticipate[ds]?)?[^?]{0,20}\bgraduat(?:e|ing|ion)\b|"
         r"\b(high school|secondary school)\b|"
         r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|result|test|take|taken)s?\b|"
         r"\b(?:score|result|test|take|taken)s?\b.{0,30}\b(?:sat|act)\b",
@@ -87,7 +88,12 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
         education = source.get("education") or {}
         profile_education = PROFILE.get("education") or {}
         selected_education = {}
-        if re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b", question):
+        if re.search(
+            r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b|"
+            r"\b(?:when|what (?:month|year|term|semester))\b[^?]{0,40}\bgraduat(?:e|ing)\b|"
+            r"\bexpect(?:ed)? to graduate\b",
+            question,
+        ):
             selected_education.update({
                 "expected_graduation_month": education.get("expected_graduation_month")
                     or profile_education.get("grad_month"),
@@ -217,6 +223,13 @@ EXTRACT_JS = """
     // Ashby: question title label lives on the fieldEntry wrapper
     const fe = el.closest('[class*=_fieldEntry]');
     if (!q) q = fe?.querySelector('[class*=question-title], label[class*=_label]')?.innerText || '';
+    // Lever cards: the group question lives in .application-label above the
+    // options (Belvedere 2026-08-17: the first OPTION label 'High School
+    // Diploma' was taken as the question, tripping the high-school block).
+    if (!q) {
+      const card = el.closest('.application-question, li[class*=question]');
+      q = card?.querySelector('.application-label, .text')?.innerText || '';
+    }
     const wrap = el.closest('fieldset, [role=group], div[class*=question], div[class*=checkbox]')
       || boxes[0]?.parentElement?.parentElement;
     if (!q) q = wrap?.querySelector('legend, .label, label:not([for])')?.innerText || '';
@@ -323,6 +336,8 @@ Return ONLY the JSON array."""
 BLOCKED_QUESTION_PATTERNS = [
     r"\b(date of birth|dob|birth date|birthday|age)\b",
     r"\b(18 or (?:older|over)|at least 18|(?:graduation|graduate) (?:date|month(?:\s+and\s+year)?|year))\b",
+    r"\b(?:when|what (?:month|year|term|semester))\b[^?]{0,40}\bgraduat(?:e|ing|ion)\b|\bexpect(?:ed)? to graduate\b",
+    r"\b(?:what )?degree\b.{0,30}\b(?:currently )?pursuing\b|\bpursuing\b.{0,30}\bdegree\b",
     r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary)|(?:pay|compensation) expectations?)\b",
     r"\b(offer deadline|exploding offer|outstanding offers?|competing offers?|pending offers?|deadline to accept)\b",
     r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the(?!\s+following))\b.*\b(product|platform|app|service|software|tool)\b",
@@ -1083,7 +1098,12 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = _high_school_term_answer(high_school_year, options)
             if answer is None:
                 answer = _render_boolean(True, options)
-        elif re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b", question):
+        elif re.search(
+            r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b|"
+            r"\b(?:when|what (?:month|year|term|semester))\b[^?]{0,40}\bgraduat(?:e|ing)\b|"
+            r"\bexpect(?:ed)? to graduate\b",
+            question,
+        ) and not re.search(r"\bhigh school\b", question):
             profile_education = PROFILE.get("education") or {}
             month = str(education.get("expected_graduation_month")
                         or profile_education.get("grad_month") or "")
@@ -1179,6 +1199,15 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             # These identity facts have not been provided. Prefer the site's
             # explicit decline option rather than allowing a model to infer one.
             answer = _decline_demographic_option(options)
+        elif re.search(r"\b(?:what )?degree\b.{0,30}\b(?:currently )?pursuing\b|\bpursuing\b.{0,30}\bdegree\b", question):
+            # Belvedere 2026-08-17: 'What degree are you currently pursuing?'
+            # David is mid-BS, so the in-progress degree is a Bachelor's.
+            if options:
+                answer = _first_matching_option(
+                    ["Bachelor Degree", "Bachelor's Degree", "Bachelors",
+                     "Bachelor of Science", "Undergraduate"], options)
+            else:
+                answer = "Bachelor of Science (in progress)"
         elif re.search(r"\bhighest level of education\b", question):
             # David is currently pursuing a BS. Prefer an in-progress/some-college
             # label over a completed Bachelor's claim when the form offers one.
@@ -1607,7 +1636,12 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             if expected:
                 return expected.lower() == answer_text.strip().lower()
         return _answer_boolean(answer_text) is True
-    if re.search(r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b", question):
+    if re.search(
+        r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)\b|"
+        r"\b(?:when|what (?:month|year|term|semester))\b[^?]{0,40}\bgraduat(?:e|ing)\b|"
+        r"\bexpect(?:ed)? to graduate\b",
+        question,
+    ) and not re.search(r"\bhigh school\b", question):
         education = approved.get("education") or {}
         if control.get("hasDay") or re.search(r"\d{1,2}/\d{1,2}/\d{4}", answer_text):
             exact = education.get("exact_graduation_date")
@@ -1678,6 +1712,13 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
                         if tests.get("act_taken") is False
                         else _score_range_option(int(tests["act"]), options))
         return bool(expected and expected.casefold() == answer_text.strip().casefold())
+    if re.search(r"\b(?:what )?degree\b.{0,30}\b(?:currently )?pursuing\b|\bpursuing\b.{0,30}\bdegree\b", question):
+        expected = _first_matching_option(
+            ["Bachelor Degree", "Bachelor's Degree", "Bachelors",
+             "Bachelor of Science", "Undergraduate"],
+            [str(option) for option in control.get("options") or []] or [answer_text],
+        )
+        return bool(expected and expected.strip().lower() == answer_text.strip().lower())
     if re.search(r"\blocation of your current (?:university|school|college)\b", question):
         location = PROFILE.get("location") or {}
         city = str(location.get("city") or "").strip()

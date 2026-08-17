@@ -637,6 +637,29 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertTrue(qa.answer_requires_manual(
             sat, "1401 - 1500", approved_answers=self.APPROVED))
 
+    def test_pursuing_degree_and_expect_to_graduate_menus(self):
+        """Belvedere 2026-08-17: Lever radio groups asked 'What degree are you
+        currently pursuing?' and 'When do you expect to graduate?' with
+        season-range options; neither matched the graduation-date patterns."""
+        deg = {"id": "d", "label": "What degree are you currently pursuing?",
+               "options": ["High School Diploma", "Associate Degree",
+                           "Bachelor Degree", "Masters/PhD"], "value": ""}
+        grad = {"id": "g", "label": "When do you expect to graduate?",
+                "options": ["December 2026/January 2027", "Spring 2027",
+                            "December 2027/January 2028", "Spring 2028",
+                            "Other"], "value": ""}
+        rendered = qa.explicit_approved_answers([deg, grad], approved_answers=self.APPROVED)
+        self.assertEqual([
+            {"id_or_name": "d", "answer": "Bachelor Degree"},
+            {"id_or_name": "g", "answer": "Spring 2028"},
+        ], rendered)
+        self.assertFalse(qa.answer_requires_manual(
+            deg, "Bachelor Degree", approved_answers=self.APPROVED))
+        self.assertFalse(qa.answer_requires_manual(
+            grad, "Spring 2028", approved_answers=self.APPROVED))
+        self.assertTrue(qa.answer_requires_manual(
+            grad, "Spring 2027", approved_answers=self.APPROVED))
+
     def test_ai_screening_notice_consents_to_standard_process(self):
         """Crowe 2026-08-17: required Just-In-Time Notice dropdown (consent vs
         Opt Out for AI-assisted resume screening) tripped the used-our-product

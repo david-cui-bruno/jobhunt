@@ -768,7 +768,13 @@ def refresh_saved_resume(page, resume_pdf: Path) -> bool:
     """
     upload = page.locator("input[data-automation-id='file-upload-input-ref']").first
     if not upload.count():
-        return False
+        # Cadence 2026-08-17: the My Experience page renders a spinner for
+        # several seconds before its controls exist. Wait for the upload input
+        # rather than failing on the still-loading page.
+        try:
+            upload.wait_for(state="attached", timeout=20000)
+        except Exception:
+            return False
     expected_label = f"Delete {resume_pdf.name}"
     try:
         deletes = page.locator("button[data-automation-id='delete-file']")
