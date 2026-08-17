@@ -383,6 +383,41 @@ class QaManualPolicyTest(unittest.TestCase):
             [control], approved_answers=self.APPROVED,
         ))
 
+    def test_binary_hispanic_question_derives_from_race_fact(self):
+        approved = dict(self.APPROVED)
+        approved["identity"] = dict(self.APPROVED["identity"], race_ethnicity="Asian")
+        control = {
+            "id": "hisp",
+            "label": "Are you Hispanic/Latino?",
+            "options": ["Yes", "No", "Decline To Self Identify"],
+            "value": "",
+        }
+        rendered = qa.explicit_approved_answers(
+            [control], approved_answers=approved,
+        )
+        self.assertEqual([{"id_or_name": "hisp", "answer": "No"}], rendered)
+        self.assertFalse(qa.answer_requires_manual(
+            control, "No", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Yes", approved_answers=approved,
+        ))
+        # Race dropdowns still render the fact itself.
+        race_control = {
+            "id": "race",
+            "label": "Race/Ethnicity*",
+            "options": ["Asian", "White", "Black or African American",
+                        "I don't wish to answer"],
+            "value": "",
+        }
+        self.assertEqual(
+            [{"id_or_name": "race", "answer": "Asian"}],
+            qa.explicit_approved_answers([race_control], approved_answers=approved),
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            race_control, "Asian", approved_answers=approved,
+        ))
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",

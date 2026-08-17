@@ -1043,6 +1043,13 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             race = identity.get("race_ethnicity")
             answer = (_best_option(str(race), options) if race else
                       _decline_demographic_option(options))
+            if (answer is None and race
+                    and re.search(r"\b(?:are you|do you identify as)\b.*\bhispanic\b|\bhispanic (?:or|/)\s*latin[ox]?\b", question)
+                    and "hispanic" not in str(race).lower()
+                    and "latino" not in str(race).lower()):
+                # Binary Hispanic/Latino question is derivable from the
+                # approved race fact (Asian -> No). DV Trading 2026-08-17.
+                answer = _render_boolean(False, options)
         elif re.search(r"\b(transgender|sexual orientation)\b", question):
             # These identity facts have not been provided. Prefer the site's
             # explicit decline option rather than allowing a model to infer one.
@@ -1544,6 +1551,10 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return answer_text.strip().lower() in aliases
     if re.search(r"\b(race|ethnicity|racial|hispanic|latino)\b", question):
         expected = str(identity.get("race_ethnicity") or "").strip().lower()
+        if (expected and "hispanic" not in expected and "latino" not in expected
+                and re.search(r"\b(?:are you|do you identify as)\b.*\bhispanic\b|\bhispanic (?:or|/)\s*latin[ox]?\b", question)
+                and _answer_boolean(answer_text) is False):
+            return True
         return (bool(expected and expected == answer_text.strip().lower())
                 or _decline_demographic_option([answer_text]) is not None)
     if re.search(r"\b(transgender|sexual orientation)\b", question):
