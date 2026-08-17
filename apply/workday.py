@@ -1053,6 +1053,21 @@ def fill_current_page(page, company_key: str, slug: str) -> None:
             page.wait_for_timeout(250)
 
 
+def _workday_outage(page) -> bool:
+    """Detect Workday's transient service-interruption page.
+
+    Cadence 2026-08-17: the tenant served "Workday is currently unavailable /
+    We are experiencing a service interruption" and the run settled as a hard
+    "resume upload zone never appeared" failure instead of retrying.
+    """
+    try:
+        body = page.inner_text("body").lower()
+    except Exception:
+        return False
+    return ("workday is currently unavailable" in body
+            or "experiencing a service interruption" in body)
+
+
 def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
     company_key = url.split("//")[1].split(".")[0]  # tenant subdomain
     result = {"ok": False, "submitted": False, "reason": "", "pages": [], "unanswered": []}
@@ -1062,10 +1077,22 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
         page = configure_page(ctx.new_page())
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3500)
+        if _workday_outage(page):
+            result.update(retryable=True,
+                          reason="workday service interruption; retry later")
+            _shot(page, slug, "wd_outage")
+            browser.close()
+            return result
 
         # Apply -> autofill with resume
         btn = page.locator("a[data-automation-id='adventureButton'], button[data-automation-id='adventureButton']").first
         if not btn.count():
+            if _workday_outage(page):
+                result.update(retryable=True,
+                              reason="workday service interruption; retry later")
+                _shot(page, slug, "wd_outage")
+                browser.close()
+                return result
             result["reason"] = "apply button not found (posting closed?)"
             browser.close()
             return result
@@ -1173,6 +1200,12 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                         unanswered=["Workday account sign-in"],
                     )
                     _shot(page, slug, "account_gate")
+                    browser.close()
+                    return result
+                if _workday_outage(page):
+                    result.update(retryable=True,
+                                  reason="workday service interruption; retry later")
+                    _shot(page, slug, "wd_outage")
                     browser.close()
                     return result
                 result["reason"] = "resume upload zone never appeared"

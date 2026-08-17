@@ -384,6 +384,32 @@ class WorkdayAnswerTests(unittest.TestCase):
         scope_source = inspect.getsource(workday._auth_fields_scope)
         self.assertIn("ancestor::*[self::form or @role='dialog'][1]", scope_source)
 
+    def test_workday_outage_is_retryable_not_a_hard_failure(self) -> None:
+        """Cadence 2026-08-17: a tenant-wide 'Workday is currently unavailable'
+        interruption page settled as a permanent posting failure."""
+        page = mock.Mock()
+        page.inner_text.return_value = (
+            "Workday is currently unavailable.\n"
+            "We are experiencing a service interruption."
+        )
+        self.assertTrue(workday._workday_outage(page))
+
+        page.inner_text.return_value = "Intern Program - Agentic AI Create Account"
+        self.assertFalse(workday._workday_outage(page))
+
+        source = inspect.getsource(workday.apply_workday)
+        self.assertIn("_workday_outage", source)
+        self.assertLess(
+            source.index("_workday_outage"),
+            source.index("apply button not found"),
+        )
+        self.assertIn("workday service interruption; retry later", source)
+        upload_failure = source[source.index("resume_current = False"):]
+        self.assertLess(
+            upload_failure.index("_workday_outage(page)"),
+            upload_failure.index("resume upload zone never appeared"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
