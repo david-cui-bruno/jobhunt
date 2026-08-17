@@ -418,6 +418,40 @@ class QaManualPolicyTest(unittest.TestCase):
             race_control, "Asian", approved_answers=approved,
         ))
 
+    def test_ethnicity_accepts_workday_decorated_labels(self):
+        """CCC/Motorola/DataRobot 2026-08-17: Workday EEO menus decorate the
+        approved base label with parenthetical qualifiers."""
+        approved = dict(self.APPROVED)
+        approved["identity"] = dict(self.APPROVED["identity"], race_ethnicity="Asian")
+        control = {
+            "id": "eth",
+            "label": "Please select the ethnicity which most accurately describes how you identify yourself.*",
+            "options": ["American Indian (United States of America)",
+                        "Asian (United States of America)",
+                        "Black or African American (United States of America)",
+                        "White (United States of America)"],
+            "value": "",
+        }
+        rendered = qa.explicit_approved_answers([control], approved_answers=approved)
+        self.assertEqual(
+            [{"id_or_name": "eth", "answer": "Asian (United States of America)"}],
+            rendered,
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Asian (United States of America)", approved_answers=approved,
+        ))
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Asian (Not Hispanic or Latino) (United States of America)",
+            approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "White (United States of America)", approved_answers=approved,
+        ))
+        # 'Caucasian/Asian ancestry (mixed)' style tricks must not pass.
+        self.assertTrue(qa.answer_requires_manual(
+            control, "South Asian (United States of America)", approved_answers=approved,
+        ))
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",

@@ -347,7 +347,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(high school|secondary school)\b",
     r"\bcurrent school\s+(?:year|enrollment|status|grade|class|level)\b",
     r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b",
-    r"\b(?:how|where|when) did you (?:first )?hear about\b",
+    r"\b(?:how|where|when) (?:did )?you (?:first )?hear(?:d)? about\b",
     r"\b(?:employment|work)\s*(?:type|status|preference)\b|"
     r"\b(?:seeking|looking for|interested in)\b.{0,60}\b(?:full[- ]?time|part[- ]?time)\b|"
     r"\b(?:full[- ]?time|part[- ]?time)\b.{0,60}\b(?:employment|work)\b",
@@ -736,6 +736,34 @@ def _decline_demographic_option(options: list[str]) -> str | None:
     ], options)
 
 
+def _demographic_label_matches(expected: str, answer: object) -> bool:
+    """True when the option is the approved label plus boilerplate qualifiers.
+
+    Workday EEO menus decorate the base label: "Asian (United States of
+    America)", "Asian (Not Hispanic or Latino) (United States of America)"
+    (CCC/Motorola/DataRobot 2026-08-17). Strip parentheticals and compare;
+    an option naming a different base identity never matches.
+    """
+    expected_norm = re.sub(r"\s+", " ", str(expected or "").strip().lower())
+    answer_norm = re.sub(r"\s+", " ", str(answer or "").strip().lower())
+    if not expected_norm or not answer_norm:
+        return False
+    if expected_norm == answer_norm:
+        return True
+    stripped = re.sub(r"\s*\([^)]*\)", "", answer_norm).strip()
+    return stripped == expected_norm
+
+
+def _demographic_menu_answer(expected: str, options: list[str]) -> str | None:
+    """Choose the option whose base label equals the approved identity."""
+    matches = [option for option in options
+               if _demographic_label_matches(expected, option)]
+    if not matches:
+        return None
+    # Prefer the least-decorated label when several match.
+    return sorted(matches, key=len)[0]
+
+
 def _first_option_after(month: str, year: str, options: list[str]) -> str | None:
     """Choose the earliest offered month no earlier than the approved date."""
     target = _date_parts(f"{month} {year}")
@@ -972,7 +1000,8 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             answer = _first_option_after(month, year, options)
         elif re.search(
             r"\b(?:what year|when)\b.*\bgraduat(?:e|ed)\b.*\bhigh school\b|"
-            r"\bhigh school\b.*\b(?:graduation|graduat(?:e|ed))\b.*\byear\b",
+            r"\bhigh school\b.*\b(?:graduation|graduat(?:e|ed))\b.*\byear\b|"
+            r"\byear of high school graduation\b",
             question,
         ):
             answer = education.get("high_school_graduation_year")
@@ -1015,7 +1044,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
         elif re.search(r"\bwhen did you first hear about\b", question):
             # The tracked discovery happened while David is enrolled at Brown.
             answer = _first_matching_option(["University Program"], options)
-        elif re.search(r"\bhow did you (?:first )?hear about\b", question):
+        elif re.search(r"\bhow (?:did )?you (?:first )?hear(?:d)? about\b", question):
             candidates = _recruiting_source_candidates(control, approved)
             # Workday's searchable dropdown options are often absent until the
             # control is opened. Give the filler the approved default so it can
@@ -1041,7 +1070,8 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             answer = _first_matching_option(candidates, options)
         elif re.search(r"\b(race|ethnicity|racial|hispanic|latino)\b", question):
             race = identity.get("race_ethnicity")
-            answer = (_best_option(str(race), options) if race else
+            answer = ((_demographic_menu_answer(str(race), options)
+                       or _best_option(str(race), options)) if race else
                       _decline_demographic_option(options))
             if (answer is None and race
                     and re.search(r"\b(?:are you|do you identify as)\b.*\bhispanic\b|\bhispanic (?:or|/)\s*latin[ox]?\b", question)
@@ -1429,7 +1459,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             [str(option) for option in control.get("options") or []],
         ) or "University Program")
         return expected.strip().lower() == answer_text.strip().lower()
-    if re.search(r"\bhow did you (?:first )?hear about\b", question):
+    if re.search(r"\bhow (?:did )?you (?:first )?hear(?:d)? about\b", question):
         candidates = _recruiting_source_candidates(control, approved)
         if not candidates:
             return False
@@ -1453,7 +1483,8 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return bool(expected and expected.strip().lower() == answer_text.strip().lower())
     if re.search(
         r"\b(?:what year|when)\b.*\bgraduat(?:e|ed)\b.*\bhigh school\b|"
-        r"\bhigh school\b.*\b(?:graduation|graduat(?:e|ed))\b.*\byear\b",
+        r"\bhigh school\b.*\b(?:graduation|graduat(?:e|ed))\b.*\byear\b|"
+        r"\byear of high school graduation\b",
         question,
     ):
         expected = str((approved.get("education") or {}).get(
@@ -1555,7 +1586,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
                 and re.search(r"\b(?:are you|do you identify as)\b.*\bhispanic\b|\bhispanic (?:or|/)\s*latin[ox]?\b", question)
                 and _answer_boolean(answer_text) is False):
             return True
-        return (bool(expected and expected == answer_text.strip().lower())
+        return (bool(expected and _demographic_label_matches(expected, answer_text))
                 or _decline_demographic_option([answer_text]) is not None)
     if re.search(r"\b(transgender|sexual orientation)\b", question):
         return _decline_demographic_option([answer_text]) is not None
