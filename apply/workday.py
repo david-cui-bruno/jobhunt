@@ -829,37 +829,59 @@ def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tup
     record = _account_record(company_key)
     created_at = int(record[2]) if record and record[2] else started
     host = urllib.parse.urlparse(apply_url).netloc
-    activation_url = fetch_workday_activation_url(company_key, host, created_at)
-    if not activation_url:
-        # The original email can be gone (expired token, cleanup). Workday's
-        # verification screen offers a resend control; use it and search again
-        # from the resend moment.
+
+    def _resend_verification() -> int:
+        """Click the tenant's resend control; return the resend timestamp."""
         resend_at = int(time.time())
         resend = _visible_locator_in_frames(
             page,
+            "[data-automation-id='informationalBlurbButton'], "
             "[data-automation-id='resendVerifyEmailLink'], "
             "[data-automation-id='resendEmailLink'], "
             "a:has-text('Resend'), button:has-text('Resend')",
         )
-        if resend is not None:
-            try:
-                resend.click(timeout=5000)
-                page.wait_for_timeout(1500)
-                activation_url = fetch_workday_activation_url(
-                    company_key, host, resend_at
-                )
-            except Exception:
-                pass
+        if resend is None:
+            return 0
+        try:
+            resend.click(timeout=5000)
+            page.wait_for_timeout(1500)
+            return resend_at
+        except Exception:
+            return 0
+
+    def _activate(activation_url: str) -> None:
+        page.goto(activation_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(2500)
+        page.goto(apply_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(2500)
+        _open_email_auth(page, create_account=False)
+        maybe_sign_in(page, company_key)
+        page.wait_for_timeout(2000)
+
+    activation_url = fetch_workday_activation_url(company_key, host, created_at)
+    if not activation_url:
+        # The original email can be gone (expired token, cleanup). Ask the
+        # tenant to resend and search again from the resend moment.
+        resend_at = _resend_verification()
+        if resend_at:
+            activation_url = fetch_workday_activation_url(
+                company_key, host, resend_at
+            )
     if not activation_url:
         return False, "workday account verification email not found"
 
-    page.goto(activation_url, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(2500)
-    page.goto(apply_url, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(2500)
-    _open_email_auth(page, create_account=False)
-    maybe_sign_in(page, company_key)
-    page.wait_for_timeout(2000)
+    _activate(activation_url)
+    if _verification_required(page):
+        # The stored link can be a dead token (Nelnet: original email was 2.7
+        # days old and its token had expired). Resend a fresh email once and
+        # activate through the new link.
+        resend_at = _resend_verification()
+        fresh_url = (
+            fetch_workday_activation_url(company_key, host, resend_at)
+            if resend_at else None
+        )
+        if fresh_url and fresh_url != activation_url:
+            _activate(fresh_url)
     if _verification_required(page):
         return False, "workday account remains unverified after activation"
     if _workday_auth_gate_visible(page):
