@@ -2128,6 +2128,27 @@ def get_answers(controls: list[dict], context: dict | None = None) -> list[dict]
     return answers
 
 
+def _controls_json(controls: list[dict], budget: int = 20000) -> str:
+    """Serialize controls for the model without dropping whole controls.
+
+    The old flat [:20000] slice cut the JSON mid-array, so trailing controls
+    (Belvedere 2026-08-17: five card fields after a 3000-option school list)
+    silently never reached the model. Trim huge OPTION lists first; only after
+    that shrink per-control option counts until the budget is met. Every
+    control keeps its label so the model can at least answer free-text fields.
+    """
+    payload = [dict(c) for c in controls]
+    for cap in (1000, 200, 60, 25, 10):
+        for c in payload:
+            opts = c.get("options")
+            if isinstance(opts, list) and len(opts) > cap:
+                c["options"] = opts[:cap] + [f"... ({len(opts) - cap} more options omitted)"]
+        text = json.dumps(payload)
+        if len(text) <= budget:
+            return text
+    return json.dumps(payload)[:budget]
+
+
 def _model_answers(controls: list[dict], company_context: str = "") -> list[dict]:
     """Ask the model for remaining answers, returning no guesses on API failure."""
     today = datetime.date.today().strftime("%m/%d/%Y")
@@ -2135,7 +2156,7 @@ def _model_answers(controls: list[dict], company_context: str = "") -> list[dict
         "model": MODEL, "max_tokens": 20000,  # reasoning tokens count against this;
         # 4000 truncated mid-array on 25-control forms (Zipline 2026-08-09)
         "messages": [{"role": "user", "content": ANSWER_PROMPT.format(
-            profile=yaml.dump(PROFILE), controls=json.dumps(controls)[:20000],
+            profile=yaml.dump(PROFILE), controls=_controls_json(controls),
             application_answers=yaml.safe_dump(
                 relevant_application_answers(controls, company_context=company_context)
             ),

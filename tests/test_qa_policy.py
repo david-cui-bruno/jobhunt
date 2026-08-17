@@ -660,6 +660,21 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertTrue(qa.answer_requires_manual(
             grad, "Spring 2027", approved_answers=self.APPROVED))
 
+    def test_controls_json_keeps_trailing_controls(self):
+        """Belvedere 2026-08-17: a 3000-option school select pushed the five
+        card fields after it past the flat 20000-char slice, so the model
+        never saw them. Option lists shrink; controls never drop."""
+        controls = ([{"id": "school", "label": "Name of School",
+                      "options": [f"School {i}" for i in range(3000)], "value": ""}]
+                    + [{"id": f"q{i}", "label": f"Question {i}", "options": [],
+                        "value": ""} for i in range(5)])
+        text = qa._controls_json(controls)
+        self.assertLessEqual(len(text), 20000)
+        parsed = json.loads(text)
+        self.assertEqual(6, len(parsed))
+        self.assertEqual("q4", parsed[-1]["id"])
+        self.assertIn("more options omitted", parsed[0]["options"][-1])
+
     def test_ai_screening_notice_consents_to_standard_process(self):
         """Crowe 2026-08-17: required Just-In-Time Notice dropdown (consent vs
         Opt Out for AI-assisted resume screening) tripped the used-our-product
