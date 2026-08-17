@@ -464,6 +464,37 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertEqual([{"id_or_name": "q1", "answer": "David"}], answers)
         self.assertEqual([], blocked)
 
+    def test_hours_per_week_quantity_only_approves_forty(self):
+        """NLR 2026-08-17: 'How many hours per week can you work?' was
+        approved with a literal 'Yes' via the hybrid-preference fallback."""
+        control = {"id": "q", "label": "How many hours per week can you work?*",
+                   "options": [], "value": ""}
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Yes", approved_answers=self.APPROVED))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "20", approved_answers=self.APPROVED))
+        self.assertFalse(qa.answer_requires_manual(
+            control, "40", approved_answers=self.APPROVED))
+        self.assertFalse(qa.answer_requires_manual(
+            control, "40 hours per week", approved_answers=self.APPROVED))
+
+    def test_proficiency_checklist_is_not_a_product_usage_question(self):
+        """Medtronic 2026-08-17: 'proficient in the following software
+        languages' tripped the used-our-product block pattern."""
+        control = {
+            "id": "m",
+            "label": ("Are you proficient in the following software languages? "
+                      "Please select all that apply*"),
+            "options": ["Python", "C/C++", "SQL", "JavaScript", "None"],
+            "value": "",
+        }
+        self.assertFalse(qa.answer_requires_manual(
+            control, ["Python", "SQL"], approved_answers=self.APPROVED))
+        used_product = {"id": "u", "label": "Have you used our software platform before?",
+                        "options": ["Yes", "No"], "value": ""}
+        self.assertTrue(qa.answer_requires_manual(
+            used_product, "Yes", approved_answers=self.APPROVED))
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",

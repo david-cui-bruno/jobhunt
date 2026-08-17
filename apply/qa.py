@@ -325,7 +325,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\b(18 or older|at least 18|(?:graduation|graduate) (?:date|month(?:\s+and\s+year)?|year))\b",
     r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary)|(?:pay|compensation) expectations?)\b",
     r"\b(offer deadline|exploding offer|outstanding offers?|competing offers?|pending offers?|deadline to accept)\b",
-    r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b",
+    r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the(?!\s+following))\b.*\b(product|platform|app|service|software|tool)\b",
     r"\b(referral|referred|refer you|know anyone|previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker)|current employee)\b",
     r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|prior application|previous application)\b",
     r"\b(FINRA|SIE|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b",
@@ -1709,6 +1709,13 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     if re.search(r"\btravel\b", question):
         return preferences.get("travel") is not None
     if re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|on[- ]?site|hybrid)\b", question):
+        if re.search(r"\bhow many hours\b", question):
+            # Quantity question, not a yes/no schedule preference. The hybrid
+            # fallback wrongly approved a model 'Yes' (NLR 2026-08-17).
+            # 40/week is the approved full-time internship schedule
+            # (ProNexus 'willing to work 40H/week' = Yes, same fact).
+            return bool(re.fullmatch(r"\s*40(?:\.0)?\s*(?:hours?|hrs?)?(?:\s*(?:/|per)\s*week)?\s*",
+                                     answer_text, re.I))
         company_onsite = _company_fact(control, "fully_onsite", approved)
         global_onsite = preferences.get("onsite")
         requires_hybrid = bool(re.search(
