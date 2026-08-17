@@ -105,6 +105,10 @@ def scrape(max_scroll: int = 6) -> int:
         if c["url"] in seen:
             continue
         seen.add(c["url"])
+        # /jobs/l/<role> links are directory listing pages, not postings
+        # (Hive 2026-08-17: ingested one, adapter then crashed on it).
+        if "/jobs/l/" in c["url"]:
+            continue
         if re.search(r"mechatronics|electrical|hardware|mechanical", c["title"], re.I):
             continue
         c["company"] = _company_name(c.get("company", ""), c.get("company_url", ""))
