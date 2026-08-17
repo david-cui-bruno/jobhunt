@@ -55,7 +55,10 @@ class UnsafePrefilledAnswers(RuntimeError):
 
 def _shot(page, slug, stage):
     SHOTS.mkdir(parents=True, exist_ok=True)
-    page.screenshot(path=str(SHOTS / f"{slug}_{stage}.png"), full_page=True)
+    # current_step() text is multi-line ("current step 2 of 7\nMy Information");
+    # sanitize so stage text can never embed newlines or path separators.
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{slug}_{stage}")
+    page.screenshot(path=str(SHOTS / f"{safe}.png"), full_page=True)
 
 
 # ---------- Workday-specific control extraction ----------
@@ -239,15 +242,155 @@ def _workday_prompt_target(answer: object, options: list[str],
     return specific[0] if len(specific) == 1 else None
 
 
+def _visible_prompt_options(page):
+    """Options of the ACTIVE dropdown only.
+
+    Workday renders an open prompt into a floating ``wd-popup`` portal, while
+    other multiselects on the page (for example the phone country code) keep
+    their own ``promptOption`` nodes visible inline. A page-wide query returns
+    those unrelated options too (observed on Cadence 2026-08-17: "United States
+    of America (+1)" listed inside the recruiting-source prompt), so scope to
+    the popup first.
+    """
+    popup = page.locator("[data-automation-id='wd-popup']").last
+    try:
+        if popup.count():
+            for selector in ("[data-automation-id='promptOption']:visible",
+                             "[role=option]:visible"):
+                scoped = popup.locator(selector)
+                if scoped.count():
+                    return scoped
+    except Exception:
+        pass
+    loc = page.locator("[data-automation-id='promptOption']:visible")
+    return loc if loc.count() else page.locator("[role=option]:visible")
+
+
+def _multiselect_candidates(field: dict, answer: object) -> list[str]:
+    """Approved values worth trying for a searchable multiselect, in order.
+
+    Recruiting-source prompts list concrete leaves (LinkedIn, Indeed,
+    Glassdoor.com) rather than the generic approved intent ("Social media"),
+    so a single-candidate fill can never succeed on tenants like Cadence.
+    Expand the approved recruiting-source list; every entry is user-approved,
+    so selecting any of them stays truthful.
+    """
+    values = ([str(v).strip() for v in answer]
+              if isinstance(answer, (list, tuple)) else [str(answer).strip()])
+    values = [v for v in values if v]
+    label = str(field.get("label") or "")
+    if re.search(r"\bhow did you hear about\b", label, re.I):
+        control = dict(field)
+        control.setdefault("company_context", "")
+        try:
+            lowered = {v.lower() for v in values}
+            for cand in qa._recruiting_source_candidates(
+                    control, qa.APPLICATION_ANSWERS):
+                cand = str(cand).strip()
+                if cand and cand.lower() not in lowered:
+                    values.append(cand)
+                    lowered.add(cand.lower())
+        except Exception:
+            pass
+    return values
+
+
+def _selected_multiselect_texts(ff) -> list[str]:
+    try:
+        return [t.strip() for t in
+                ff.locator("[data-automation-id='selectedItem']").all_inner_texts()
+                if t.strip()]
+    except Exception:
+        return []
+
+
+def _approved_multiselect_selection(ff, candidates: list[str],
+                                    company: str) -> bool:
+    """Every selected chip must be an approved candidate (or resolve to one)."""
+    texts = _selected_multiselect_texts(ff)
+    if not texts:
+        return False
+    for text in texts:
+        lowered = text.lower()
+        if any(lowered == c.strip().lower() for c in candidates):
+            continue
+        if any(_workday_prompt_target(c, [text], company) == text
+               for c in candidates):
+            continue
+        return False
+    return True
+
+
+def _remove_unapproved_multiselect_chips(ff, candidates: list[str],
+                                         company: str) -> None:
+    """Undo a selection the tenant made for us (stray Enter, wrong highlight)."""
+    try:
+        chips = ff.locator("[data-automation-id='selectedItem']")
+        for i in range(chips.count() - 1, -1, -1):
+            chip = chips.nth(i)
+            text = chip.inner_text().strip()
+            lowered = text.lower()
+            if any(lowered == c.strip().lower() for c in candidates):
+                continue
+            if any(_workday_prompt_target(c, [text], company) == text
+                   for c in candidates):
+                continue
+            charm = chip.locator("[data-automation-id='DELETE_charm']").first
+            (charm if charm.count() else chip).click(timeout=2000)
+    except Exception:
+        pass
+
+
+def _multiselect_search_pick(page, ff, inp, text: str,
+                             allow_enter: bool) -> bool:
+    """Type into the prompt search with real key events and click the exact hit.
+
+    ``fill()`` sets the value without keystrokes, which Cadence's searchable
+    source prompt ignores entirely (observed 2026-08-17: the input read
+    "Social media" while the option list stayed unfiltered). Only an exact,
+    unique, popup-scoped label match is clicked, so similar options cannot win.
+    """
+    try:
+        inp.fill("")
+        inp.press_sequentially(text[:50], delay=40)
+    except Exception:
+        return False
+    page.wait_for_timeout(1600)
+    for attempt in range(2):
+        options = _visible_prompt_options(page)
+        texts = [o.strip() for o in options.all_inner_texts()]
+        matches = [i for i, o in enumerate(texts)
+                   if o.strip().lower() == text.strip().lower()]
+        if len(matches) == 1:
+            try:
+                options.nth(matches[0]).click(timeout=4000)
+            except Exception:
+                return False
+            page.wait_for_timeout(1000)
+            return bool(
+                ff.locator("[data-automation-id='selectedItem']").count())
+        if attempt or not allow_enter:
+            return False
+        try:
+            inp.press("Enter")  # some tenants only run the search on Enter
+        except Exception:
+            return False
+        page.wait_for_timeout(1600)
+    return False
+
+
 def _workday_rendered_answer_matches(field: dict, expected: object,
-                                     actual: object, company: str = "") -> bool:
+                                     actual: object, company: str = "",
+                                     approved_answers: dict | None = None) -> bool:
     """Compare an approved intent with the concrete value Workday renders.
 
     A hierarchical recruiting-source control stores its employer-specific leaf
     (for example ``Valeo Website``), not the approved generic intent
     (``Company website``). Reuse the same fail-closed resolver used while
     navigating the prompt so ``Other (Website)`` and ambiguous values remain
-    rejected.
+    rejected. A rendered leaf that IS one of the user's approved recruiting
+    sources (LinkedIn selected for the generic "Social media" intent) also
+    counts as matching, otherwise the filler would fight its own selection.
     """
     expected_text = str(expected or "").strip()
     actual_text = str(actual or "").strip()
@@ -258,9 +401,18 @@ def _workday_rendered_answer_matches(field: dict, expected: object,
     label = str(field.get("label") or "")
     if not re.search(r"\bhow did you hear about\b", label, re.I):
         return False
-    return _workday_prompt_target(
-        expected_text, [actual_text], company
-    ) == actual_text
+    if _workday_prompt_target(expected_text, [actual_text], company) == actual_text:
+        return True
+    control = dict(field)
+    control.setdefault("company_context", company)
+    approved = (qa.APPLICATION_ANSWERS if approved_answers is None
+                else approved_answers)
+    try:
+        candidates = qa._recruiting_source_candidates(control, approved)
+    except Exception:
+        return False
+    return any(actual_text.lower() == str(c).strip().lower()
+               for c in candidates)
 
 
 def wd_fill(page, field: dict, answer: object) -> bool:
@@ -374,25 +526,20 @@ def wd_fill(page, field: dict, answer: object) -> bool:
             return True
         if kind == "multiselect":
             inp = ff.locator("input").first
+            company = str(field.get("company_context") or "")
+            candidates = _multiselect_candidates(field, answer)
+            if not candidates:
+                return False
             inp.click(timeout=3000)
             page.wait_for_timeout(1200)
-            # Try typing first (moniker search)
-            try:
-                inp.fill(str(answer)[:50])
-                page.wait_for_timeout(1600)
-            except Exception:
-                pass
-            # Hierarchical prompt: navigate approved category -> approved leaf.
-            # Use only visible Workday prompt options and click by exact index so
-            # duplicated/substring labels from unrelated controls cannot win.
+            # Pass 1 (browse): navigate the visible prompt tree with the primary
+            # intent. Handles hierarchical prompts (category -> leaf) whose
+            # options are already listed. Only popup-scoped options are used so
+            # unrelated controls' promptOption nodes cannot win.
             for _ in range(3):
-                prompt = page.locator("[data-automation-id='promptOption']:visible")
-                if not prompt.count():
-                    prompt = page.locator("[role=option]:visible")
+                prompt = _visible_prompt_options(page)
                 opts = [o.strip() for o in prompt.all_inner_texts()]
-                target = _workday_prompt_target(
-                    answer, opts, str(field.get("company_context") or "")
-                )
+                target = _workday_prompt_target(answer, opts, company)
                 if target is None:
                     break
                 matches = [index for index, option in enumerate(opts)
@@ -401,10 +548,22 @@ def wd_fill(page, field: dict, answer: object) -> bool:
                     break
                 prompt.nth(matches[0]).click(timeout=4000)
                 page.wait_for_timeout(1200)
-                if ff.locator("[data-automation-id='selectedItem']").count():
+                if _approved_multiselect_selection(ff, candidates, company):
+                    page.keyboard.press("Escape")
                     return True
+                _remove_unapproved_multiselect_chips(ff, candidates, company)
+            # Pass 2 (search): tenants like Cadence hide options behind a
+            # moniker search that only reacts to real key events. Try each
+            # approved candidate until one produces an exact, unique hit.
+            for cand in candidates:
+                if _multiselect_search_pick(page, ff, inp, cand,
+                                            allow_enter=True):
+                    if _approved_multiselect_selection(ff, candidates, company):
+                        page.keyboard.press("Escape")
+                        return True
+                    _remove_unapproved_multiselect_chips(ff, candidates, company)
             page.keyboard.press("Escape")
-            return bool(ff.locator("[data-automation-id='selectedItem']").count())
+            return _approved_multiselect_selection(ff, candidates, company)
     except Exception:
         return False
     return False
@@ -507,7 +666,8 @@ def unsafe_prefilled_fields(fields: list[dict], company: str,
                 approved_answers=approved_answers,
             )
             if any(_workday_rendered_answer_matches(
-                    field, item.get("answer"), value, company) for item in approved):
+                    field, item.get("answer"), value, company,
+                    approved_answers=approved_answers) for item in approved):
                 continue
             unsafe.append(field.get("label") or field.get("faid") or "unknown field")
     return unsafe

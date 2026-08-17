@@ -410,6 +410,94 @@ class WorkdayAnswerTests(unittest.TestCase):
             upload_failure.index("resume upload zone never appeared"),
         )
 
+    def test_searchable_source_prompt_expands_approved_candidates(self) -> None:
+        """Cadence 2026-08-17: the recruiting-source prompt lists concrete
+        leaves (LinkedIn, Indeed, Glassdoor.com), never the generic approved
+        intent 'Social media'. The filler must fall back to the other
+        user-approved recruiting sources instead of failing forever."""
+        approved = {
+            "preferences": {
+                "recruiting_sources": [
+                    "Social media", "Google", "LinkedIn", "Indeed",
+                ],
+            },
+        }
+        field = {
+            "faid": "source|0",
+            "label": "How Did You Hear About Us?*",
+            "kind": "multiselect",
+            "company_context": "cadence",
+        }
+        with mock.patch.object(workday.qa, "APPLICATION_ANSWERS", approved):
+            candidates = workday._multiselect_candidates(field, "Social media")
+        self.assertEqual(
+            ["Social media", "Google", "LinkedIn", "Indeed"], candidates
+        )
+        # Non-recruiting multiselects must not inherit recruiting sources.
+        other = dict(field, label="Preferred Office Locations")
+        with mock.patch.object(workday.qa, "APPLICATION_ANSWERS", approved):
+            self.assertEqual(
+                ["Boston"], workday._multiselect_candidates(other, "Boston")
+            )
+
+    def test_multiselect_search_uses_key_events_and_exact_unique_match(self) -> None:
+        """Cadence 2026-08-17: fill() set the input value without key events,
+        so the searchable prompt never filtered and the fill returned False on
+        every pass. The search must type real keystrokes and only click an
+        exact, unique, popup-scoped option."""
+        source = inspect.getsource(workday._multiselect_search_pick)
+        self.assertIn("press_sequentially", source)
+        fill_source = inspect.getsource(workday.wd_fill)
+        self.assertIn("_multiselect_search_pick", fill_source)
+        self.assertIn("_multiselect_candidates", fill_source)
+        self.assertNotIn("inp.fill(str(answer)[:50])", fill_source)
+
+        prompt_source = inspect.getsource(workday._visible_prompt_options)
+        self.assertIn("wd-popup", prompt_source)
+
+    def test_selected_leaf_counts_as_approved_recruiting_source(self) -> None:
+        """A selected concrete leaf (LinkedIn) must satisfy both the rendered-
+        answer check and the draft-safety check for the generic intent."""
+        approved = {
+            "preferences": {
+                "recruiting_sources": ["Social media", "LinkedIn"],
+            },
+        }
+        field = {
+            "faid": "source|0",
+            "label": "How Did You Hear About Us?*",
+            "kind": "multiselect",
+            "value": "LinkedIn",
+        }
+        self.assertTrue(
+            workday._workday_rendered_answer_matches(
+                field, "Social media", "LinkedIn", "cadence",
+                approved_answers=approved,
+            )
+        )
+        self.assertFalse(
+            workday._workday_rendered_answer_matches(
+                field, "Social media", "Employee Referral", "cadence",
+                approved_answers=approved,
+            )
+        )
+        self.assertEqual(
+            [],
+            workday.unsafe_prefilled_fields(
+                [field], "cadence", approved_answers=approved
+            ),
+        )
+
+    def test_screenshot_stage_names_cannot_embed_newlines(self) -> None:
+        """Core & Main 2026-08-17: current_step() text is multi-line, which
+        produced screenshot filenames containing a raw newline."""
+        page = mock.Mock()
+        with mock.patch.object(workday, "SHOTS", Path("/tmp/shots-test")):
+            workday._shot(page, "slug", "current step 2 of 7\nMy Information")
+        path = page.screenshot.call_args.kwargs["path"]
+        self.assertNotIn("\n", path)
+        self.assertTrue(path.endswith(".png"))
+
 
 if __name__ == "__main__":
     unittest.main()

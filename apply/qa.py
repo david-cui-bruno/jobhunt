@@ -1329,6 +1329,13 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         if not candidates:
             return False
         options = [str(option) for option in control.get("options") or []]
+        # A searchable prompt renders the concrete leaf that was selected
+        # (LinkedIn, Indeed), not the generic intent (Social media). Every
+        # entry in the approved candidate list is user-approved, so any of
+        # them is a valid rendered answer.
+        if any(answer_text.strip().lower() == str(c).strip().lower()
+               for c in candidates):
+            return True
         expected = _first_matching_option(candidates, options) if options else candidates[0]
         return bool(expected and expected.strip().lower() == answer_text.strip().lower())
     if _employment_type_question(control):
