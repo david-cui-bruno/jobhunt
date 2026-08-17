@@ -1144,6 +1144,12 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             ]
             answer = (_first_matching_option(candidates, options)
                       if options else "United States")
+            if answer is None:
+                # React-select harvests cap at 60 options, so a long country
+                # list may omit 'United States' (IMC 2026-08-17). The fact
+                # holds regardless of menu truncation; the type-search fill
+                # path verifies selection and fails closed if absent.
+                answer = "United States"
         elif re.search(r"\bwhen did you first hear about\b", question):
             # The tracked discovery happened while David is enrolled at Brown.
             answer = _first_matching_option(["University Program"], options)

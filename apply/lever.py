@@ -77,12 +77,26 @@ def apply_lever(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
 
         # custom questions + EEO via Q&A engine (multi-pass like greenhouse)
         answers = None
+        answered_keys: set = set()
         filled_qa, failed_qa = [], []
         for qa_pass in range(3):
             controls = page.evaluate(qa.EXTRACT_JS)
             if answers is None:
                 qa.harvest_select_options(page, controls)
                 answers = qa.get_answers(controls, context={"slug": slug, "url": url})
+                answered_keys = {c["id"] or c["name"] for c in controls}
+            else:
+                # Selecting an option can reveal conditional card fields
+                # (Belvedere 2026-08-17: 'Name of School' = Other exposed
+                # start-date/essay fields that never got answers). Ask the
+                # Q&A engine about controls that were not present on pass 0.
+                fresh = [c for c in controls
+                         if (c["id"] or c["name"]) not in answered_keys
+                         and not c["value"] and not c.get("chosen")]
+                if fresh:
+                    qa.harvest_select_options(page, fresh)
+                    answers += qa.get_answers(fresh, context={"slug": slug, "url": url})
+                    answered_keys |= {c["id"] or c["name"] for c in fresh}
             live = {c["id"] or c["name"] for c in controls if not c["value"] and not c.get("chosen")}
             todo = [a for a in answers if a["id_or_name"] in live] if qa_pass else answers
             if qa_pass and not todo:
@@ -104,7 +118,8 @@ def apply_lever(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
                     if (inp.type === 'checkbox' || inp.type === 'radio') {
                         if ([...document.querySelectorAll('input')].filter(x => x.name === inp.name).some(x => x.checked)) return;
                     } else if ((inp.value || '').trim()) return;
-                    const lbl = (root?.querySelector('.application-label')?.innerText
+                    const lbl = (el.closest('.application-question')?.querySelector('.application-label')?.innerText
+                        || root?.querySelector('.application-label')?.innerText
                         || inp.labels?.[0]?.innerText || inp.name || inp.id || 'unknown');
                     bad.push(lbl.replace(/\\s+/g, ' ').trim().slice(0, 80));
                 });
