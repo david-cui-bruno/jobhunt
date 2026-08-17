@@ -266,11 +266,19 @@ class WorkdayAnswerTests(unittest.TestCase):
         with mock.patch.object(workday, "current_step", return_value=""):
             self.assertFalse(workday.saved_draft_wizard_is_active(page))
 
-    def test_saved_resume_refresh_deletes_only_the_exact_named_attachment(self) -> None:
+    def test_saved_resume_refresh_replaces_stale_attachments_safely(self) -> None:
+        """Cadence 2026-08-17: a resumed draft held a stale differently-named
+        PDF, so the old same-name-only refresh failed closed and the posting
+        went manual. The refresh must clear the draft's own attachments (all
+        uploaded by this automation), upload the current PDF, and verify only
+        that exact file remains; unexpected control shapes still fail closed."""
         source = inspect.getsource(workday.refresh_saved_resume)
         self.assertIn('expected_label = f"Delete {resume_pdf.name}"', source)
-        self.assertIn("existing.count() != 1", source)
-        self.assertNotIn("delete-file'].first", source)
+        # Verification that exactly the current file remains after upload.
+        self.assertIn("replacement.count() == 1", source)
+        # Only Workday's delete-file controls may be touched; unknown labels bail.
+        self.assertIn('label.startswith("Delete ")', source)
+        self.assertIn("if deletes.count():", source)
 
     def test_model_outage_returns_no_guesses(self) -> None:
         fields = [

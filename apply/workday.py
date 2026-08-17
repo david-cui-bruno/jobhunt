@@ -730,36 +730,42 @@ def saved_draft_wizard_is_active(page) -> bool:
 
 
 def refresh_saved_resume(page, resume_pdf: Path) -> bool:
-    """Replace the same-named resume in a resumed Workday draft.
+    """Replace stale resume attachments in a resumed Workday draft.
 
-    A saved draft bypasses the initial autofill upload screen. The attachment may
-    therefore predate a resume correction even though its filename is unchanged.
-    Delete only the exact same-named file, then upload the current verified PDF.
-    If Workday's controls do not match that safe shape, fail closed.
+    A saved draft bypasses the initial autofill upload screen. Its attachment
+    can predate a resume correction with the same filename, or carry a
+    different filename entirely (Cadence 2026-08-17: the draft held a stale
+    differently-named PDF, and a same-name-only refresh failed closed even
+    though the fix was a simple replace). Every attachment in the draft was
+    uploaded by this automation on our own candidate account, so remove them
+    all, upload the current verified PDF, and verify exactly that file
+    remains. Only controls that match Workday's delete-file shape are
+    touched; anything else fails closed.
     """
     upload = page.locator("input[data-automation-id='file-upload-input-ref']").first
     if not upload.count():
         return False
     expected_label = f"Delete {resume_pdf.name}"
-    existing = page.locator(
-        f"button[data-automation-id='delete-file'][aria-label={json.dumps(expected_label)}]"
-    )
-    if existing.count() != 1:
-        return False
     try:
-        existing.first.click(timeout=5000)
-        page.wait_for_timeout(700)
-        dialog = page.locator("[role='dialog']:visible").last
-        if dialog.count():
-            confirm = dialog.locator(
-                "button[data-automation-id*='delete'], button:has-text('Delete')"
-            ).last
-            if confirm.count() and confirm.is_visible():
-                confirm.click(timeout=5000)
-                page.wait_for_timeout(700)
-        try:
-            existing.first.wait_for(state="detached", timeout=5000)
-        except Exception:
+        deletes = page.locator("button[data-automation-id='delete-file']")
+        for _ in range(6):  # bounded: each pass removes the first remaining file
+            if not deletes.count():
+                break
+            target = deletes.first
+            label = (target.get_attribute("aria-label") or "").strip()
+            if not label.startswith("Delete "):
+                return False
+            target.click(timeout=5000)
+            page.wait_for_timeout(700)
+            dialog = page.locator("[role='dialog']:visible").last
+            if dialog.count():
+                confirm = dialog.locator(
+                    "button[data-automation-id*='delete'], button:has-text('Delete')"
+                ).last
+                if confirm.count() and confirm.is_visible():
+                    confirm.click(timeout=5000)
+                    page.wait_for_timeout(700)
+        if deletes.count():
             return False
         upload = page.locator("input[data-automation-id='file-upload-input-ref']").first
         upload.set_input_files(str(resume_pdf))
