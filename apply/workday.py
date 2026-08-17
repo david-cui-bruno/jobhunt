@@ -958,6 +958,15 @@ def maybe_sign_in(page, company_key: str) -> None:
     _fill_auth_field(form, "input[data-automation-id='password']", row[1])
     _click_workday_submit(scope, "signInSubmitButton")
     page.wait_for_timeout(4000)
+    # Nelnet 2026-08-16: the overlay click left the filled dialog open with no
+    # error. Enter in the password field is the universal submit fallback, but
+    # only while the sign-in gate is actually still present.
+    if scope.locator("[data-automation-id='signInSubmitButton']").count():
+        try:
+            form.locator("input[data-automation-id='password']").last.press("Enter")
+            page.wait_for_timeout(4000)
+        except Exception:
+            pass
 
 
 def fill_current_page(page, company_key: str, slug: str) -> None:
