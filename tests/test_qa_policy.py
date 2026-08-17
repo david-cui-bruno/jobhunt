@@ -269,6 +269,54 @@ class QaManualPolicyTest(unittest.TestCase):
             earlier, "No", approved_answers=self.APPROVED,
         ))
 
+    def test_fulltime_permanent_availability_derives_from_graduation(self):
+        control = {
+            "id": "avail",
+            "label": ("When will you be available to work as a full-time, permanent "
+                      "employee? Full-time means working 40 hours per week while "
+                      "being based in our San Mateo, CA headquarters"),
+            "options": ["Available to Start Immediately", "Fall 2027", "Winter 2027",
+                        "Spring 2028", "Summer 2028", "Fall 2028"],
+            "value": "",
+        }
+        rendered = qa.explicit_approved_answers(
+            [control], approved_answers=self.APPROVED,
+        )
+        self.assertEqual(
+            [{"id_or_name": "avail", "answer": "Summer 2028"}], rendered,
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Summer 2028", approved_answers=self.APPROVED,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Available to Start Immediately", approved_answers=self.APPROVED,
+        ))
+
+    def test_first_hear_about_role_uses_approved_sources(self):
+        approved = dict(self.APPROVED)
+        approved["preferences"] = dict(
+            self.APPROVED["preferences"], recruiting_sources=["LinkedIn", "Handshake"],
+        )
+        control = {
+            "id": "hear",
+            "label": "How did you first hear about this role?*",
+            "options": ["Roblox Careers Site", "Campus Ambassador", "LinkedIn",
+                        "Handshake", "Word of Mouth", "Other"],
+            "value": "",
+        }
+        rendered = qa.explicit_approved_answers(
+            [control], approved_answers=approved,
+        )
+        self.assertEqual(
+            [{"id_or_name": "hear", "answer": "LinkedIn"}], rendered,
+        )
+        self.assertFalse(qa.answer_requires_manual(
+            control, "LinkedIn", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Referred by Roblox Employee", approved_answers=approved,
+        ))
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",

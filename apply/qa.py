@@ -713,7 +713,27 @@ def _first_option_after(month: str, year: str, options: list[str]) -> str | None
         parsed = _date_parts(option)
         if parsed:
             dated.append(((parsed[2], parsed[0]), option))
+            continue
+        season = _season_parts(option)
+        if season:
+            dated.append((season, option))
     return next((option for key, option in sorted(dated) if key >= target_key), None)
+
+
+_SEASON_MONTH = {"winter": 12, "spring": 4, "summer": 7, "fall": 10, "autumn": 10}
+
+
+def _season_parts(option: str) -> tuple[int, int] | None:
+    """Parse 'Summer 2028' style options into a (year, month) sort key.
+
+    Employers listing availability by academic season order Winter after Fall
+    within the same label year (Roblox 2026-08-17), so Winter maps to December.
+    """
+    m = re.fullmatch(r"\s*(winter|spring|summer|fall|autumn)\s+(20\d{2})\s*",
+                     str(option or ""), re.I)
+    if not m:
+        return None
+    return (int(m.group(2)), _SEASON_MONTH[m.group(1).lower()])
 
 
 def _graduation_menu_answer(month: str, year: str, options: list[str]) -> str | None:
@@ -961,7 +981,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
         elif re.search(r"\bwhen did you first hear about\b", question):
             # The tracked discovery happened while David is enrolled at Brown.
             answer = _first_matching_option(["University Program"], options)
-        elif re.search(r"\bhow did you hear about\b", question):
+        elif re.search(r"\bhow did you (?:first )?hear about\b", question):
             candidates = _recruiting_source_candidates(control, approved)
             # Workday's searchable dropdown options are often absent until the
             # control is opened. Give the filler the approved default so it can
@@ -1348,13 +1368,27 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         if not grad_year or actual is None:
             return False
         return actual is (int(ready_year.group(1)) >= int(grad_year))
+    if re.search(r"\bavailable to work as a full[- ]time,? permanent employee\b", question):
+        # Season/date menus derive from the approved graduation date. The
+        # question text often mentions "40 hours per week", which trips the
+        # schedule block pattern (Roblox recon 2026-08-17).
+        education = approved.get("education") or {}
+        profile_education = PROFILE.get("education") or {}
+        expected = _first_option_after(
+            str(education.get("expected_graduation_month")
+                or profile_education.get("grad_month") or ""),
+            str(education.get("expected_graduation_year")
+                or profile_education.get("grad_year") or ""),
+            [str(option) for option in control.get("options") or []],
+        )
+        return bool(expected and expected.strip().lower() == answer_text.strip().lower())
     if re.search(r"\bwhen did you first hear about\b", question):
         expected = (_first_matching_option(
             ["University Program"],
             [str(option) for option in control.get("options") or []],
         ) or "University Program")
         return expected.strip().lower() == answer_text.strip().lower()
-    if re.search(r"\bhow did you hear about\b", question):
+    if re.search(r"\bhow did you (?:first )?hear about\b", question):
         candidates = _recruiting_source_candidates(control, approved)
         if not candidates:
             return False
