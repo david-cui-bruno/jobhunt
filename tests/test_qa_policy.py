@@ -522,6 +522,98 @@ class QaManualPolicyTest(unittest.TestCase):
             control, "I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED "
                      "VETERAN LISTED ABOVE", approved_answers=self.APPROVED))
 
+    def test_vevraa_truncated_label_uses_not_a_veteran_fact(self):
+        """Cadence 2026-08-17: WD_EXTRACT_JS truncates the paragraph at 250
+        chars, ending in 'take affirmative act', which the ACT-score pattern
+        swallowed before the veteran branch; and with veteran=False the honest
+        'I AM NOT A VETERAN' option parses as no boolean, so rendering fell
+        through to the decline label (absent from this tenant's menu)."""
+        approved = {**self.APPROVED,
+                    "identity": {**self.APPROVED["identity"], "veteran": False}}
+        control = {
+            "id": "vet",
+            "label": ("This employer is a Government contractor subject to the Vietnam "
+                      "Era Veterans' Readjustment Assistance Act of 1974, as amended by "
+                      "the Jobs for Veterans Act of 2002, 38 U.S.C. 4212 (VEVRAA), which "
+                      "requires Government contractors to take affirmative act"),
+            "options": ["I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED "
+                        "VETERAN LISTED ABOVE",
+                        "I AM NOT A VETERAN", "I DO NOT WISH TO SELF-IDENTIFY"],
+            "value": "",
+        }
+        rendered = qa.explicit_approved_answers([control], approved_answers=approved)
+        self.assertEqual(
+            [{"id_or_name": "vet", "answer": "I AM NOT A VETERAN"}], rendered)
+        self.assertFalse(qa.answer_requires_manual(
+            control, "I AM NOT A VETERAN", approved_answers=approved))
+        self.assertFalse(qa.answer_requires_manual(
+            control, "I DO NOT WISH TO SELF-IDENTIFY", approved_answers=approved))
+
+    def test_ai_screening_truncated_label_detects_opt_out_from_options(self):
+        """Crowe 2026-08-17: the 250-char label cut ends before the paragraph's
+        'opt out' sentence, so the notice was only recognizable from its
+        Opt In / Opt Out menu options."""
+        control = {
+            "id": "jit",
+            "label": ("Just-In-Time Notice How we review applications & your choices: "
+                      "We use an AI\u2011assisted resume\u2011screening tool to help "
+                      "recruiters manage applications. Based on the job posting, the "
+                      "tool reads only the information you provide and may ide"),
+            "options": ["Opt In", "Opt Out"],
+            "value": "",
+        }
+        rendered = qa.explicit_approved_answers([control], approved_answers=self.APPROVED)
+        self.assertEqual([{"id_or_name": "jit", "answer": "Opt In"}], rendered)
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Opt In", approved_answers=self.APPROVED))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Opt Out", approved_answers=self.APPROVED))
+
+    def test_age_18_or_over_wording(self):
+        """Nelnet 2026-08-17: 'Are you age 18 or over?' says 'over', not
+        'older', so the derived age answer was never rendered or approved."""
+        control = {"id": "a", "label": "Are you age 18 or over?*",
+                   "options": ["Yes", "No"], "value": ""}
+        rendered = qa.explicit_approved_answers([control], approved_answers=self.APPROVED)
+        self.assertEqual([{"id_or_name": "a", "answer": "Yes"}], rendered)
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Yes", approved_answers=self.APPROVED))
+
+    def test_sat_act_best_result_wording(self):
+        """IMC 2026-08-17: 'Provide your best result on SAT/ACT' contains no
+        score/test keyword, so the model invented 'I don't have SAT score'."""
+        sat = {"id": "s", "label": "Provide your best result on SAT:*", "value": ""}
+        act = {"id": "a", "label": "Provide your best result on ACT:*", "value": ""}
+        rendered = qa.explicit_approved_answers([sat, act], approved_answers=self.APPROVED)
+        self.assertEqual([
+            {"id_or_name": "s", "answer": "1570"},
+            {"id_or_name": "a", "answer": "Did not take"},
+        ], rendered)
+        self.assertTrue(qa.answer_requires_manual(
+            sat, "I don't have SAT score", approved_answers=self.APPROVED))
+        self.assertFalse(qa.answer_requires_manual(
+            sat, "1570", approved_answers=self.APPROVED))
+
+    def test_highest_completed_education_falls_back_to_hs_diploma(self):
+        """Belvedere 2026-08-17: the menu lists only completed credentials, so
+        the truthful highest COMPLETED level for a current undergrad is the
+        high school diploma."""
+        approved = {**self.APPROVED,
+                    "education": {**self.APPROVED["education"],
+                                  "high_school_graduation_year": "2024"}}
+        control = {
+            "id": "e",
+            "label": ("Please select the highest level of education that you have "
+                      "completed or will complete prior to the start of this "
+                      "position.*"),
+            "options": ["High School Diploma", "Associate Degree",
+                        "Bachelor Degree", "Masters/PhD"],
+            "value": "",
+        }
+        rendered = qa.explicit_approved_answers([control], approved_answers=approved)
+        self.assertEqual(
+            [{"id_or_name": "e", "answer": "High School Diploma"}], rendered)
+
     def test_ai_screening_notice_consents_to_standard_process(self):
         """Crowe 2026-08-17: required Just-In-Time Notice dropdown (consent vs
         Opt Out for AI-assisted resume screening) tripped the used-our-product

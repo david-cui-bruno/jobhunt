@@ -1482,6 +1482,19 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                     result["pages"].append(step or f"page{page_no}")
                 nxt = page.locator("[data-automation-id='pageFooterNextButton']").first
                 if not nxt.count():
+                    # CCC 2026-08-17: Workday served its "Something went wrong /
+                    # Please refresh the page" error pane mid-wizard. That page
+                    # has no footer button; it is a transient outage, not a
+                    # form-structure failure.
+                    body = page.inner_text("body").lower()
+                    if "something went wrong" in body or _workday_outage(page):
+                        result.update(
+                            retryable=True,
+                            reason="workday transient error page mid-wizard; retry later",
+                        )
+                        _shot(page, slug, "wd_transient")
+                        browser.close()
+                        return result
                     result["reason"] = f"no Next button on step '{step}'"
                     browser.close()
                     return result

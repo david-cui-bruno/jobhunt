@@ -80,8 +80,8 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
     if re.search(
         r"\b(graduation|graduate)\s+(?:date|month(?:\s+and\s+year)?|year)|"
         r"\b(high school|secondary school)\b|"
-        r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|test|take|taken)\b|"
-        r"\b(?:score|test|take|taken)\b.{0,30}\b(?:sat|act)\b",
+        r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|result|test|take|taken)s?\b|"
+        r"\b(?:score|result|test|take|taken)s?\b.{0,30}\b(?:sat|act)\b",
         question,
     ):
         education = source.get("education") or {}
@@ -101,8 +101,8 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
                 "high_school_graduation_year"
             )
         if re.search(
-            r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|test|take|taken)\b|"
-            r"\b(?:score|test|take|taken)\b.{0,30}\b(?:sat|act)\b",
+            r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|result|test|take|taken)s?\b|"
+            r"\b(?:score|result|test|take|taken)s?\b.{0,30}\b(?:sat|act)\b",
             question,
         ):
             selected_education["standardized_tests"] = education.get(
@@ -322,7 +322,7 @@ Return ONLY the JSON array."""
 
 BLOCKED_QUESTION_PATTERNS = [
     r"\b(date of birth|dob|birth date|birthday|age)\b",
-    r"\b(18 or older|at least 18|(?:graduation|graduate) (?:date|month(?:\s+and\s+year)?|year))\b",
+    r"\b(18 or (?:older|over)|at least 18|(?:graduation|graduate) (?:date|month(?:\s+and\s+year)?|year))\b",
     r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary)|(?:pay|compensation) expectations?)\b",
     r"\b(offer deadline|exploding offer|outstanding offers?|competing offers?|pending offers?|deadline to accept)\b",
     r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the(?!\s+following))\b.*\b(product|platform|app|service|software|tool)\b",
@@ -335,7 +335,7 @@ BLOCKED_QUESTION_PATTERNS = [
     r"\bdriver[’']?s? licen[cs]e\b",
     r"\bpublications?\b",
     r"\b(?:professional |employment )?references?\b",
-    r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|test|take|taken)\b|\b(?:score|test|take|taken)\b.{0,30}\b(?:sat|act)\b",
+    r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|result|test|take|taken)s?\b|\b(?:score|result|test|take|taken)s?\b.{0,30}\b(?:sat|act)\b",
     r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b",
     r"\b(exact|specific)\b.*\b(schedule|hours|availability|travel)\b|\b(work schedule|travel schedule|travel percentage|% travel|days per week|hours per week|available hours)\b",
     r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b",
@@ -739,11 +739,25 @@ def _ai_screening_choice(options: list[str]) -> str | None:
     return None
 
 
+def _not_a_veteran_option(options: list[str]) -> str | None:
+    """Prefer the literal 'I am not a veteran' choice when veteran is False.
+
+    Cadence 2026-08-17: 'I AM NOT A VETERAN' parses as no boolean (bare 'not'
+    is not a negation token), so _render_boolean skipped the honest option and
+    picked the decline choice instead."""
+    for option in options:
+        if re.search(r"\bnot a (?:protected )?veteran\b", str(option), re.I):
+            return option
+    return None
+
+
 def _decline_demographic_option(options: list[str]) -> str | None:
     return _first_matching_option([
         "I don't wish to answer",
         "I do not wish to answer",
         "Decline to self-identify",
+        # Cadence 2026-08-17 VEVRAA menu wording.
+        "I do not wish to self-identify",
         "Prefer not to say",
         # G-Research 2026-08-17: their Workday tenant labels the decline
         # choice "Undisclosed" (the posting text says non-consenting
@@ -993,7 +1007,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                     ]
                 answer = (_first_matching_option(candidates, options)
                           if options else candidates[0])
-        elif re.search(r"(?:\b18\+|\b18\s+(?:years? of age(?:\s+or older)?|or older)\b|\bat least (?:age )?18\b)", question):
+        elif re.search(r"(?:\b18\+|\b18\s+(?:years? of age(?:\s+or (?:older|over))?|or (?:older|over)|and (?:older|over))\b|\bat least (?:age )?18\b)", question):
             birth = _date_parts(identity.get("date_of_birth"))
             if birth:
                 today = datetime.date.today()
@@ -1008,8 +1022,13 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             # 'disabled veterans', which otherwise routes this menu into
             # disability semantics (Cadence 2026-08-17).
             veteran = identity.get("veteran")
-            answer = (_render_boolean(veteran, options) if isinstance(veteran, bool) else
-                      _decline_demographic_option(options))
+            if veteran is False and options:
+                answer = (_not_a_veteran_option(options)
+                          or _render_boolean(False, options))
+            elif isinstance(veteran, bool):
+                answer = _render_boolean(veteran, options)
+            else:
+                answer = _decline_demographic_option(options)
         elif re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
             disability = identity.get("disability") or {}
             expected = disability.get("history") if "history" in question else disability.get("current")
@@ -1109,7 +1128,12 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 # Binary Hispanic/Latino question is derivable from the
                 # approved race fact (Asian -> No). DV Trading 2026-08-17.
                 answer = _render_boolean(False, options)
-        elif re.search(r"\bai[\s\-\u2010-\u2015]assisted\b.*\bscreening\b|\bautomated (?:resume )?screening\b", question) and re.search(r"\bopt(?:ing)?[\s-]?out\b", question):
+        elif (re.search(r"\bai[\s\-\u2010-\u2015]assisted\b.*\bscreening\b|\bautomated (?:resume )?screening\b", question)
+              and (re.search(r"\bopt(?:ing)?[\s-]?out\b", question)
+                   or any(re.search(r"\bopt[\s-]?out\b", str(option), re.I)
+                          for option in options))):
+            # Truncated labels can cut the paragraph before its 'opt out'
+            # sentence (Crowe 2026-08-17), so the menu options count too.
             answer = _ai_screening_choice(options)
         elif re.search(r"\b(transgender|sexual orientation)\b", question):
             # These identity facts have not been provided. Prefer the site's
@@ -1124,6 +1148,13 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                     "College - currently enrolled",
                     "Currently pursuing a Bachelor's degree",
                 ], options)
+                if (answer is None
+                        and str(education.get("high_school_graduation_year") or "").strip()):
+                    # No in-progress label offered (Belvedere Lever 2026-08-17
+                    # lists only completed credentials). Highest COMPLETED
+                    # education for a current undergrad is the HS diploma.
+                    answer = _exact_matching_option(
+                        ["High School Diploma", "High School"], options)
             else:
                 answer = "Currently pursuing a Bachelor of Science"
         elif re.search(r"\b(current )?(major|area of study|field of study|undergrad(?:uate)? discipline)\b", question):
@@ -1143,20 +1174,20 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 answer = (_first_matching_option(candidates, options)
                           if options else candidates[0])
         elif re.search(
-            r"\bsat\b.{0,30}\b(?:score|test|take|taken)\b|"
-            r"\b(?:score|test|take|taken)\b.{0,30}\bsat\b",
+            r"\bsat\b.{0,30}\b(?:score|result|test|take|taken)s?\b|"
+            r"\b(?:score|result|test|take|taken)s?\b.{0,30}\bsat\b",
             question,
-        ):
+        ) and not re.search(r"\b(vevraa|veterans?)\b", question):
             score = (education.get("standardized_tests") or {}).get("sat")
             if score is not None:
                 candidates = [f"{score} out of 1600", str(score)]
                 answer = (_exact_matching_option(candidates, options)
                           if options else str(score))
         elif re.search(
-            r"\bact\b.{0,30}\b(?:score|test|take|taken)\b|"
-            r"\b(?:score|test|take|taken)\b.{0,30}\bact\b",
+            r"\bact\b.{0,30}\b(?:score|result|test|take|taken)s?\b|"
+            r"\b(?:score|result|test|take|taken)s?\b.{0,30}\bact\b",
             question,
-        ):
+        ) and not re.search(r"\b(vevraa|veterans?)\b", question):
             tests = education.get("standardized_tests") or {}
             if tests.get("act_taken") is False:
                 candidates = ["Did not take", "Not taken", "I did not take the ACT"]
@@ -1429,7 +1460,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
                 and _hometown_value_matches(
                     hometown_component, expected, answer_text
                 ))
-    if re.search(r"(?:\b18\+|\b18\s+(?:years? of age(?:\s+or older)?|or older)\b|\bat least (?:age )?18\b)", question):
+    if re.search(r"(?:\b18\+|\b18\s+(?:years? of age(?:\s+or (?:older|over))?|or (?:older|over)|and (?:older|over))\b|\bat least (?:age )?18\b)", question):
         birth = _date_parts(identity.get("date_of_birth"))
         actual = _answer_boolean(answer_text)
         if not birth or actual is None:
@@ -1563,10 +1594,10 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
                     if options else (candidates[0] if candidates else None))
         return bool(expected and expected.casefold() == answer_text.strip().casefold())
     if re.search(
-        r"\bsat\b.{0,30}\b(?:score|test|take|taken)\b|"
-        r"\b(?:score|test|take|taken)\b.{0,30}\bsat\b",
+        r"\bsat\b.{0,30}\b(?:score|result|test|take|taken)s?\b|"
+        r"\b(?:score|result|test|take|taken)s?\b.{0,30}\bsat\b",
         question,
-    ):
+    ) and not re.search(r"\b(vevraa|veterans?)\b", question):
         score = ((approved.get("education") or {}).get("standardized_tests") or {}).get("sat")
         if score is None:
             return False
@@ -1575,10 +1606,13 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
                     if options else str(score))
         return bool(expected and expected.casefold() == answer_text.strip().casefold())
     if re.search(
-        r"\bact\b.{0,30}\b(?:score|test|take|taken)\b|"
-        r"\b(?:score|test|take|taken)\b.{0,30}\bact\b",
+        r"\bact\b.{0,30}\b(?:score|result|test|take|taken)s?\b|"
+        r"\b(?:score|result|test|take|taken)s?\b.{0,30}\bact\b",
         question,
-    ):
+    ) and not re.search(r"\b(vevraa|veterans?)\b", question):
+        # Guard: VEVRAA paragraphs truncated mid-'affirmative action' end in
+        # 'take affirmative act', which this pattern would otherwise swallow
+        # before the veteran branch runs (Cadence 2026-08-17).
         tests = (approved.get("education") or {}).get("standardized_tests") or {}
         options = [str(option) for option in control.get("options") or []]
         if tests.get("act_taken") is False:
@@ -1625,7 +1659,10 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             return True
         return (bool(expected and _demographic_label_matches(expected, answer_text))
                 or _decline_demographic_option([answer_text]) is not None)
-    if re.search(r"\bai[\s\-\u2010-\u2015]assisted\b.*\bscreening\b|\bautomated (?:resume )?screening\b", question) and re.search(r"\bopt(?:ing)?[\s-]?out\b", question):
+    if (re.search(r"\bai[\s\-\u2010-\u2015]assisted\b.*\bscreening\b|\bautomated (?:resume )?screening\b", question)
+            and (re.search(r"\bopt(?:ing)?[\s-]?out\b", question)
+                 or any(re.search(r"\bopt[\s-]?out\b", str(option), re.I)
+                        for option in control.get("options") or []))):
         options = [str(option) for option in control.get("options") or []]
         expected = _ai_screening_choice(options) if options else None
         return bool(expected and expected.strip().casefold() == answer_text.strip().casefold())
@@ -1633,9 +1670,16 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return _decline_demographic_option([answer_text]) is not None
     if re.search(r"\b(veteran status|are you a veteran|protected veterans?|vevraa)\b", question):
         expected = identity.get("veteran")
-        return ((isinstance(expected, bool) and _answer_boolean(answer_text) is expected)
-                or (not isinstance(expected, bool)
-                    and _decline_demographic_option([answer_text]) is not None))
+        if isinstance(expected, bool):
+            if _answer_boolean(answer_text) is expected:
+                return True
+            if expected is False and re.search(
+                    r"\bnot a (?:protected )?veteran\b", answer_text, re.I):
+                # 'I AM NOT A VETERAN' has no negation token _answer_boolean
+                # recognizes (Cadence 2026-08-17).
+                return True
+        # Declining to self-identify is always a permitted honest choice.
+        return _decline_demographic_option([answer_text]) is not None
     if re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
         disability = identity.get("disability") or {}
         expected = disability.get("history") if "history" in question else disability.get("current")
