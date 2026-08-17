@@ -144,6 +144,17 @@ no flattery, no "I'm excited". End without a signoff (WaaS shows the profile).
 Return ONLY the note text."""
 
 
+def _applied_badge_visible(page) -> bool:
+    """WaaS shows a standalone 'Applied' line on the job page once the
+    connect went through. This is the only reliable confirmation signal
+    (2026-08-17 sweep: 12 sends marked unconfirmed were in fact applied)."""
+    try:
+        return any(line.strip().lower() == "applied"
+                   for line in page.inner_text("body").splitlines())
+    except Exception:
+        return False
+
+
 def apply_waas(url: str, slug: str, dry_run: bool = True) -> dict:
     from playwright.sync_api import sync_playwright
     result = {"ok": False, "submitted": False, "reason": ""}
@@ -152,6 +163,11 @@ def apply_waas(url: str, slug: str, dry_run: bool = True) -> dict:
         page = configure_page(ctx.new_page())
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(3000)
+        if _applied_badge_visible(page):
+            result.update(ok=True, submitted=True,
+                          reason="already applied (WaaS badge)")
+            b.close()
+            return result
         jd = page.inner_text("body")[:5000]
         # draft note
         body = json.dumps({"model": MODEL, "max_tokens": 500,
@@ -193,7 +209,18 @@ def apply_waas(url: str, slug: str, dry_run: bool = True) -> dict:
         if confirmation_observed(body, page.url):
             result.update(ok=True, submitted=True, reason="confirmed")
         else:
-            mark_unconfirmed(result)
+            # The modal often closes without a message; the job page badge is
+            # authoritative. Reload and check it before declaring unconfirmed.
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                page.wait_for_timeout(3000)
+            except Exception:
+                pass
+            if _applied_badge_visible(page):
+                result.update(ok=True, submitted=True,
+                              reason="confirmed (WaaS badge after send)")
+            else:
+                mark_unconfirmed(result)
         ctx.storage_state(path=str(STATE))
         b.close()
     return result
