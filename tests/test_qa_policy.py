@@ -614,6 +614,29 @@ class QaManualPolicyTest(unittest.TestCase):
         self.assertEqual(
             [{"id_or_name": "e", "answer": "High School Diploma"}], rendered)
 
+    def test_sat_range_and_act_no_score_menus(self):
+        """IMC 2026-08-17 retry: the SAT menu offers ranges ('1501 - 1600')
+        and the ACT menu offers "I don't have ACT score"; exact-option
+        matching alone left both manual."""
+        sat = {"id": "s", "label": "Provide your best result on SAT:*",
+               "options": ["1201 - 1300", "1301 - 1400", "1401 - 1500",
+                           "1501 - 1600", "I don't have SAT score"],
+               "value": ""}
+        act = {"id": "a", "label": "Provide your best result on ACT:*",
+               "options": ["30 - 33", "34 - 36", "I don't have ACT score"],
+               "value": ""}
+        rendered = qa.explicit_approved_answers([sat, act], approved_answers=self.APPROVED)
+        self.assertEqual([
+            {"id_or_name": "s", "answer": "1501 - 1600"},
+            {"id_or_name": "a", "answer": "I don't have ACT score"},
+        ], rendered)
+        self.assertFalse(qa.answer_requires_manual(
+            sat, "1501 - 1600", approved_answers=self.APPROVED))
+        self.assertFalse(qa.answer_requires_manual(
+            act, "I don't have ACT score", approved_answers=self.APPROVED))
+        self.assertTrue(qa.answer_requires_manual(
+            sat, "1401 - 1500", approved_answers=self.APPROVED))
+
     def test_ai_screening_notice_consents_to_standard_process(self):
         """Crowe 2026-08-17: required Just-In-Time Notice dropdown (consent vs
         Opt Out for AI-assisted resume screening) tripped the used-our-product

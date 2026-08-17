@@ -751,6 +751,33 @@ def _not_a_veteran_option(options: list[str]) -> str | None:
     return None
 
 
+def _score_range_option(score: int, options: list[str]) -> str | None:
+    """Map a known test score onto a bucketed range option ("1501 - 1600").
+
+    IMC 2026-08-17: the SAT menu lists ranges, so neither the raw score nor
+    'X out of 1600' matches exactly. Only accept an option whose two numeric
+    bounds bracket the score; anything else fails closed.
+    """
+    for option in options:
+        bounds = re.findall(r"\d{1,4}", option)
+        if len(bounds) == 2:
+            low, high = int(bounds[0]), int(bounds[1])
+            if low <= score <= high and low < high:
+                return option
+    return None
+
+
+def _no_score_option(test: str, options: list[str]) -> str | None:
+    """Pick the "I don't have <TEST> score"-style option for an untaken test."""
+    for option in options:
+        text = str(option).strip().lower()
+        if test.lower() in text and re.search(
+                r"\b(?:don'?t|do not|no)\b.{0,15}\b(?:have|score)\b|\bnot taken?\b|\bdid not take\b",
+                text):
+            return option
+    return None
+
+
 def _decline_demographic_option(options: list[str]) -> str | None:
     return _first_matching_option([
         "I don't wish to answer",
@@ -1084,6 +1111,19 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             answer = _approved_high_school_answer(approved, options)
         elif _is_current_school_control(control):
             answer = _approved_college_answer(options)
+        elif re.search(r"\blocation of your current (?:university|school|college)\b", question):
+            # Menus vary by tenant: city labels ("Providence, RI") or region
+            # labels ("United States"). Brown is in Providence, US (IMC
+            # 2026-08-17). City candidates first, then region.
+            location = PROFILE.get("location") or {}
+            city = str(location.get("city") or "").strip()
+            state = str(location.get("state") or "").strip()
+            candidates = ([f"{city}, {state}", city] if city else []) + [
+                "United States", "United States of America", "USA",
+                "North America", "Americas", "US",
+            ]
+            answer = (_first_matching_option(candidates, options)
+                      if options else "United States")
         elif re.search(r"\bwhen did you first hear about\b", question):
             # The tracked discovery happened while David is enrolled at Brown.
             answer = _first_matching_option(["University Program"], options)
@@ -1183,6 +1223,9 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 candidates = [f"{score} out of 1600", str(score)]
                 answer = (_exact_matching_option(candidates, options)
                           if options else str(score))
+                if answer is None and options:
+                    # IMC 2026-08-17: the menu offers ranges ("1501 - 1600").
+                    answer = _score_range_option(int(score), options)
         elif re.search(
             r"\bact\b.{0,30}\b(?:score|result|test|take|taken)s?\b|"
             r"\b(?:score|result|test|take|taken)s?\b.{0,30}\bact\b",
@@ -1193,11 +1236,16 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
                 candidates = ["Did not take", "Not taken", "I did not take the ACT"]
                 answer = (_exact_matching_option(candidates, options)
                           if options else candidates[0])
+                if answer is None and options:
+                    # IMC 2026-08-17: "I don't have ACT score" wording.
+                    answer = _no_score_option("act", options)
             elif tests.get("act") is not None:
                 score = tests["act"]
                 candidates = [f"{score} out of 36", str(score)]
                 answer = (_exact_matching_option(candidates, options)
                           if options else str(score))
+                if answer is None and options:
+                    answer = _score_range_option(int(score), options)
         elif re.search(r"\bcountry.*\b(?:citizenship|permanent residence)\b", question):
             if (PROFILE.get("work_authorization") or {}).get("us_citizen") is True:
                 answer = (_first_matching_option(
@@ -1604,6 +1652,8 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         options = [str(option) for option in control.get("options") or []]
         expected = (_exact_matching_option([f"{score} out of 1600", str(score)], options)
                     if options else str(score))
+        if expected is None and options:
+            expected = _score_range_option(int(score), options)
         return bool(expected and expected.casefold() == answer_text.strip().casefold())
     if re.search(
         r"\bact\b.{0,30}\b(?:score|result|test|take|taken)s?\b|"
@@ -1623,7 +1673,24 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             return False
         expected = (_exact_matching_option(candidates, options)
                     if options else candidates[0])
+        if expected is None and options:
+            expected = (_no_score_option("act", options)
+                        if tests.get("act_taken") is False
+                        else _score_range_option(int(tests["act"]), options))
         return bool(expected and expected.casefold() == answer_text.strip().casefold())
+    if re.search(r"\blocation of your current (?:university|school|college)\b", question):
+        location = PROFILE.get("location") or {}
+        city = str(location.get("city") or "").strip()
+        state = str(location.get("state") or "").strip()
+        candidates = ([f"{city}, {state}", city] if city else []) + [
+            "United States", "United States of America", "USA",
+            "North America", "Americas", "US",
+        ]
+        expected = _first_matching_option(
+            candidates,
+            [str(option) for option in control.get("options") or []] or [answer_text],
+        )
+        return bool(expected and expected.strip().lower() == answer_text.strip().lower())
     if re.search(r"\b(high school|secondary school)\b", question):
         expected = _approved_high_school_answer(
             approved,
