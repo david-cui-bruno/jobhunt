@@ -304,6 +304,57 @@ class WorkdayAnswerTests(unittest.TestCase):
             )
         urlopen.assert_not_called()
 
+    def test_activation_search_reaches_back_to_account_creation(self) -> None:
+        """A 48h Gmail clamp orphaned every account older than two days.
+
+        Workday sends the activation email exactly once, at account creation.
+        Retried postings whose account was created earlier (nelnet, haier,
+        cadence, ... all 2.7+ days old on 2026-08-16) could never find it and
+        settled as "resume upload zone never appeared".
+        """
+        created_at = 1_700_000_000  # far older than any 48h window
+        calls: list[str] = []
+
+        def fake_call(path: str) -> dict:
+            calls.append(path)
+            return {"messages": []}
+
+        fake_mailer = types.SimpleNamespace(_call=fake_call)
+        with mock.patch.dict(sys.modules, {"mailer": fake_mailer}), \
+                mock.patch.object(workday.time, "sleep"):
+            workday.fetch_workday_activation_url(
+                "nelnet", "nelnet.wd1.myworkdayjobs.com", not_before=created_at
+            )
+
+        query = urllib.parse.unquote(calls[0])
+        self.assertIn(f"after:{created_at - 300}", query)
+
+    def test_upload_zone_failure_reports_visible_auth_gates_honestly(self) -> None:
+        """First American 2026-08-15: the run failed as "resume upload zone
+        never appeared" while its screenshot showed the verification sign-in
+        form. The mislabel hid the recoverable cause and settled the posting.
+        """
+        source = inspect.getsource(workday.apply_workday)
+        upload_failure = source[source.index("resume_current = False"):]
+        self.assertIn("_verification_required(page)", upload_failure)
+        self.assertIn("_workday_auth_gate_visible(page)", upload_failure)
+        self.assertLess(
+            upload_failure.index("_verification_required(page)"),
+            upload_failure.index("resume upload zone never appeared"),
+        )
+        self.assertLess(
+            upload_failure.index("_workday_auth_gate_visible(page)"),
+            upload_failure.index("resume upload zone never appeared"),
+        )
+
+    def test_missing_activation_email_attempts_resend_before_giving_up(self) -> None:
+        source = inspect.getsource(workday.ensure_workday_account_access)
+        self.assertIn("resend", source.lower())
+        self.assertLess(
+            source.index("Resend"),
+            source.index("workday account verification email not found"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

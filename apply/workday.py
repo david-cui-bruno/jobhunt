@@ -724,7 +724,15 @@ def fetch_workday_activation_url(company_key: str, expected_host: str,
         sys.path.insert(0, str(notify))
     import mailer
 
-    after = max(not_before - 300, int(time.time()) - 2 * 86400)
+    # Workday sends the activation email once, at account creation. A fixed
+    # 48-hour clamp made that email permanently unfindable whenever a posting
+    # was retried more than two days after its account was created (19 postings
+    # settled "resume upload zone never appeared" this way by 2026-08-16). When
+    # the creation time is known, search from just before it instead.
+    if not_before > 0:
+        after = not_before - 300
+    else:
+        after = int(time.time()) - 2 * 86400
     # Workday tenants do not use one stable sender convention. Most send from
     # ``<tenant>@otp.workday.com``, while branded tenants can use addresses such
     # as ``workday@valeo.com``. Search by the exact activation subject, then rely
@@ -822,6 +830,26 @@ def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tup
     created_at = int(record[2]) if record and record[2] else started
     host = urllib.parse.urlparse(apply_url).netloc
     activation_url = fetch_workday_activation_url(company_key, host, created_at)
+    if not activation_url:
+        # The original email can be gone (expired token, cleanup). Workday's
+        # verification screen offers a resend control; use it and search again
+        # from the resend moment.
+        resend_at = int(time.time())
+        resend = _visible_locator_in_frames(
+            page,
+            "[data-automation-id='resendVerifyEmailLink'], "
+            "[data-automation-id='resendEmailLink'], "
+            "a:has-text('Resend'), button:has-text('Resend')",
+        )
+        if resend is not None:
+            try:
+                resend.click(timeout=5000)
+                page.wait_for_timeout(1500)
+                activation_url = fetch_workday_activation_url(
+                    company_key, host, resend_at
+                )
+            except Exception:
+                pass
     if not activation_url:
         return False, "workday account verification email not found"
 
@@ -1066,6 +1094,30 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
             # saved wizard. In that state the initial upload choice no longer
             # exists, but the normal per-page safety gates must still run.
             if not saved_draft_wizard_is_active(page):
+                # Label a still-visible sign-in/verification gate honestly:
+                # the First American 2026-08-15 failure recorded "resume upload
+                # zone never appeared" while the screenshot showed the
+                # verification sign-in form. The wrong label buried the real,
+                # recoverable cause and settled the posting as failed.
+                if _verification_required(page):
+                    result.update(
+                        ok=True,
+                        reason="workday account verification still pending at upload step",
+                        unanswered=["Workday account verification"],
+                    )
+                    _shot(page, slug, "account_gate")
+                    browser.close()
+                    return result
+                if _workday_auth_gate_visible(page):
+                    detail = _workday_auth_error(page)
+                    result.update(
+                        ok=True,
+                        reason=detail or "workday sign-in gate still blocking the application",
+                        unanswered=["Workday account sign-in"],
+                    )
+                    _shot(page, slug, "account_gate")
+                    browser.close()
+                    return result
                 result["reason"] = "resume upload zone never appeared"
                 _shot(page, slug, "fail_upload")
                 browser.close()
