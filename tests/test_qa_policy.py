@@ -340,6 +340,49 @@ class QaManualPolicyTest(unittest.TestCase):
             control, "Asian", approved_answers=self.APPROVED,
         ))
 
+    def test_prior_employment_answers_no_via_employment_history(self):
+        """User statement 2026-08-17: only ever employed at Framewise/Freya/
+        Sotatek. Any other company's 'worked here before' is truthfully No."""
+        approved = dict(self.APPROVED)
+        approved["employment_history"] = {
+            "only_employers_ever": ["Framewise Health", "Freya", "Sotatek"],
+        }
+        control = {
+            "id": "prior",
+            "label": "Have you previously worked for McKesson?*",
+            "options": ["Yes", "No"],
+            "value": "",
+            "company_context": "mckesson",
+        }
+        rendered = qa.explicit_approved_answers(
+            [control], approved_answers=approved,
+        )
+        self.assertEqual([{"id_or_name": "prior", "answer": "No"}], rendered)
+        self.assertFalse(qa.answer_requires_manual(
+            control, "No", approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "Yes", approved_answers=approved,
+        ))
+        # A listed employer keeps failing closed without an explicit fact.
+        freya = {
+            "id": "prior2",
+            "label": "Have you previously worked for Freya?*",
+            "options": ["Yes", "No"],
+            "value": "",
+            "company_context": "freya",
+        }
+        self.assertEqual([], qa.explicit_approved_answers(
+            [freya], approved_answers=approved,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            freya, "No", approved_answers=approved,
+        ))
+        # Without the history fact the fallback stays closed.
+        self.assertEqual([], qa.explicit_approved_answers(
+            [control], approved_answers=self.APPROVED,
+        ))
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",

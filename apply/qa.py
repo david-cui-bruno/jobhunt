@@ -406,6 +406,35 @@ def _company_fact(control: dict, field: str, answers: dict) -> object:
     return _MISSING
 
 
+def _prior_employment_fact(control: dict, approved: dict) -> object:
+    """Prior-employment fact with an employment-history fallback.
+
+    User statement 2026-08-17: only ever employed at the employers listed in
+    employment_history.only_employers_ever. For any company not in that list
+    (matched by normalized key), 'have you worked here before' is truthfully
+    No without a per-company entry. Companies IN the list stay manual unless
+    an explicit company_facts entry exists.
+    """
+    expected = _company_fact(control, "prior_employment", approved)
+    if expected is not _MISSING:
+        return expected
+    history = approved.get("employment_history") or {}
+    employers = [str(e) for e in history.get("only_employers_ever") or [] if str(e).strip()]
+    if not employers:
+        return _MISSING
+    context_key = _company_key(control.get("company_context"))
+    question = _control_question_text(control).lower()
+    for employer in employers:
+        key = _company_key(employer)
+        if context_key and (context_key in key or key in context_key):
+            return _MISSING
+        words = re.findall(r"[a-z0-9]+", employer.lower())
+        pattern = r"(?<![a-z0-9])" + r"[^a-z0-9]+".join(map(re.escape, words)) + r"(?![a-z0-9])"
+        if re.search(pattern, question):
+            return _MISSING
+    return False
+
+
 def _company_fact_first(control: dict, answers: dict, *fields: str) -> object:
     """Return the first approved company fact, with legacy-field fallback."""
     for field in fields:
@@ -1109,7 +1138,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
         elif re.search(r"\b(previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker))\b", question):
-            expected = _company_fact(control, "prior_employment", approved)
+            expected = _prior_employment_fact(control, approved)
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
         elif _employee_referral_detail_question(control):
@@ -1557,6 +1586,9 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     if re.search(r"\bhave you (?:ever )?used\b.*\bbefore\b|\b(used|use|customer of|experience with|familiar with|have you tried)\b.*\b(our|this|the)\b.*\b(product|platform|app|service|software|tool)\b", question):
         return _company_answer_is_approved(control, "used_product", approved, answer)
     if re.search(r"\b(previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker))\b", question):
+        expected = _prior_employment_fact(control, approved)
+        if isinstance(expected, bool):
+            return _answer_boolean(answer) is expected
         return _company_answer_is_approved(control, "prior_employment", approved, answer)
     if _employee_referral_detail_question(control):
         expected = _company_fact(control, "referral", approved)
