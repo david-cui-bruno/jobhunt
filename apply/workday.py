@@ -1046,7 +1046,8 @@ def fill_current_page(page, company_key: str, slug: str) -> None:
     if not todo:
         return
     answers = wd_answers(fields, company_key, slug)
-    amap = {a["faid"]: a["answer"] for a in answers if "faid" in a}
+    amap = {a["faid"]: a["answer"] for a in answers
+            if "faid" in a and "answer" in a}
     for f in todo:
         if f["faid"] in amap:
             wd_fill(page, dict(f, company_context=company_key), amap[f["faid"]])
