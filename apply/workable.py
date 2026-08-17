@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -97,10 +98,37 @@ def apply_workable(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) 
             except Exception:
                 pass
 
-        # resume first: Workable parses it and may autofill fields
+        # resume first: Workable parses it and may autofill fields.
+        # Never use .first blindly: forms with a Photo field put its file
+        # input earlier in the DOM and reject PDFs (Turabify 2026-08-17).
         try:
-            page.locator("input[type=file]").first.set_input_files(str(resume_pdf))
+            resume_input = None
+            for sel in ["input[name='resume']", "input[type=file][id*='resume' i]",
+                        "[data-ui*='resume' i] input[type=file]"]:
+                el = page.locator(sel).first
+                if el.count():
+                    resume_input = el
+                    break
+            if resume_input is None:
+                inputs = page.locator("input[type=file]")
+                for i in range(inputs.count()):
+                    el = inputs.nth(i)
+                    ctx = el.evaluate(
+                        "e => ((e.closest('section,fieldset,[class*=field],[role=group]') || e)"
+                        ".textContent || '') + ' ' + e.name + ' ' + e.id")
+                    if re.search(r"photo|avatar|picture|headshot", ctx, re.I):
+                        continue
+                    resume_input = el
+                    break
+            if resume_input is None:
+                raise RuntimeError("no resume file input found")
+            resume_input.set_input_files(str(resume_pdf))
             page.wait_for_timeout(6000)  # parse settle
+            attached = page.evaluate(
+                "() => [...document.querySelectorAll('a,span,div')].some("
+                "e => /\\.pdf\\b/i.test(e.textContent || '') && e.offsetParent)")
+            if not attached:
+                raise RuntimeError("resume did not attach (no .pdf chip visible)")
         except Exception as e:
             result["reason"] = f"resume upload failed: {e}"
             _shot(page, slug, "fail_upload")
@@ -108,6 +136,7 @@ def apply_workable(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) 
             return result
 
         # core fields (after parse so we overwrite bad autofill)
+        adapter_managed = set()
         for sel, val in [
             ("input[name='firstname']", p["name"]["first"]),
             ("input[name='lastname']", p["name"]["last"]),
@@ -120,6 +149,7 @@ def apply_workable(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) 
                 el = page.locator(sel).first
                 if el.count() and el.is_visible():
                     el.fill(val)
+                    adapter_managed.add(el.evaluate("e => e.id || e.name"))
             except Exception:
                 pass
 
@@ -131,6 +161,9 @@ def apply_workable(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) 
             if answers is None:
                 qa.harvest_select_options(page, controls)
                 answers = qa.get_answers(controls, context={"slug": slug, "url": url})
+                # Workable's address widget appends on repeated fills; keep the
+                # QA engine off fields the adapter owns (Turabify 2026-08-17).
+                answers = [a for a in answers if a["id_or_name"] not in adapter_managed]
             live = {c["id"] or c["name"] for c in controls if not c["value"] and not c.get("chosen")}
             todo = [a for a in answers if a["id_or_name"] in live] if qa_pass else answers
             if qa_pass and not todo:
@@ -176,12 +209,34 @@ def apply_workable(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) 
 
         try:
             mark_submit_attempted()
+            # Some tenants gate submit behind a Cloudflare Turnstile
+            # ("Verify you are human"); click it if present and give it a
+            # moment to solve, else fail honestly (Caddi 2026-08-17).
+            turnstile = page.frame_locator("iframe[src*='challenges.cloudflare.com']")
+            try:
+                box = turnstile.locator("input[type=checkbox], #challenge-stage").first
+                if box.count():
+                    box.click(timeout=3000)
+                    page.wait_for_timeout(4000)
+            except Exception:
+                pass
             page.locator("button[data-ui='apply-button'], button:has-text('Submit application')").first.click(timeout=5000)
-            page.wait_for_timeout(6000)
+            deadline = time.monotonic() + 30
+            body = ""
+            while time.monotonic() < deadline:
+                page.wait_for_timeout(2000)
+                body = page.inner_text("body").lower()
+                if confirmation_observed(body, page.url):
+                    break
+                if "submitting" not in body:
+                    break
             _shot(page, slug, "submitted")
-            body = page.inner_text("body").lower()
             if confirmation_observed(body, page.url):
                 result.update(ok=True, submitted=True, reason="confirmed")
+            elif "verify you are human" in body or page.locator(
+                    "iframe[src*='challenges.cloudflare.com']").count():
+                result.update(outcome="captcha",
+                              reason="Cloudflare Turnstile blocked submit")
             else:
                 mark_unconfirmed(result)
         except PWTimeout:
