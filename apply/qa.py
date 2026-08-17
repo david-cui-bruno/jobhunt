@@ -1821,6 +1821,10 @@ def filter_manual_answers(controls: list[dict], answers: list[dict], profile_tex
                 by_key.setdefault(k, c)
     allowed, blocked = [], []
     for a in answers:
+        if not isinstance(a, dict):
+            # Model output can contain stray strings/lists (Luminance
+            # 2026-08-17); drop them rather than crash the whole fill.
+            continue
         answer_key = a.get(key_field)
         c = by_key.get(answer_key, {"label": answer_key or ""})
         (blocked if answer_requires_manual(c, a.get("answer"), profile_text, approved_answers) else allowed).append(a)
@@ -1957,7 +1961,11 @@ def _model_answers(controls: list[dict], company_context: str = "") -> list[dict
                 continue
         if answers:
             print(f"[qa] output truncated; salvaged {len(answers)} answers", file=sys.stderr)
-    return answers
+    # Models sometimes nest arrays or emit stray strings inside the JSON list
+    # (Luminance 2026-08-17: a list entry crashed filter_manual_answers).
+    # Keep only well-formed {id_or_name, answer} objects.
+    return [a for a in answers
+            if isinstance(a, dict) and a.get("id_or_name") and "answer" in a]
 
 
 def _best_option(ans: str, options: list[str]) -> str | None:

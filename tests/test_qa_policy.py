@@ -452,6 +452,18 @@ class QaManualPolicyTest(unittest.TestCase):
             control, "South Asian (United States of America)", approved_answers=approved,
         ))
 
+    def test_filter_manual_answers_survives_malformed_entries(self):
+        """Luminance 2026-08-17: a model emitted a nested list inside the
+        answers array and filter_manual_answers crashed on .get()."""
+        control = {"id": "q1", "label": "Notice period?", "options": [], "value": ""}
+        answers, blocked = qa.filter_manual_answers(
+            [control],
+            [["nested", "list"], "stray string", None,
+             {"id_or_name": "q1", "answer": "None"}],
+        )
+        self.assertEqual([{"id_or_name": "q1", "answer": "None"}], answers)
+        self.assertEqual([], blocked)
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",
