@@ -18,7 +18,7 @@ MARKER_ENV = "JOBHUNT_SUBMISSION_ATTEMPT_MARKER"
 _CONFIRMATION_RE = re.compile(
     r"(?:thank you for (?:applying|your application)|"
     r"(?:we(?:'ve| have) )?received your application|"
-    r"your application (?:has been )?(?:received|submitted|sent)|"
+    r"your application (?:has been |was )?(?:successfully )?(?:received|submitted|sent)|"
     r"(?:application|connection) (?:has been )?(?:received|submitted|sent)(?: successfully)?)",
     re.IGNORECASE,
 )
