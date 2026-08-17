@@ -1987,10 +1987,10 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                         # short fixed menu: click the known option directly, no typing
                         # (non-searchable selects break on keystrokes)
                         opt = page.locator(
-                            f".select__option:text-is(\"{target}\"), [role=option]:text-is(\"{target}\")").first
+                            f".select__option:text-is(\"{target}\"):visible, [role=option]:text-is(\"{target}\"):visible").first
                         if not opt.count():
                             opt = page.locator(
-                                f".select__option:has-text(\"{target[:40]}\"), [role=option]:has-text(\"{target[:40]}\")").first
+                                f".select__option:has-text(\"{target[:40]}\"):visible, [role=option]:has-text(\"{target[:40]}\"):visible").first
                         if opt.count():
                             try:
                                 opt.scroll_into_view_if_needed()
@@ -1998,15 +1998,20 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                             except Exception:
                                 pass
                     else:
-                        # long/async list: type to filter, then click best visible match
+                        # long/async list: type to filter, then click best visible match.
+                        # VISIBLE-ONLY: hidden widgets (intl-tel-input keeps a
+                        # ~250-item country list with [role=option] children in the
+                        # DOM at all times) otherwise pollute the candidate list
+                        # and the real menu option never gets picked (DV Trading
+                        # university/country fields, 2026-08-17).
                         page.keyboard.type(ans[:12], delay=25)
                         page.wait_for_timeout(1600)
-                        vis = [o.strip() for o in page.locator(".select__option, [role=option]").all_inner_texts()]
+                        vis = [o.strip() for o in page.locator(".select__option:visible, [role=option]:visible").all_inner_texts()]
                         vis = [o for o in vis if o and "no options" not in o.lower()]
                         pick = _best_option(ans, vis) or (vis[0] if len(vis) == 1 else None)
                         if pick:
                             opt = page.locator(
-                                f".select__option:text-is(\"{pick}\"), [role=option]:text-is(\"{pick}\")").first
+                                f".select__option:text-is(\"{pick}\"):visible, [role=option]:text-is(\"{pick}\"):visible").first
                             if opt.count():
                                 try:
                                     opt.click(timeout=3000)
