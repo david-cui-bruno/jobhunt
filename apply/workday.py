@@ -889,6 +889,32 @@ def _click_workday_submit(scope, automation_id: str) -> None:
         button.click(timeout=5000)
 
 
+def _auth_fields_scope(scope, automation_id: str):
+    """Narrow to the dialog/form that owns one auth submit button.
+
+    Nelnet (2026-08-16) rendered the Create Account dialog with its email
+    input duplicated in the DOM, so a scope-wide fill failed Playwright's
+    strict mode. Fill inside the submit button's own container instead.
+    """
+    button = scope.locator(
+        f"[data-automation-id={json.dumps(automation_id)}]"
+    ).last
+    container = button.locator(
+        "xpath=ancestor::*[self::form or @role='dialog'][1]"
+    )
+    if container.count():
+        return container.first
+    return scope
+
+
+def _fill_auth_field(container, selector: str, value: str) -> None:
+    """Fill the newest match; duplicated auth inputs share one visible form."""
+    field = container.locator(selector)
+    if not field.count():
+        return
+    field.last.fill(value)
+
+
 def maybe_create_account(page, company_key: str) -> None:
     """Some tenants interpose account creation. Use profile email + stored password."""
     scope = _account_scope(page)
@@ -903,12 +929,11 @@ def maybe_create_account(page, company_key: str) -> None:
                      (company_key, PROFILE["email"], pw, int(time.time())))
         conn.commit()
     conn.close()
-    scope.locator("input[data-automation-id='email']").fill(PROFILE["email"])
-    scope.locator("input[data-automation-id='password']").fill(pw)
-    vp = scope.locator("input[data-automation-id='verifyPassword']")
-    if vp.count():
-        vp.fill(pw)
-    cb = scope.locator("input[data-automation-id='createAccountCheckbox']")
+    form = _auth_fields_scope(scope, "createAccountSubmitButton")
+    _fill_auth_field(form, "input[data-automation-id='email']", PROFILE["email"])
+    _fill_auth_field(form, "input[data-automation-id='password']", pw)
+    _fill_auth_field(form, "input[data-automation-id='verifyPassword']", pw)
+    cb = form.locator("input[data-automation-id='createAccountCheckbox']").last
     if cb.count():
         try:
             cb.check()
@@ -928,8 +953,9 @@ def maybe_sign_in(page, company_key: str) -> None:
     conn.close()
     if not row:
         return
-    scope.locator("input[data-automation-id='email']").fill(row[0])
-    scope.locator("input[data-automation-id='password']").fill(row[1])
+    form = _auth_fields_scope(scope, "signInSubmitButton")
+    _fill_auth_field(form, "input[data-automation-id='email']", row[0])
+    _fill_auth_field(form, "input[data-automation-id='password']", row[1])
     _click_workday_submit(scope, "signInSubmitButton")
     page.wait_for_timeout(4000)
 

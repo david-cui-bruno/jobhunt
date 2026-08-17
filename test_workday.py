@@ -355,6 +355,35 @@ class WorkdayAnswerTests(unittest.TestCase):
             source.index("workday account verification email not found"),
         )
 
+    def test_duplicated_auth_inputs_fill_without_strict_mode_violation(self) -> None:
+        """Nelnet 2026-08-16: the Create Account dialog held two identical
+        ``email`` inputs, so an unscoped fill crashed Playwright strict mode.
+        Fills must target the submit button's own form/dialog and pick one
+        element deterministically.
+        """
+        for fn in (workday.maybe_create_account, workday.maybe_sign_in):
+            source = inspect.getsource(fn)
+            self.assertIn("_auth_fields_scope", source)
+            self.assertIn("_fill_auth_field", source)
+            self.assertNotIn(
+                "scope.locator(\"input[data-automation-id='email']\").fill", source
+            )
+
+        container = mock.Mock()
+        field_lookup = mock.Mock()
+        field = mock.Mock()
+        container.locator.return_value = field_lookup
+        field_lookup.count.return_value = 2  # duplicated input
+        field_lookup.last = field
+
+        workday._fill_auth_field(
+            container, "input[data-automation-id='email']", "me@example.com"
+        )
+        field.fill.assert_called_once_with("me@example.com")
+
+        scope_source = inspect.getsource(workday._auth_fields_scope)
+        self.assertIn("ancestor::*[self::form or @role='dialog'][1]", scope_source)
+
 
 if __name__ == "__main__":
     unittest.main()
