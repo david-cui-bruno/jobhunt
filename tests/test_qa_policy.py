@@ -248,6 +248,27 @@ class QaManualPolicyTest(unittest.TestCase):
                 control, answer, approved_answers=approved,
             ))
 
+    def test_ready_for_fulltime_in_year_uses_graduation_fact(self):
+        control = {
+            "id": "ready",
+            "label": "Will you be ready for full-time employment in 2028?*",
+            "options": ["Yes", "No"],
+            "value": "",
+        }
+        self.assertFalse(qa.answer_requires_manual(
+            control, "Yes", approved_answers=self.APPROVED,
+        ))
+        self.assertTrue(qa.answer_requires_manual(
+            control, "No", approved_answers=self.APPROVED,
+        ))
+        earlier = dict(control, label="Will you be ready for full-time employment in 2027?*")
+        self.assertTrue(qa.answer_requires_manual(
+            earlier, "Yes", approved_answers=self.APPROVED,
+        ))
+        self.assertFalse(qa.answer_requires_manual(
+            earlier, "No", approved_answers=self.APPROVED,
+        ))
+
     def test_optional_recruiting_marketing_defaults_to_no(self):
         control = {
             "id": "marketing",

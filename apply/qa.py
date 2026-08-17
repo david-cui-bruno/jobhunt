@@ -1333,6 +1333,21 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             [str(option) for option in control.get("options") or []],
         )
         return bool(expected and expected.lower() == answer_text.strip().lower())
+    ready_year = re.search(
+        r"\b(?:ready|available)\b.{0,40}\bfull[- ]?time\b.{0,40}\b(?:employment|work|role|position)\b.{0,20}\b(20\d{2})\b",
+        question,
+    )
+    if ready_year:
+        # "Will you be ready for full-time employment in <year>?" is fully
+        # derivable from the approved graduation year (Virtu recon 2026-08-17).
+        education = approved.get("education") or {}
+        profile_education = PROFILE.get("education") or {}
+        grad_year = str(education.get("expected_graduation_year")
+                        or profile_education.get("grad_year") or "")
+        actual = _answer_boolean(answer_text)
+        if not grad_year or actual is None:
+            return False
+        return actual is (int(ready_year.group(1)) >= int(grad_year))
     if re.search(r"\bwhen did you first hear about\b", question):
         expected = (_first_matching_option(
             ["University Program"],
