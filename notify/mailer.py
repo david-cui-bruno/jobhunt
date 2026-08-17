@@ -4,6 +4,8 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import os
+import time
 import urllib.request
 from email.message import EmailMessage
 from pathlib import Path
@@ -39,6 +41,22 @@ def _call(path: str, data: dict | None = None, method: str | None = None) -> dic
 
 def send(subject: str, body: str, attachments: list[Path] = (),
          thread_id: str | None = None, in_reply_to: str | None = None) -> dict:
+    # Self-notification emails (summaries, digests, FYI/error alerts) are muted
+    # by default: David asked to stop receiving them (2026-08-17). They are
+    # appended to out/notices.log instead. Set JOBHUNT_EMAIL_NOTICES=1 to
+    # re-enable actual email delivery. Real applications to companies do not
+    # go through this function.
+    if os.environ.get("JOBHUNT_EMAIL_NOTICES") != "1":
+        try:
+            log = ROOT / "out" / "notices.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            att = f" attachments={[p.name for p in attachments]}" if attachments else ""
+            with log.open("a") as f:
+                f.write(f"{stamp} MUTED {subject}{att}\n{body}\n---\n")
+        except Exception:
+            pass
+        return {}
     msg = EmailMessage()
     msg["To"] = ME
     msg["From"] = ME
