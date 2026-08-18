@@ -986,6 +986,39 @@ def _workday_auth_gate_visible(page) -> bool:
     return _visible_locator_in_frames(page, selector) is not None
 
 
+def _recover_and_retry_sign_in(page, company_key: str, apply_url: str,
+                               detail: str) -> tuple[bool, str]:
+    """Password recovery for a rejected sign-in, bounded to once per day.
+
+    Triggered by both sign-in failure shapes ("wrong email address or
+    password / account might be locked" and the generic "sign-in did not
+    complete"). Recovery resets the tenant password via the Forgot Password
+    flow + Gmail, stores it in wd_accounts, then this retries sign-in once.
+    """
+    import workday_recovery as recovery
+    if _account_record(company_key) is None:
+        return False, detail  # nothing to recover; account was never stored
+    if not recovery.claim_daily_recovery(company_key):
+        return False, detail  # one attempt per tenant per day
+    # Poll less than the module default so recovery plus the remaining wizard
+    # stays inside the submitter's 300s per-posting deadline.
+    ok, reason = recovery.recover_account(
+        company_key, apply_url, page=page, poll_timeout_s=90
+    )
+    recovery.record_recovery_outcome(company_key, "ok" if ok else reason)
+    if not ok:
+        return False, reason
+    page.goto(apply_url, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(2500)
+    _open_email_auth(page, create_account=False)
+    maybe_sign_in(page, company_key)
+    page.wait_for_timeout(1200)
+    if _workday_auth_gate_visible(page):
+        after = _workday_auth_error(page)
+        return False, after or "workday account sign-in did not complete after recovery"
+    return True, ""
+
+
 def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tuple[bool, str]:
     """Sign in or create and activate a Workday account, then return to Apply."""
     record = _account_record(company_key)
@@ -1019,7 +1052,10 @@ def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tup
     if not _verification_required(page):
         if _workday_auth_gate_visible(page):
             detail = _workday_auth_error(page)
-            return False, detail or "workday account sign-in did not complete"
+            return _recover_and_retry_sign_in(
+                page, company_key, apply_url,
+                detail or "workday account sign-in did not complete",
+            )
         return True, ""
 
     record = _account_record(company_key)
@@ -1082,7 +1118,10 @@ def ensure_workday_account_access(page, company_key: str, apply_url: str) -> tup
         return False, "workday account remains unverified after activation"
     if _workday_auth_gate_visible(page):
         detail = _workday_auth_error(page)
-        return False, detail or "workday account sign-in did not complete after activation"
+        return _recover_and_retry_sign_in(
+            page, company_key, apply_url,
+            detail or "workday account sign-in did not complete after activation",
+        )
     return True, ""
 
 
