@@ -176,17 +176,18 @@ def sync() -> str:
     now = datetime.datetime.now(ET).strftime("%b %-d, %-I:%M %p ET")
 
     resp_rate = f"{100 * s['responded'] // s['total']}%" if s["total"] else "0%"
+    ready_ct = sum(1 for p in pipeline if p[2] in ("ready", "submitting"))
+    cooking_ct = sum(1 for p in pipeline if p[2] in ("queued", "tailoring", "tailored", "sprinting"))
     dashboard = [
-        ["DAVID'S APPLICATION TRACKER", "", "", f"last sync: {now}"],
+        ["david's job hunt", "", "", f"updated {now.lower()}"],
         [],
-        ["applications", "", "outcomes", ""],
-        ["this week", s["week"], "OAs received", s["oa"]],
-        ["total submitted", s["total"], "interviews", s["interview"]],
-        ["response rate", resp_rate, "offers", s["offer"]],
-        ["", "", "rejections", s["rejected"]],
+        [f"{s['week']} sent this week", "", f"{s['total']} sent all time", ""],
+        [f"{resp_rate} heard back", "", f"{ready_ct} ready to go, {cooking_ct} cooking", ""],
         [],
-        ["pipeline right now", "", "", ""],
-        ["about to submit", sum(1 for p in pipeline if p[2] in ("ready", "submitting")), "in tailoring", sum(1 for p in pipeline if p[2] in ("queued", "tailoring", "tailored", "sprinting"))],
+        ["how it's going", "", "", ""],
+        [f"🟠 {s['oa']} OAs", f"🟣 {s['interview']} interviews", f"🟢 {s['offer']} offers", f"🔴 {s['rejected']} nos"],
+        [],
+        ["the bots apply, statuses update themselves. don't edit — this sheet rewrites itself.", "", "", ""],
     ]
 
     app_rows = [["Company", "Role", "Applied", "Status", "Source", "ATS", "Location", "Last event", "Link"]] + apps
