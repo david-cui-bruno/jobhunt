@@ -6,6 +6,8 @@ Sources:
   - speedyapply/2027-SWE-College-Jobs (README markdown tables)
   - speedyapply/2027-AI-College-Jobs (README markdown tables)
   - vanshb03/Summer2027-Internships off-season list
+  - zapplyjobs/Internships-2027
+  - dreamworkhq/Tech-Internships-2027
 """
 from __future__ import annotations
 
@@ -25,6 +27,8 @@ VANSH_URL = "https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/m
 SPEEDY_URL = "https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/README.md"
 SPEEDY_AI_URL = "https://raw.githubusercontent.com/speedyapply/2027-AI-College-Jobs/main/README.md"
 VANSH_OFFSEASON_URL = "https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/main/OFFSEASON_README.md"
+ZAPPLY_2027_URL = "https://raw.githubusercontent.com/zapplyjobs/Internships-2027/main/README.md"
+DREAMWORK_2027_URL = "https://raw.githubusercontent.com/dreamworkhq/Tech-Internships-2027/main/README.md"
 
 # David explicitly wants Fall 2026, Spring 2027, and Summer 2027 roles.  The
 # Simplify JSON contains all three, but the old watcher discarded everything
@@ -76,7 +80,7 @@ def fetch_simplify() -> list[Posting]:
     return out
 
 
-_MD_LINK = re.compile(r'href="([^"]+)"')
+_MD_LINK = re.compile(r'href="([^"]+)"|\]\((https?://[^)]+)\)')
 
 
 def _parse_md_table(md: str, source: str) -> list[Posting]:
@@ -113,7 +117,7 @@ def _parse_md_table(md: str, source: str) -> list[Posting]:
                     break
         if not m:
             continue
-        url = _clean_url(m.group(1))
+        url = _clean_url(m.group(1) or m.group(2))
         closed = "🔒" in line
         out.append(Posting(
             source=source,
@@ -147,12 +151,22 @@ def fetch_vansh_offseason() -> list[Posting]:
     return _parse_md_table(_fetch(VANSH_OFFSEASON_URL), "vansh-offseason")
 
 
+def fetch_zapply_2027() -> list[Posting]:
+    return _parse_md_table(_fetch(ZAPPLY_2027_URL), "zapply-2027")
+
+
+def fetch_dreamwork_2027() -> list[Posting]:
+    return _parse_md_table(_fetch(DREAMWORK_2027_URL), "dreamwork-2027")
+
+
 WATCH_SOURCES = (
     ("simplify", fetch_simplify),
     ("vansh", fetch_vansh),
     ("speedy", fetch_speedy),
     ("speedy-ai", fetch_speedy_ai),
     ("vansh-offseason", fetch_vansh_offseason),
+    ("zapply-2027", fetch_zapply_2027),
+    ("dreamwork-2027", fetch_dreamwork_2027),
 )
 
 

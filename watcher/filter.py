@@ -35,9 +35,9 @@ HARD_EXCLUDE = [
 def title_ok(title: str, source: str = "") -> bool:
     t = title.lower()
     exclude = EXCLUDE + HARD_EXCLUDE
-    if source in ("waas", "abc"):
+    if source in ("waas", "abc", "bigco"):
         # Startup sources (David 2026-08-17): full-time roles are wanted too
-        # at YC and Series A/B/C startups, so drop the intern-only excludes
+        # at YC and Series A/B/C startups. Bigco is pre-filtered to intern/new-grad.
         # for these sources ("new grad" etc. stay excluded elsewhere).
         exclude = [k for k in exclude if k not in ("new grad",)]
     if any(k in t for k in exclude):

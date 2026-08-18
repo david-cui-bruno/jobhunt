@@ -47,7 +47,9 @@ MODEL = "claude-haiku-4-5"
 RSS_FEEDS = [
     ("techcrunch-funding", "https://techcrunch.com/tag/funding/feed/"),
     ("techcrunch-venture", "https://techcrunch.com/category/venture/feed/"),
+    ("techcrunch-startups", "https://techcrunch.com/category/startups/feed/"),
     ("crunchbase-news", "https://news.crunchbase.com/feed/"),
+    ("techcrunch-ai", "https://techcrunch.com/category/artificial-intelligence/feed/"),
 ]
 A16Z_PORTFOLIO = "https://a16z.com/portfolio/"
 

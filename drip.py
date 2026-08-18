@@ -212,6 +212,15 @@ def run():
     except Exception as e:
         print(f"[drip] abc scout failed: {e}")
 
+    # 1d) Big-company direct boards: stable public JSON endpoints only. Poll every
+    # run before filter so new intern/new-grad SWE/ML roles enter the same queue.
+    try:
+        from watcher import bigco
+        bres = bigco.run()
+        print(f"[drip] bigco: {bres}")
+    except Exception as e:
+        print(f"[drip] bigco failed: {e}")
+
     filt_res = filt.run()
     print(f"[drip] watcher: {summary['new_count']} new, filter: {filt_res}")
 
