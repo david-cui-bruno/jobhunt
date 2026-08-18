@@ -27,6 +27,11 @@ SUBMISSIONS_PER_RUN = int(os.environ.get("JOBHUNT_SUBMISSIONS_PER_RUN", "8"))
 PACING_MIN_SECONDS = float(os.environ.get("JOBHUNT_PACING_MIN_SECONDS", "15"))
 PACING_MAX_SECONDS = float(os.environ.get("JOBHUNT_PACING_MAX_SECONDS", "45"))
 POSTING_TIMEOUT_SECONDS = int(os.environ.get("JOBHUNT_POSTING_TIMEOUT_SECONDS", "300"))
+# Whole-run budget (2026-08-18): each posting is individually bounded at 5min,
+# but a streak of slow-failing rows once stretched a run to 77 minutes, past
+# the 65-min timer. Stop picking NEW rows once the budget is spent; the row in
+# flight finishes under its own posting timeout.
+RUN_BUDGET_SECONDS = int(os.environ.get("JOBHUNT_RUN_BUDGET_SECONDS", "2400"))
 PLAYWRIGHT_TIMEOUT_MS = int(os.environ.get("JOBHUNT_PLAYWRIGHT_TIMEOUT_MS", "30000"))
 
 if SUBMISSIONS_PER_RUN < 1:
@@ -372,8 +377,12 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
         "ORDER BY p.rowid DESC").fetchall()
     results = []
     done = 0
+    run_started = time.monotonic()
     for r in rows:
         if done >= limit or (dry_run and len(results) >= limit):
+            break
+        if time.monotonic() - run_started > RUN_BUDGET_SECONDS:
+            print(f"[submit] run budget ({RUN_BUDGET_SECONDS}s) spent — {done} submitted; leaving the rest for the next timer run")
             break
         if ashby_blocked and "ashbyhq.com" in (r["url"] or ""):
             continue  # cooldown active — leave 'ready'; next run retries after it lapses
