@@ -321,8 +321,10 @@ Return a JSON array, one entry per control you can answer: {{"id_or_name": ..., 
 - Essay-style questions ("hardest technical challenge", "why us", "tell us about a project"):
   answer them (FULL AUTO, David ratified 2026-08-08) in 80-150 words using ONLY the
   STORY BANK below. Pick the most relevant story, adapt tone to the company, first person,
-  plain text, no markdown. NEVER invent projects, employers, metrics, or credentials that
-  are not in the story bank/profile. If nothing in the story bank honestly fits, OMIT it.
+  plain text, no markdown. NEVER use an em dash or en dash anywhere (David's rule: dashes
+  read as AI-written); use commas, periods, or parentheses instead. NEVER invent projects,
+  employers, metrics, or credentials that are not in the story bank/profile. If nothing in
+  the story bank honestly fits, OMIT it.
 - Attention-check / logic-puzzle questions (e.g. riddles, "should I walk or drive to the
   car wash", "what is 2+2", "type the word banana"): these are bot checks. Answer them
   briefly and correctly with common sense (1-2 sentences max). They need no personal facts.
