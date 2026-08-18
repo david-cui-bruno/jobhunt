@@ -27,11 +27,26 @@ def _creds() -> Credentials:
     return c
 
 
+def _bearer() -> str:
+    """Access token for Gmail calls: jobhunt's own token, else kith's.
+
+    jobhunt's OAuth token gets revoked by Google periodically (invalid_grant,
+    observed 2026-08-17) and re-minting needs a human OAuth click. Kith holds a
+    healthy refresh token for the SAME account (gmail.readonly + gmail.send),
+    so fall back to it instead of going silent — see notify/kith_token.py.
+    """
+    try:
+        return _creds().token
+    except Exception:
+        from notify import kith_token
+        return kith_token.access_token()
+
+
 def _call(path: str, data: dict | None = None, method: str | None = None) -> dict:
     req = urllib.request.Request(
         f"{API}{path}",
         data=json.dumps(data).encode() if data is not None else None,
-        headers={"Authorization": f"Bearer {_creds().token}",
+        headers={"Authorization": f"Bearer {_bearer()}",
                  "Content-Type": "application/json"},
         method=method or ("POST" if data is not None else "GET"),
     )

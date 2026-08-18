@@ -203,5 +203,17 @@ def digest(force: bool = False) -> bool:
 if __name__ == "__main__":
     force = "--digest" in sys.argv
     print(scan())
-    sent = digest(force=force)
+    # The unified daily digest (digest.py) replaced this module's own 6pm
+    # email (2026-08-17): one casual message covering action-needed inbox
+    # events AND stuck/unverified applications, instead of parallel digests.
+    import digest as daily_digest
+    sent = daily_digest.run(force=force)
     print("digest sent" if sent else "no digest (empty or not time)")
+    # act on any replies David sent to earlier digests (skip X / for Y: ...)
+    try:
+        import digest_replies
+        acted = digest_replies.process()
+        if any(acted.values()):
+            print(f"digest replies: {acted}")
+    except Exception as e:
+        print(f"digest reply processing failed: {e}")

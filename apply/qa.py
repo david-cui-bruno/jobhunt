@@ -333,44 +333,62 @@ Return a JSON array, one entry per control you can answer: {{"id_or_name": ..., 
 Return ONLY the JSON array."""
 
 
-BLOCKED_QUESTION_PATTERNS = [
-    r"\b(date of birth|dob|birth date|birthday|age)\b",
-    r"\b(18 or (?:older|over)|at least 18|(?:graduation|graduate) (?:date|month(?:\s+and\s+year)?|year))\b",
-    r"\b(?:when|what (?:month|year|term|semester))\b[^?]{0,40}\bgraduat(?:e|ing|ion)\b|\bexpect(?:ed)? to graduate\b",
-    r"\b(?:what )?degree\b.{0,30}\b(?:currently )?pursuing\b|\bpursuing\b.{0,30}\bdegree\b",
+# Questions the pipeline must NEVER auto-answer, even when the field is
+# required: protected/demographic categories, identity data, compensation
+# amounts, facts about people or history the profile cannot contain, and
+# anything where a wrong answer is a misrepresentation.
+HARD_BLOCKED_PATTERNS = [
+    r"\b(date of birth|dob|birth date|birthday)\b",
     r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary)|(?:pay|compensation) expectations?)\b",
     r"\b(offer deadline|exploding offer|outstanding offers?|competing offers?|pending offers?|deadline to accept)\b",
-    r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the(?!\s+following))\b.*\b(product|platform|app|service|software|tool)\b",
     r"\b(referral|referred|refer you|know anyone|previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker)|current employee)\b",
     r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|prior application|previous application)\b",
-    r"\b(FINRA|SIE|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b",
     r"\b(member of your household|household member|family member|relative)\b.*\b(employed|worked|employee)\b",
     r"\b(non[- ]?compete|notice period|conflict of interest|restrictive (?:agreement|covenant)|moonlighting|outside employment)\b|\bagreement with (?:your )?(?:current|any other) employer\b",
     r"\bpolitical contributions?\b",
-    r"\bdriver[’']?s? licen[cs]e\b",
-    r"\bpublications?\b",
+    r"\bdriver[\u2019']?s? licen[cs]e\b",
     r"\b(?:professional |employment )?references?\b",
     r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|result|test|take|taken)s?\b|\b(?:score|result|test|take|taken)s?\b.{0,30}\b(?:sat|act)\b",
-    r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b",
-    r"\b(exact|specific)\b.*\b(schedule|hours|availability|travel)\b|\b(work schedule|travel schedule|travel percentage|% travel|days per week|hours per week|available hours)\b",
     r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b",
     r"\b(preferred pronouns?|pronouns?)\b",
     r"\b(gender|race|ethnicity|racial|hispanic|latino|transgender|sexual orientation|veteran status|are you a veteran)\b",
+    r"\b(high school|secondary school)\b(?![^?\n]{0,40}\bgraduat)",  # HS name/region; HS *graduation year* is soft
+    r"\b(?:if|when) (?:you )?(?:selected?|chose|choose) other\b|\bif other\b.*\b(?:specify|explain|describe)\b|\b(?:specify|explain|describe)\b.*\bif other\b",
+    r"\b(what (?:are you|do you) (?:reading|watching|listening)|favorite (?:book|movie|podcast|show|song|artist|media)|last (?:book|movie|show|podcast)|reading list|media (?:you consume|consumption))\b",
+]
+
+# Factual/derivable topics where a REQUIRED field may be answered with best
+# judgment from the profile + standing instructions (David ratified
+# 2026-08-17: "use best judgment instead of stalling"). On OPTIONAL fields
+# these still stay blank — silence is free there, and blank optional fields
+# never block a submission. Examples that motivated this: a required
+# "Security Clearance Status" (truthfully: None) and a required "Year of High
+# School Graduation" (derivable: 2024) each stalled an entire application.
+SOFT_BLOCKED_PATTERNS = [
+    r"\bage\b",
+    r"\b(18 or (?:older|over)|at least 18|(?:graduation|graduate) (?:date|month(?:\s+and\s+year)?|year)|year of\b[^?\n]{0,40}\bgraduation)\b",
+    r"\b(?:when|what (?:month|year|term|semester))\b[^?]{0,40}\bgraduat(?:e|ing|ion)\b|\bexpect(?:ed)? to graduate\b",
+    r"\b(?:what )?degree\b.{0,30}\b(?:currently )?pursuing\b|\bpursuing\b.{0,30}\bdegree\b",
+    r"\b(used|use|customer of|experience with|familiar with|proficient in|have you tried)\b.*\b(our|this|the(?!\s+following))\b.*\b(product|platform|app|service|software|tool)\b",
+    r"\b(FINRA|SIE|securities industry essentials|professional licen[sc]e|certification|certified|plan to take the exam)\b",
+    r"\bpublications?\b",
+    r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b",
+    r"\b(exact|specific)\b.*\b(schedule|hours|availability|travel)\b|\b(work schedule|travel schedule|travel percentage|% travel|days per week|hours per week|available hours)\b",
     r"\bhave you (?:ever )?used\b.*\bbefore\b",
     r"\b(days? (?:a|per) week|in[- ]?office|on[- ]?site|hybrid schedule|willing to (?:come|work|join).*(?:office|on[- ]?site))\b",
     r"\b(local to the area|relocation assistance)\b|\b(?:willing|open|able)\b.{0,40}\brelocat(?:e|ing|ion)\b",
-    r"\b(high school|secondary school)\b",
     r"\bcurrent school\s+(?:year|enrollment|status|grade|class|level)\b",
     r"\b(future contact|marketing (?:email|communications?|consent)|talent community)\b",
     r"\b(?:how|where|when) (?:did )?you (?:first )?hear(?:d)? about\b",
     r"\b(?:employment|work)\s*(?:type|status|preference)\b|"
     r"\b(?:seeking|looking for|interested in)\b.{0,60}\b(?:full[- ]?time|part[- ]?time)\b|"
     r"\b(?:full[- ]?time|part[- ]?time)\b.{0,60}\b(?:employment|work)\b",
-    # A model must not invent a detail for an optional branch whose parent
-    # selection was not "Other".  If the branch is genuinely required, leaving
-    # it blank makes the adapter stop for review instead of submitting fiction.
-    r"\b(?:if|when) (?:you )?(?:selected?|chose|choose) other\b|\bif other\b.*\b(?:specify|explain|describe)\b|\b(?:specify|explain|describe)\b.*\bif other\b",
-    r"\b(what (?:are you|do you) (?:reading|watching|listening)|favorite (?:book|movie|podcast|show|song|artist|media)|last (?:book|movie|show|podcast)|reading list|media (?:you consume|consumption))\b",
+]
+
+# Back-compat: some callers/tests reference the combined list.
+BLOCKED_QUESTION_PATTERNS = [
+    *HARD_BLOCKED_PATTERNS,
+    *SOFT_BLOCKED_PATTERNS,
 ]
 
 
@@ -2014,7 +2032,14 @@ def answer_requires_manual(control: dict, answer: object, profile_text: str | No
     if re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b", question):
         if profile_text and re.search(r"\b(disability|disabled|impairment|medical condition|health condition|accommodation)\b", profile_text, re.I):
             return False
-    return any(re.search(p, question, re.I) for p in BLOCKED_QUESTION_PATTERNS)
+    if any(re.search(p, question, re.I) for p in HARD_BLOCKED_PATTERNS):
+        return True
+    if any(re.search(p, question, re.I) for p in SOFT_BLOCKED_PATTERNS):
+        # Best judgment on REQUIRED fields (David 2026-08-17): a truthful,
+        # profile-grounded answer beats stalling the whole application. On
+        # optional fields silence stays free — leave them blank.
+        return not bool(control.get("required"))
+    return False
 
 
 def filter_manual_answers(controls: list[dict], answers: list[dict], profile_text: str | None = None,
