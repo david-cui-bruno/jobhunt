@@ -193,11 +193,14 @@ def run():
             print(f"[drip] startups: {sres}")
         except Exception as e:
             print(f"[drip] startup discovery failed: {e}")
-        try:
-            from watcher import waas
-            print(f"[drip] waas new: {waas.scrape()}")
-        except Exception as e:
-            print(f"[drip] waas scrape failed: {e}")
+        # WaaS PAUSED (David 2026-08-18): no new YC work-at-a-startup scraping
+        # or applications for now. Set JOBHUNT_WAAS=1 to resume.
+        if os.environ.get("JOBHUNT_WAAS") == "1":
+            try:
+                from watcher import waas
+                print(f"[drip] waas new: {waas.scrape()}")
+            except Exception as e:
+                print(f"[drip] waas scrape failed: {e}")
 
     # 1c) Series A/B/C startup scout: poll resolved boards every run (cheap
     # public JSON APIs); discover fresh funding news + resolve ATS boards in
