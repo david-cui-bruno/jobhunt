@@ -12,6 +12,12 @@ most (evening); nothing to say -> no email. David can just reply to the
 email — replies are picked up by revise.py/inbox.py's existing loops and by
 the agent reading the thread.
 
+A shortened copy (<=1200 chars, top 3 items + stats) also goes to David's
+phone through the kith-bridge outbox (notify/kith_bridge.py). Best-effort:
+if kith/the bridge is down the email still goes out and we log one line.
+He can text digest commands back — digest_replies.process_imessage picks
+them up on the same inbox timer.
+
 Run: python3 digest.py            (respects the once-a-day guard)
      python3 digest.py --force    (send now regardless)
      python3 digest.py --dry-run  (print, never send)
@@ -33,6 +39,7 @@ DB = ROOT / "out" / "tracker.db"
 NOTES = ROOT / "out" / "digest-notes.log"
 ET = ZoneInfo("America/New_York")
 SEND_HOUR = 18  # 6pm ET
+SHORT_LIMIT = 1200  # phone copy hard cap
 
 # manual reasons that are pure engineering debt — the agent handles these; not
 # worth David's attention in the digest beyond a count.
@@ -153,6 +160,61 @@ def compose(d: dict) -> str | None:
     return body
 
 
+def compose_short(d: dict) -> str | None:
+    """Phone-sized digest: top 3 items + the stats line, <=SHORT_LIMIT chars.
+
+    Same casual voice as compose(), no URLs (those live in the email).
+    None -> nothing worth texting (same nothing-to-say rule as compose()).
+    """
+    items = []
+    today = datetime.datetime.now(ET).date()
+    for cat, company, role, deadline, _url, _summary in d["action"]:
+        tag = {"oa_invite": "OA", "interview_invite": "interview",
+               "recruiter_reply": "recruiter", "offer": "OFFER"}.get(cat, cat)
+        flag = ""
+        if deadline:
+            try:
+                days = (datetime.date.fromisoformat(deadline) - today).days
+                flag = f" — due in {days}d" if days <= 5 else f" — due {deadline}"
+            except ValueError:
+                flag = f" — due {deadline}"
+        items.append(f"[{tag}] {company} ({role[:40]}){flag}")
+    for company, _title, _url, err in d["manual_ask"]:
+        ask = err
+        if err.startswith("needs answers:"):
+            ask = err[len("needs answers:"):].strip()
+        items.append(f"stuck: {company} — {ask[:70]}")
+    for c, t, _u in d["verify"]:
+        items.append(f"unconfirmed: {c} — {t[:40]}")
+    if not items:
+        return None
+
+    s = d["stats"]
+    debt = sum(d["manual_debt"].values())
+    tail = f"pipeline: {s['submitted_24h']} submitted today · {s['ready']} ready · {s['queued']} queued"
+    if debt:
+        tail += f" · {debt} on my side"
+    lines = [f"• {i[:150]}" for i in items[:3]]
+    if len(items) > 3:
+        lines.append(f"(+{len(items) - 3} more in the email)")
+    body = ("hey — jobhunt quick hits:\n" + "\n".join(lines) + f"\n{tail}\n"
+            'reply here works: "skip <company>" / "<company>: <answer>" — or mention jobhunt')
+    return body[:SHORT_LIMIT]
+
+
+def _send_phone_copy(d: dict) -> None:
+    """Best-effort iMessage copy via the kith-bridge outbox. Never raises —
+    the email is the source of truth; a down bridge costs one log line."""
+    short = compose_short(d)
+    if not short:
+        return
+    try:
+        from notify import kith_bridge
+        kith_bridge.send_phone(short)
+    except Exception as e:
+        print(f"digest: phone copy failed (email still sent): {e}")
+
+
 def run(force: bool = False, dry: bool = False) -> bool:
     now = datetime.datetime.now(ET)
     conn = sqlite3.connect(DB)
@@ -172,6 +234,7 @@ def run(force: bool = False, dry: bool = False) -> bool:
         import os
         os.environ["JOBHUNT_EMAIL_NOTICES"] = "1"  # digest is the ONE allowed email
         mailer.send(f"jobhunt daily — {now.strftime('%b %-d')}", body)
+        _send_phone_copy(d)
     conn.execute("INSERT OR REPLACE INTO scan_state VALUES ('last_daily_digest', ?)", (today,))
     conn.execute("INSERT OR REPLACE INTO scan_state VALUES ('last_daily_digest_ts', ?)", (str(int(time.time())),))
     conn.commit()

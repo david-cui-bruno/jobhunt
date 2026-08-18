@@ -217,3 +217,11 @@ if __name__ == "__main__":
             print(f"digest replies: {acted}")
     except Exception as e:
         print(f"digest reply processing failed: {e}")
+    # same rules for texts David sends the kith agent (iMessage via the bridge)
+    try:
+        import digest_replies
+        acted = digest_replies.process_imessage()
+        if any(acted.values()):
+            print(f"digest texts: {acted}")
+    except Exception as e:
+        print(f"digest text processing failed: {e}")
