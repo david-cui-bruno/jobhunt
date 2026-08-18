@@ -343,6 +343,21 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
     # headless Playwright (apply/*.py, headless=True), so submissions never
     # show a window regardless of what David is doing.
 
+    # ASHBY CIRCUIT BREAKER (2026-08-18): overnight, 35/38 Ashby submissions
+    # were rejected as 'possible spam' — their velocity detection flags bursts
+    # of headless applications from one IP. Two consecutive spam rejections in
+    # a run now skip further Ashby postings and start a 12h cooldown
+    # (out/ashby_cooldown holds the resume-at epoch). Non-Ashby ATSs continue
+    # unaffected; spam-rejected postings stay 'manual' for the digest.
+    ashby_cooldown_file = ROOT / "out" / "ashby_cooldown"
+    ashby_blocked = False
+    try:
+        if ashby_cooldown_file.exists() and float(ashby_cooldown_file.read_text().strip()) > time.time():
+            ashby_blocked = True
+    except (ValueError, OSError):
+        pass
+    ashby_spam_streak = 0
+
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
     _ensure_outcome_columns(conn)
@@ -360,6 +375,8 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
     for r in rows:
         if done >= limit or (dry_run and len(results) >= limit):
             break
+        if ashby_blocked and "ashbyhq.com" in (r["url"] or ""):
+            continue  # cooldown active — leave 'ready'; next run retries after it lapses
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
         pdf = _runtime_path(r["resume_pdf"])
         # Rows are selected as a batch, so a prior row in this same run may have
@@ -510,6 +527,18 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
             )
         results.append({"company": r["company"], "ats": res.get("detected_ats", "unknown"),
                         "outcome": outcome, "reason": reason})
+        # Ashby spam-streak accounting (see breaker comment above).
+        if "possible spam" in (reason or ""):
+            ashby_spam_streak += 1
+            if ashby_spam_streak >= 2 and not ashby_blocked:
+                ashby_blocked = True
+                try:
+                    ashby_cooldown_file.write_text(str(time.time() + 12 * 3600))
+                    print("[submit] ashby breaker tripped: 2 consecutive spam rejections — 12h cooldown")
+                except OSError:
+                    pass
+        elif res.get("detected_ats") == "ashby":
+            ashby_spam_streak = 0
         # Keep attempts sequential and lightly staggered without imposing the old
         # one-to-four-minute artificial delay. Do not sleep after reaching the cap.
         if not dry_run and done < limit:
