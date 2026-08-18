@@ -336,9 +336,12 @@ def _claim_submission(
 def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> list[dict]:
     # 24/7 (David 2026-08-09): ATS forms don't care what hour they're submitted
     # and speed-to-apply wins. Human-ish pacing between submissions retained.
-    if _user_is_gaming():
-        print("[submit] deferring: game/fullscreen app active")
-        return []
+    # Gaming-defer check REMOVED (David 2026-08-17). It matched the Steam
+    # client merely existing (steam_osx idles in the menu bar at login), which
+    # silently blocked nearly every submit run for weeks — throughput fell to
+    # ~1/day with 240 ready. The check was also pointless: every adapter runs
+    # headless Playwright (apply/*.py, headless=True), so submissions never
+    # show a window regardless of what David is doing.
 
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
