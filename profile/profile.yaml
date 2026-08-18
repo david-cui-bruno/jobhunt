@@ -34,9 +34,9 @@ eeo:
   disability: "No, I do not have a disability"
 preferences:
   roles_include: ["software engineer", "swe", "ml", "machine learning", "ai", "infrastructure", "full stack", "backend", "frontend", "data engineer", "platform", "research engineer"]
-  # Summer-only (David 2026-08-17): no fall/spring/winter terms, no co-ops.
+  # Winter + Summer only (David 2026-08-17): no fall/spring terms, no co-ops.
   roles_exclude: ["new grad", "unpaid", "hardware technician", "it support",
-                  "fall 20", "fall 26", "fall 27", "spring 20", "winter 20",
+                  "fall 20", "fall 26", "fall 27", "spring 20",
                   "co-op", "co op", "coop"]
   season: "Summer 2027"
   location_rank: ["SF Bay Area", "NYC", "Remote", "anywhere"]
