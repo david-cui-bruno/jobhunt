@@ -25,7 +25,12 @@
 
 ## Projects (candidates to swap in per-JD)
 
-10. jobhunt — Autonomous job-application pipeline: watchers diff 3 GitHub listing repos ($\sim$450 postings tracked), Claude tailors LaTeX resumes per JD, and Playwright adapters submit across Greenhouse/Lever/Ashby/Workday with Gmail exception alerts (Python, Playwright, SQLite, systemd)
+10. agent factory — Personal fleet of always-on agents (launchd-supervised): a self-healing supervisor that health-checks each agent every 30 min and auto-remediates wedged services, an LLM-driven CRM enrichment worker (structured extraction over 1,700+ contacts with per-row audit evidence), and an iMessage/email digest loop where replies route back into agent actions (Python/TypeScript, SQLite/Postgres, launchd)
+   # ^ replaced the old jobhunt-pipeline bullet 2026-08-17: describing THIS
+   #   application pipeline inside an application reads as "a bot wrote this"
+   #   (a recruiter called it out directly). The agent-factory bullet is the
+   #   same engineering story—orchestration, reliability, LLM integration—
+   #   grounded in the kith/fleet infrastructure, without self-reference.
 11. SpaceOverflow — Stripe Connect marketplace flows with idempotent webhook processing and real-time messaging via Supabase channels; .edu-verified onboarding across 2 campuses
 12. Bruno's Dictionary — Next.js 14 + Supabase app with auth, moderated submissions, and type-safe DB migrations; 500+ entries, deployed on Vercel
 

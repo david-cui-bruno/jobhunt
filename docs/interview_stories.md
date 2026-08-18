@@ -79,3 +79,22 @@
 **Follow-ups:**
 - *"What would you have done differently starting over?"* → hint: earlier/harder go/no-go checkpoints tied to pilot conversion, not just feature velocity.
 - *"How did you handle telling the pilot sites?"* → hint: emphasize responsible data handling and transparency — protects credibility for future ventures.
+---
+
+## Story 5: Systems — The Agent Factory (Personal Automation Fleet)
+
+**Best for:** "side projects you're proud of", automation/AI-agent roles, reliability engineering, "what do you build for fun"
+
+**Situation:** Outside of work I run a small fleet of always-on agents on my own hardware: a CRM enrichment worker that does LLM-based structured extraction over 1,700+ professional contacts, scheduled communication digests, and several task-specific workers, all supervised by launchd.
+
+**Task:** The interesting problem wasn't any single agent — it was keeping a heterogeneous fleet healthy without babysitting it: services wedge, tokens expire, dependencies vanish, and a silent failure can go unnoticed for weeks.
+
+**Action:** I built a self-healing layer: a supervisor sweeps every agent on a 30-minute cadence, checks each one's *actual* health signal (log freshness inside its work window, a reachable debug port, a fresh database write — not just "process exists"), applies one targeted remedy, and escalates only what it couldn't fix into a daily digest I can reply to. Replies route back into agent actions. Every automated decision writes an audit line so I can trace why anything happened.
+
+**Result:** The supervisor caught a worker that had crash-looped ~49,000 times on a missing dependency within its first hour of operation, and OAuth-token failures now fail over automatically instead of silently killing email flows. The fleet runs for weeks without intervention.
+
+**Lesson:** For autonomous systems, the health check has to observe the *outcome* (fresh data, reachable port), never the process table — and escalation paths matter more than remediation, because the failure you didn't anticipate is the only one that hurts.
+
+**Follow-ups:**
+- *"How do you avoid the supervisor itself being a single point of failure?"* → hint: it's stateless, idempotent, and its own absence shows up as staleness in the daily digest.
+- *"What's the hardest bug the fleet surfaced?"* → hint: the 49k crash-loop — silent because the supervisor-less fleet had no freshness check on that worker's output.
