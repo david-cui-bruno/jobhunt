@@ -199,6 +199,16 @@ def run():
         except Exception as e:
             print(f"[drip] waas scrape failed: {e}")
 
+    # 1c) Series A/B/C startup scout: poll resolved boards every run (cheap
+    # public JSON APIs); discover fresh funding news + resolve ATS boards in
+    # the same daily 10:00 window as the other discovery jobs.
+    try:
+        from watcher import abc_startups
+        ares = abc_startups.run(discover=(now.hour == 10))
+        print(f"[drip] abc: {ares}")
+    except Exception as e:
+        print(f"[drip] abc scout failed: {e}")
+
     filt_res = filt.run()
     print(f"[drip] watcher: {summary['new_count']} new, filter: {filt_res}")
 
