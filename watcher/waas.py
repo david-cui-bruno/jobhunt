@@ -27,7 +27,16 @@ STATE = ROOT / "secrets" / "yc_state.json"
 MODEL = "claude-sonnet-5"
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
-LIST_URL = "https://www.workatastartup.com/companies?jobType=intern&sortBy=created_desc&role=eng"
+# YC rules (David 2026-08-17): interns AND full-time both OK for YC startups
+# (full-time at a YC startup = acceptable alternative to internships);
+# NEVER apply to P26-batch companies (too early). Batch filter is applied at
+# ingest below.
+LIST_URLS = [
+    "https://www.workatastartup.com/companies?jobType=intern&sortBy=created_desc&role=eng",
+    "https://www.workatastartup.com/companies?jobType=fulltime&sortBy=created_desc&role=eng",
+]
+LIST_URL = LIST_URLS[0]  # back-compat for callers that import LIST_URL
+BLOCKED_BATCHES = ("P26",)
 
 
 def _company_name(label: str, company_url: str = "") -> str:
@@ -68,12 +77,14 @@ def scrape(max_scroll: int = 6) -> int:
     with sync_playwright() as pw:
         b, ctx = _browser(pw)
         page = configure_page(ctx.new_page())
-        page.goto(LIST_URL, wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(4000)
-        for _ in range(max_scroll):
-            page.mouse.wheel(0, 2500)
-            page.wait_for_timeout(1200)
-        cards = page.evaluate("""
+        cards = []
+        for list_url in LIST_URLS:
+            page.goto(list_url, wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(4000)
+            for _ in range(max_scroll):
+                page.mouse.wheel(0, 2500)
+                page.wait_for_timeout(1200)
+            cards += page.evaluate("""
             () => {
                 const out = [];
                 document.querySelectorAll('a[href*="/jobs/"]').forEach(a => {
@@ -97,7 +108,7 @@ def scrape(max_scroll: int = 6) -> int:
                 });
                 return out;
             }
-        """)
+            """)
         ctx.storage_state(path=str(STATE))
         b.close()
     seen = set()
@@ -110,6 +121,9 @@ def scrape(max_scroll: int = 6) -> int:
         if "/jobs/l/" in c["url"]:
             continue
         if re.search(r"mechatronics|electrical|hardware|mechanical", c["title"], re.I):
+            continue
+        # P26 = current early batch; David: never apply to P26 companies.
+        if any(f"({b})" in (c.get("company") or "") for b in BLOCKED_BATCHES):
             continue
         c["company"] = _company_name(c.get("company", ""), c.get("company_url", ""))
         rows.append(c)

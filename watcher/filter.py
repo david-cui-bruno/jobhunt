@@ -32,10 +32,18 @@ HARD_EXCLUDE = [
 ]
 
 
-def title_ok(title: str) -> bool:
+def title_ok(title: str, source: str = "") -> bool:
     t = title.lower()
-    if any(k in t for k in EXCLUDE + HARD_EXCLUDE):
+    exclude = EXCLUDE + HARD_EXCLUDE
+    if source == "waas":
+        # YC startups (David 2026-08-17): full-time roles are wanted too, so
+        # drop the intern-only excludes for this source ("new grad" etc. stay
+        # excluded only for non-YC sources).
+        exclude = [k for k in exclude if k not in ("new grad",)]
+    if any(k in t for k in exclude):
         return False
+    if source == "waas" and re.search(r"\b(founding|software|engineer|swe|ml|ai)\b", t):
+        return True
     return any(k in t for k in INCLUDE)
 
 
@@ -50,7 +58,7 @@ def run(verbose: bool = False) -> dict:
             reason = "closed"
         elif r["company"].lower() in EXCLUDE_COMPANIES:
             reason = "excluded company"
-        elif not title_ok(r["title"]):
+        elif not title_ok(r["title"], source=r["source"] if "source" in r.keys() else ""):
             reason = "title mismatch"
         else:
             # one-app-per-company: any other posting already queued or beyond?
