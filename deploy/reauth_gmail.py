@@ -16,6 +16,9 @@ TOKEN = ROOT / "secrets" / "gmail_token.json"
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.send",
+    # Visual application tracker (2026-08-18): the sheet sync writes status
+    # badges + dashboard to a Google Sheet owned by the same account.
+    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 

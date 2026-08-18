@@ -217,6 +217,13 @@ if __name__ == "__main__":
             print(f"digest replies: {acted}")
     except Exception as e:
         print(f"digest reply processing failed: {e}")
+    # visual tracker: one-way refresh of the Google Sheet (David 2026-08-18).
+    # Skips quietly until the token carries the spreadsheets scope.
+    try:
+        import sheet_tracker
+        print(f"sheet: {sheet_tracker.sync()}")
+    except Exception as e:
+        print(f"sheet sync skipped: {str(e)[:120]}")
     # same rules for texts David sends the kith agent (iMessage via the bridge)
     try:
         import digest_replies
