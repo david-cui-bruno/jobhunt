@@ -23,28 +23,72 @@ INCLUDE = [k.lower() for k in PROFILE["preferences"]["roles_include"]]
 EXCLUDE = [k.lower() for k in PROFILE["preferences"]["roles_exclude"]]
 EXCLUDE_COMPANIES = {c.lower() for c in PROFILE["preferences"]["exclude_companies"]}
 
-# Titles that clearly aren't SWE/ML even though they sneak into SWE lists
-HARD_EXCLUDE = [
-    "mechanical", "civil engineer", "electrical engineer", "chemical engineer",
-    "accounting", "tax ", "audit", "hr intern", "marketing", "sales intern",
-    "supply chain", "finance intern", "actuar", "phd", "doctoral", "doctorate",
-    "master's", "master’s", "masters degree", "ms/phd", "mba intern",
-]
+
+def _phrase_re(phrase: str) -> re.Pattern:
+    """Word-boundary matcher for a keyword phrase.
+
+    The old substring check made 'ai' match 'maintenance' and 'ml' match
+    'html' (David 2026-08-19). Words must appear whole, in order, separated
+    by any non-alphanumeric run: 'full stack' matches 'Full-Stack Engineer'.
+    Phrases ending in digits stay prefixes ('fall 20' matches 'Fall 2027').
+    """
+    words = re.findall(r"[a-z0-9']+", phrase.lower())
+    body = r"[^a-z0-9]+".join(re.escape(w) for w in words)
+    tail = r"" if words and words[-1].isdigit() else r"(?![a-z0-9])"
+    return re.compile(r"(?<![a-z0-9])" + body + tail)
+
+
+INCLUDE_RES = [_phrase_re(k) for k in INCLUDE]
+EXCLUDE_RES = [_phrase_re(k) for k in EXCLUDE]
+
+# Titles that clearly aren't in scope even though they sneak into SWE lists.
+# Regexes (not yaml phrases) so stems like 'actuar' can match 'actuarial'.
+# Hardware stays out (David 2026-08-19) but embedded/firmware SOFTWARE is in,
+# so 'electrical/mechanical engineer' are excluded while 'embedded software
+# engineer' and 'firmware engineer' pass.
+HARD_EXCLUDE_RES = [re.compile(p) for p in (
+    r"\bmechanical\b", r"\bcivil engineer", r"\belectrical engineer",
+    r"\bchemical engineer", r"\bhardware engineer", r"\baccounting\b",
+    r"\btax\b", r"\baudit", r"\bhr intern", r"\bmarketing\b", r"\bsales intern",
+    r"\bsupply chain", r"\bfinance intern", r"\bactuar", r"\bphd\b",
+    r"\bdoctoral\b", r"\bdoctorate\b", r"\bmaster'?s degree\b",
+    r"\bmaster['\u2019]s\b", r"\bms/phd\b", r"\bmba intern",
+    # non-software 'engineering intern' variants (2026-08-19 requeue audit:
+    # Bridge/Project/GTM Engineering Intern slipped through the generic
+    # 'engineering intern' include)
+    r"\bgtm\b", r"\bbridge engineer", r"\bproject engineer",
+    r"\bmanufacturing engineer", r"\bindustrial engineer",
+    r"\bprocess engineer", r"\bstructural engineer", r"\bfacilities\b",
+    r"\bquality engineer", r"\btest technician",
+)]
+
+
+def _title_text(title: str) -> str:
+    """Markdown-link titles ('[X](url)') match on X only.
+
+    dreamwork rows store the whole markdown link; the pre-2026-08-19 substring
+    filter matched 'ai' inside the URL's 'utm_campaign', queueing Security/
+    Bridge/GTM junk for weeks. Never match against URL text.
+    """
+    m = re.match(r"\s*\[([^\]]+)\]\(", title or "")
+    return (m.group(1) if m else title or "").lower()
 
 
 def title_ok(title: str, source: str = "") -> bool:
-    t = title.lower()
-    exclude = EXCLUDE + HARD_EXCLUDE
+    t = _title_text(title)
+    if any(r.search(t) for r in HARD_EXCLUDE_RES):
+        return False
+    exclude = EXCLUDE_RES
     if source in ("waas", "abc", "bigco"):
         # Startup sources (David 2026-08-17): full-time roles are wanted too
-        # at YC and Series A/B/C startups. Bigco is pre-filtered to intern/new-grad.
-        # for these sources ("new grad" etc. stay excluded elsewhere).
-        exclude = [k for k in exclude if k not in ("new grad",)]
-    if any(k in t for k in exclude):
+        # at YC and Series A-D startups. Bigco is pre-filtered to intern/new-grad.
+        exclude = [r for r in exclude if r.pattern != _phrase_re("new grad").pattern]
+    if any(r.search(t) for r in exclude):
         return False
-    if source in ("waas", "abc") and re.search(r"\b(founding|software|engineer|swe|ml|ai)\b", t):
+    if source in ("waas", "abc") and re.search(
+            r"\b(founding|software|engineer|swe|ml|ai)\b|product manage|product intern\b", t):
         return True
-    return any(k in t for k in INCLUDE)
+    return any(r.search(t) for r in INCLUDE_RES)
 
 
 def run(verbose: bool = False) -> dict:

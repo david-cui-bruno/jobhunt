@@ -209,6 +209,9 @@ EDU_VARIANTS = {
 # The variant line replaces the base Coursework list wholesale so the model
 # can't drop real courses or invent new ones; ordering = screening relevance.
 COURSE_VARIANTS = {
+    # PM (David 2026-08-19): CS & Econ is already the ideal PM degree; lead
+    # with the econ/data/product-adjacent courses, keep systems credibility.
+    "pm": "Statistics, Machine Learning, Databases, Design \\& Analysis of Algorithms, Distributed Systems, Deep Learning, Computer Networks, Linear Algebra",
     "embedded": "Real-Time \\& Embedded Software, Digital Electronics Systems Design, Design of Computing Systems (Computer Architecture), Operating Systems (Weenix kernel), Electrical Circuits \\& Signals, Computer Networks, Multiprocessor Synchronization, Linear Systems \\& Signals",
     "hardware": "Digital Electronics Systems Design, Design of Computing Systems (Computer Architecture), Real-Time \\& Embedded Software, Electrical Circuits \\& Signals, Electricity \\& Magnetism, Operating Systems (Weenix kernel), Linear Systems \\& Signals, Communication Systems",
     "backend": "Distributed Systems, Computer Networks, Operating Systems (Weenix kernel), Databases, Multiprocessor Synchronization, Design \\& Analysis of Algorithms, Computer Systems Security, Software Security",
@@ -242,6 +245,7 @@ def infer_role_type(title: str, jd: str) -> str:
     title_text = title.lower()
     jd_text = jd.lower()
     title_patterns = [
+        ("pm", r"\bproduct manage(?:r|ment)|associate product manager|\bapm\b|product intern\b"),
         ("security", r"\b(?:cyber ?security|information security|application security|"
                      r"security (?:engineer|researcher|analyst)|penetration tester)\b"),
         ("embedded", r"\b(?:embedded|firmware|microcontroller|rtos|fpga|hardware)"),
@@ -288,17 +292,24 @@ def build_grounded_resume(title: str, jd: str, include_skill_coverage: bool = Tr
     return sanitize(tex)
 
 
-# Graduation is an education fact, not a per-role marketing choice. David
-# Confirmed June 2028 on 2026-08-13. Day-level application fields use the
-# separately approved 06/01/2028 estimate; resumes remain month/year only.
-GRAD_DATE = "June 2028"
+# Graduation is track-based (David 2026-08-19): internship applications say
+# May 2028; full-time applications say May 2027. He confirmed he would really
+# graduate a year early for a full-time job, so the 2027 date is an honest
+# plan, not marketing. Classification lives in track.py (shared with qa.py so
+# the resume PDF and the form answers always agree). Day-level application
+# fields use the approved 05/15 estimates; resumes remain month/year only.
+sys.path.insert(0, str(ROOT))
+import track as _track  # noqa: E402
+
+
+def grad_date_for(title: str) -> str:
+    return _track.grad_month_year(_track.infer_track(title))
 
 
 def apply_grad_date(tex: str, title: str) -> str:
-    del title  # kept in the public API because callers still pass the role title
     return re.sub(
         r"Aug 2024 -- (?:January|February|March|April|May|June|July|August|September|October|November|December) 202[0-9]",
-        f"Aug 2024 -- {GRAD_DATE}",
+        f"Aug 2024 -- {grad_date_for(title)}",
         tex,
         count=1,
     )
@@ -627,7 +638,7 @@ def tailor(posting_id: str, company: str, title: str, jd: str) -> Path | None:
             "fill_ratio": round(measured_fill, 4) if measured_fill is not None else None,
             "jd_skill_coverage": "passed" if covered else "failed",
             "missing_claimable_skills": missing_skills,
-            "expected_grad_date": GRAD_DATE,
+            "expected_grad_date": grad_date_for(title),
         }, indent=2) + "\n")
         return review_required
 

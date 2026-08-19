@@ -14,6 +14,9 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+import track as _track  # noqa: E402  (shared intern/fulltime classifier)
+
 PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
 
 
@@ -34,6 +37,37 @@ def _load_application_answers() -> dict:
 
 
 APPLICATION_ANSWERS = _load_application_answers()
+
+
+def _apply_track_overlay() -> str:
+    """Resolve the track-dependent graduation facts for THIS application.
+
+    David 2026-08-19: intern applications graduate May 2028, full-time
+    applications May 2027 (his real early-graduation plan, not marketing).
+    Each submit worker handles exactly one posting and exports the job title
+    (JOBHUNT_JOB_TITLE) before adapters import qa, so resolving at load time
+    is per-application. PROFILE and APPLICATION_ANSWERS are rewritten in
+    place so every consumer (prompt dump, deterministic renderers, answer
+    verifiers) sees one consistent date.
+    """
+    tr = _track.current_track()
+    month, year = _track.GRAD_MONTH, _track.grad_year(tr)
+    exact = _track.grad_exact_date(tr)
+    edu = PROFILE.setdefault("education", {})
+    edu["grad_month"], edu["grad_year"] = month, year
+    edu.pop("grad_year_fulltime", None)
+    edu["grad_date_rule"] = (
+        f"Expected graduation for THIS application ({tr} track) is {month} {year}. "
+        f"When a form requires an exact day, use the approved estimate {exact}.")
+    aedu = APPLICATION_ANSWERS.get("education")
+    if isinstance(aedu, dict):
+        aedu["expected_graduation_month"] = month
+        aedu["expected_graduation_year"] = year
+        aedu["exact_graduation_date"] = exact
+    return tr
+
+
+APPLICATION_TRACK = _apply_track_overlay()
 
 
 def _company_key(value: object) -> str:
@@ -297,7 +331,7 @@ APPROVED APPLICATION ANSWERS AND POLICIES (source of truth; omit a personal answ
 Additional standing instructions:
 - Compensation expectation questions: follow the approved compensation policy. Prefer an employer-published range or no-preference option. Never invent a numeric amount.
 - Outstanding offers/deadlines: report only the approved current offers and deadlines. Never default to No.
-- Graduation: June 2028 for every role. When a form requires an exact day, use the user-approved estimate 06/01/2028. Never change the date based on role type.
+- Graduation: {graduation_rule} Never change the date beyond that rule.
 - High school/secondary school: use only the approved answer-bank value. Omit the answer when it is absent; never infer a school or region.
 - Willing to relocate: Yes, without employer relocation assistance. Open to any listed office location; prefer SF then NYC if ranked. If preferred cities are not offered, choose any offered US city over non-US.
 - If a select's options are provided, your answer MUST be copied verbatim from the options list (character for character). Pick the option most consistent with the profile.
@@ -2187,6 +2221,7 @@ def _model_answers(controls: list[dict], company_context: str = "") -> list[dict
             application_answers=yaml.safe_dump(
                 relevant_application_answers(controls, company_context=company_context)
             ),
+            graduation_rule=(PROFILE.get("education") or {}).get("grad_date_rule", ""),
             stories=_grounding(), today=today)}],
     }).encode()
     req = urllib.request.Request(

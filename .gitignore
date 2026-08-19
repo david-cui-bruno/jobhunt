@@ -18,3 +18,4 @@ resume/*.out
 backend.hcl
 crash.log
 crash.*.log
+profile/application_answers.yaml

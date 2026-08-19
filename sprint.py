@@ -132,7 +132,8 @@ def run() -> list[dict]:
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
         try:
             res = submit_mod._isolated_adapter({
-                "url": r["url"], "resume_pdf": str(pdf), "slug": slug, "dry_run": False,
+                "url": r["url"], "resume_pdf": str(pdf), "slug": slug,
+                "title": r["title"], "dry_run": False,
             })
         except Exception as exc:
             submit_mod._mark_outcome(

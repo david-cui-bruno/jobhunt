@@ -20,6 +20,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
 from timeouts import configure_page
+import track as _track  # track-based graduation (David 2026-08-19)
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "out" / "tracker.db"
@@ -146,7 +147,7 @@ def scrape(max_scroll: int = 6) -> int:
 
 
 NOTE_PROMPT = """Write a 90-120 word Work at a Startup application note to the founders for this job.
-Candidate: David Cui — Brown CS+Econ, expected June 2028 (4.0), ex-founding CTO of Framewise Health (YC-backed,
+Candidate: David Cui — Brown CS+Econ, expected {grad_date} (4.0), ex-founding CTO of Framewise Health (YC-backed,
 patient video pipeline: Temporal/Python/Supabase/Claude), SWE intern at Freya (YC S25, real-time
 LLM voice agents, p99 latency work), fraud-detection ML at Sotatek. USACO/AIME. Ships fast.
 
@@ -185,7 +186,8 @@ def apply_waas(url: str, slug: str, dry_run: bool = True) -> dict:
         jd = page.inner_text("body")[:5000]
         # draft note
         body = json.dumps({"model": MODEL, "max_tokens": 500,
-                           "messages": [{"role": "user", "content": NOTE_PROMPT.format(jd=jd)}]}).encode()
+                           "messages": [{"role": "user", "content": NOTE_PROMPT.format(
+                               jd=jd, grad_date=_track.grad_month_year(_track.current_track()))}]}).encode()
         req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=body,
                                      headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01",
                                               "content-type": "application/json"})

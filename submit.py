@@ -454,6 +454,7 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
                 "url": r["url"],
                 "resume_pdf": str(pdf),
                 "slug": slug,
+                "title": r["title"],
                 "dry_run": dry_run,
             })
         except Exception as exc:

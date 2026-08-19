@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -54,6 +55,10 @@ def main() -> int:
     slug = str(payload["slug"])
     pdf = Path(str(payload["resume_pdf"]))
     dry_run = bool(payload.get("dry_run", False))
+    # Track-based graduation (David 2026-08-19): expose the job title before
+    # any adapter (and therefore qa.py) is imported, so the per-process
+    # overlay in qa.py resolves intern vs full-time for THIS posting.
+    os.environ["JOBHUNT_JOB_TITLE"] = str(payload.get("title") or "")
     fn, waas, detected, target_url = _adapter(ats, url)
     if fn is None:
         print(json.dumps({"outcome": "manual", "ok": False, "submitted": False,

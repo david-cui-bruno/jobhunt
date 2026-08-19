@@ -19,9 +19,10 @@ education:
   major: "Computer Science & Economics"
   gpa: "4.0"
   gpa_ok_to_share: true
-  grad_month: "June"
+  grad_month: "May"
   grad_year: "2028"
-  grad_date_rule: "Expected graduation is June 2028 for every application. Graduation is an education fact, not role-dependent. When a form requires an exact day, use the approved estimate 06/01/2028."
+  grad_year_fulltime: "2027"
+  grad_date_rule: "Track-based (David 2026-08-19): internship applications say May 2028; full-time applications say May 2027 (he would really graduate a year early for a full-time job; background checks verify this and he confirmed it is the actual plan). When a form requires an exact day: 05/15/2028 intern, 05/15/2027 full-time."
 work_authorization:
   us_citizen: true
   authorized_us: true
@@ -33,11 +34,30 @@ eeo:
   veteran: "I am not a protected veteran"
   disability: "No, I do not have a disability"
 preferences:
-  roles_include: ["software engineer", "swe", "ml", "machine learning", "ai", "infrastructure", "full stack", "backend", "frontend", "data engineer", "platform", "research engineer"]
+  # Expanded 2026-08-19 (David): everything engineer-adjacent incl. PM; no hardware.
+  # filter.py matches these with word boundaries on a normalized title.
+  roles_include: ["software engineer", "software developer", "swe", "sde",
+                  "software development engineer", "ml", "machine learning", "ai",
+                  "artificial intelligence", "infrastructure", "full stack", "backend",
+                  "frontend", "web developer", "data engineer", "platform",
+                  "research engineer", "member of technical staff", "product engineer",
+                  "software engineering", "software development",
+                  "founding engineer", "forward deployed", "solutions engineer",
+                  "devops", "site reliability", "sre", "production engineer",
+                  "security engineer", "systems engineer", "compiler",
+                  "data scientist", "applied scientist", "ai engineer",
+                  "ios", "android", "mobile engineer", "mobile developer",
+                  "quant developer", "quantitative developer", "quantitative research",
+                  "quant research", "product manager", "product management",
+                  "associate product manager", "apm", "product intern",
+                  "embedded", "firmware", "robotics software", "autonomy",
+                  "perception", "simulation engineer", "software intern",
+                  "engineering intern", "developer intern", "computer scientist"]
   # Winter + Summer only (David 2026-08-17): no fall/spring terms, no co-ops.
+  # product marketing is not PM (2026-08-19).
   roles_exclude: ["new grad", "unpaid", "hardware technician", "it support",
                   "fall 20", "fall 26", "fall 27", "spring 20",
-                  "co-op", "co op", "coop"]
+                  "co-op", "co op", "coop", "product marketing"]
   season: "Summer 2027"
   location_rank: ["SF Bay Area", "NYC", "Remote", "anywhere"]
   remote_ok: true
@@ -46,7 +66,7 @@ preferences:
   one_application_per_company: true   # one app per company, ever; intern beats full-time (see filter.py)
 resume:
   base: "resume/resume.tex"
-  note: "Grad date is June 2028 on every resume. Never change it to make a role appear eligible."
+  note: "Grad date is track-based: May 2028 on intern-application resumes, May 2027 on full-time ones (tailor/tailor.py apply_grad_date). Never change it beyond that rule to make a role appear eligible."
 competitions:
   usaco: true          # participated in USACO
   aime: true           # qualified for AIME

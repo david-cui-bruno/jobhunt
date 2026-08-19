@@ -282,8 +282,11 @@ class AutonomousApprovalPolicyTests(unittest.TestCase):
             draft.assert_not_called()
             send_company.assert_not_called()
 
-    def test_email_draft_prompt_uses_confirmed_graduation_date(self) -> None:
-        self.assertIn("expected June 2028", email_apply.DRAFT_PROMPT)
+    def test_email_draft_prompt_uses_track_graduation_placeholder(self) -> None:
+        # David 2026-08-19: grad date is track-based (intern May 2028 /
+        # full-time May 2027), injected per-posting via {grad_date}.
+        self.assertIn("expected {grad_date}", email_apply.DRAFT_PROMPT)
+        self.assertNotIn("June 2028", email_apply.DRAFT_PROMPT)
         self.assertNotIn("CS+Econ '27", email_apply.DRAFT_PROMPT)
 
     def test_drip_has_no_approval_pollers_or_approval_sender(self) -> None:

@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT / "notify")]
 import mailer  # noqa: E402
+import track as _track  # noqa: E402  (track-based graduation, David 2026-08-19)
 
 DB = ROOT / "out" / "tracker.db"
 MODEL = "claude-sonnet-5"
@@ -68,7 +69,7 @@ def _record_sent(conn: sqlite3.Connection, posting_id: str, to_addr: str,
         (posting_id, str(pdf), "email", int(time.time()), f"emailed {to_addr}", ""))
 
 DRAFT_PROMPT = """Draft a short application email for this posting. Candidate: David Cui,
-Brown CS+Econ, expected June 2028 (GPA 4.0), ex-YC founding CTO (Framewise Health), SWE intern at Freya (YC S25,
+Brown CS+Econ, expected {grad_date} (GPA 4.0), ex-YC founding CTO (Framewise Health), SWE intern at Freya (YC S25,
 real-time LLM voice agents) and Sotatek (fraud-detection ML). USACO/AIME background.
 
 POSTING (from HN Who's Hiring):
@@ -159,7 +160,10 @@ def compose_ready_email_postings(limit: int = 3) -> list[str]:
         text = fetch_hn_text(r["url"])
         if not text:
             continue
-        d = _claude(DRAFT_PROMPT.format(text=text[:3000]))
+        d = _claude(DRAFT_PROMPT.format(
+            text=text[:3000],
+            grad_date=_track.grad_month_year(_track.infer_track(r["title"])),
+        ))
         if d and d.get("needs_manual"):
             # posting requires materials beyond a resume (video demo etc.):
             # never fake it; park for David with the reason (Tasklet lesson 2026-08-09)

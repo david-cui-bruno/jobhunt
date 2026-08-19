@@ -14,15 +14,21 @@ import tailor  # noqa: E402
 
 
 class ResumeQualityTests(unittest.TestCase):
-    def test_internship_resume_uses_truthful_grad_date(self) -> None:
+    def test_internship_resume_uses_intern_track_grad_date(self) -> None:
         result = tailor.apply_grad_date(tailor.BASE_TEX, "Software Engineer Intern")
-        self.assertIn("Aug 2024 -- June 2028", result)
-        self.assertNotIn("Aug 2024 -- May 2027", result)
+        self.assertIn("Aug 2024 -- May 2028", result)
+        self.assertNotIn("May 2027", result)
 
-    def test_full_time_resume_does_not_change_education_fact(self) -> None:
+    def test_full_time_resume_uses_early_graduation_track(self) -> None:
+        # David 2026-08-19: full-time applications carry the real early-
+        # graduation plan (May 2027), intern ones May 2028.
         result = tailor.apply_grad_date(tailor.BASE_TEX, "Software Engineer")
-        self.assertIn("Aug 2024 -- June 2028", result)
-        self.assertNotIn("Aug 2024 -- May 2027", result)
+        self.assertIn("Aug 2024 -- May 2027", result)
+        self.assertNotIn("May 2028", result)
+
+    def test_coop_titles_are_intern_track(self) -> None:
+        result = tailor.apply_grad_date(tailor.BASE_TEX, "Software Co-op")
+        self.assertIn("Aug 2024 -- May 2028", result)
 
     def test_missing_fill_measurement_is_not_reported_as_full(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(

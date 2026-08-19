@@ -40,8 +40,11 @@ class WorkAtAStartupTests(unittest.TestCase):
             ),
         )
 
-    def test_note_prompt_uses_confirmed_graduation_fact(self):
-        self.assertIn("expected June 2028", waas.NOTE_PROMPT)
+    def test_note_prompt_uses_track_graduation_placeholder(self):
+        # David 2026-08-19: grad date is track-based (intern May 2028 /
+        # full-time May 2027), injected per-application via {grad_date}.
+        self.assertIn("expected {grad_date}", waas.NOTE_PROMPT)
+        self.assertNotIn("June 2028", waas.NOTE_PROMPT)
         self.assertNotIn("Brown CS+Econ '27", waas.NOTE_PROMPT)
 
     def test_final_send_selector_cannot_match_background_apply(self):

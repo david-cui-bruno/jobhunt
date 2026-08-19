@@ -28,8 +28,15 @@ import yaml
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 import qa
+from qa import _track  # track-based graduation (David 2026-08-19)
 from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
 from timeouts import configure_page
+
+
+def _wd_grad_to() -> str:
+    """Education 'To' date in Workday MM/YYYY form for the current track."""
+    return f"05/{_track.grad_year(_track.current_track())}"
+
 
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
@@ -132,7 +139,8 @@ def _claude_pick(question: str, answer_intent: str, options: list[str]) -> str |
             f"Candidate profile intent: {answer_intent}\n"
             f"Application question: {question}\n"
             f"Options: {json.dumps(options)}\n"
-            "Candidate facts: Brown University BS, expected graduation June 2028 for every role; US citizen. "
+            f"Candidate facts: Brown University BS, expected graduation "
+            f"{_track.grad_month_year(_track.current_track())} for this application; US citizen. "
             "Do not infer birth date, prior employment, referrals, or other facts not present in the answer intent.\n"
             "Reply with EXACTLY one option, verbatim, nothing else."}],
     }).encode()
@@ -634,6 +642,7 @@ def _workday_model_answers(fields: list[dict], company: str, title: str) -> list
         application_answers=yaml.safe_dump(
             qa.relevant_application_answers(fields, company_context=company)
         ),
+        graduation_rule=(qa.PROFILE.get("education") or {}).get("grad_date_rule", ""),
         controls=json.dumps(fields)[:20000],
         stories=qa._grounding(),
         today=today,
@@ -643,7 +652,7 @@ def _workday_model_answers(fields: list[dict], company: str, title: str) -> list
         "For 'How Did You Hear About Us': prefer company website/careers site options. "
         "For source dropdowns with many options, answer with the best guess text; matching is fuzzy. "
         "Date fields (kind='date') expect MM/YYYY. Work experience dates come from the resume in the profile's work_history_summary. "
-        "Education From/To: 09/2024 to 06/2028 for every role. For a required exact graduation day, use the approved estimate 06/01/2028. Degree dropdown: 'Bachelor of Science (B.S.)' or closest BS option. "
+        f"Education From/To: 09/2024 to {_wd_grad_to()} for this application. For a required exact graduation day, use the approved estimate {_track.grad_exact_date(_track.current_track())}. Degree dropdown: 'Bachelor of Science (B.S.)' or closest BS option. "
         "If a 'To' date field pairs with an 'I currently work here' checkbox, give the real end date instead of checking it."
     )
     body = json.dumps({

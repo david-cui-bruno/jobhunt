@@ -35,12 +35,12 @@ class SlugGuessTests(unittest.TestCase):
 
 
 class RoundFilterTests(unittest.TestCase):
-    def test_abc_accepted(self):
-        for r in ("A", "b", "Series C", "series a"):
+    def test_a_through_d_accepted(self):
+        for r in ("A", "b", "Series C", "series a", "D", "Series D"):
             self.assertIsNotNone(abc._normalize_round(r), r)
 
     def test_seed_and_late_rejected(self):
-        for r in ("Seed", "Pre-Seed", "D", "Series D", "Series E", "IPO",
+        for r in ("Seed", "Pre-Seed", "E", "Series E", "IPO",
                   "growth", "", None, "Series AA"):
             self.assertIsNone(abc._normalize_round(r), r)
 
@@ -49,13 +49,15 @@ class RoundFilterTests(unittest.TestCase):
         abc._claude, orig = (lambda *a, **k: (
             '[{"i":0,"company":"GoodCo","round":"B","sector":"ai","hq":"SF"},'
             '{"i":0,"company":"SeedCo","round":"Seed","sector":"ai","hq":"SF"},'
-            '{"i":0,"company":"LateCo","round":"D","sector":"ai","hq":"SF"}]')), abc._claude
+            '{"i":0,"company":"DCo","round":"D","sector":"ai","hq":"SF"},'
+            '{"i":0,"company":"LateCo","round":"E","sector":"ai","hq":"SF"}]')), abc._claude
         try:
             rows = abc.extract_companies(items)
         finally:
             abc._claude = orig
-        self.assertEqual([r["company"] for r in rows], ["GoodCo"])
+        self.assertEqual([r["company"] for r in rows], ["GoodCo", "DCo"])
         self.assertEqual(rows[0]["round"], "B")
+        self.assertEqual(rows[1]["round"], "D")
         self.assertEqual(rows[0]["announced_at"], "2026-08-01")
 
 

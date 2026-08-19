@@ -1,25 +1,33 @@
-"""Series A/B/C startup scout: discover funded startups, resolve their public
+"""Series A-D startup scout: discover funded startups, resolve their public
 ATS job feeds, and poll them into the tracker.
 
-Why: David wants SWE/ML roles (winter/summer intern AND full-time) at Series
-A/B/C startups — the sweet spot poorly covered by the GitHub listing repos
-(intern + big-co) and YC lists (seed). Those postings live on each company's
-own careers page, but nearly all A-C startups use Greenhouse / Lever / Ashby,
-whose job boards are PUBLIC JSON APIs (no auth, no browser). So:
+Why: David wants engineer-adjacent roles (winter/summer intern AND full-time)
+at Series A-D startups — the sweet spot poorly covered by the GitHub listing
+repos (intern + big-co) and YC lists (seed). Those postings live on each
+company's own careers page, but nearly all A-D startups use Greenhouse /
+Lever / Ashby / Workable / SmartRecruiters, whose job boards are PUBLIC JSON
+APIs (no auth, no browser). So:
 
   1. discover — harvest funding announcements (TechCrunch funding + venture
-     RSS, Crunchbase News RSS) plus VC portfolio pages with parseable round
-     data (a16z embeds a full portfolio JSON). claude-haiku extracts
-     {company, round, date, sector, hq} from news items; seed/D+/public are
-     discarded. Results land in the abc_companies table.
-  2. resolve — guess ATS board slugs from the company name and probe the
-     public JSON endpoints. Fall back to scanning the company homepage for
-     greenhouse/lever/ashby careers links (plain urllib). 3 strikes -> dead.
-  3. poll — fetch resolved boards on the drip cadence and upsert SWE/ML
-     intern/full-time US-or-remote postings with source='abc'
-     (posting_id 'abc:<ats>:<job id>'). The existing filter -> tailor ->
-     submit pipeline takes it from there; the Greenhouse/Lever/Ashby
-     adapters already exist in apply/.
+     RSS, Crunchbase News RSS, VentureBeat) plus VC portfolio pages with
+     parseable round data (a16z embeds a full portfolio JSON). claude-haiku
+     extracts {company, round, date, sector, hq} from news items; seed/E+/
+     public are discarded. Results land in the abc_companies table.
+  2. resolve — CAREERS-PAGE FIRST (David 2026-08-19: "go onto their websites
+     and look at their career pages instead of guessing the slug"): find the
+     official domain (news item website, else Clearbit autocomplete verified
+     by name), fetch the homepage + its careers/jobs links, and pull the real
+     ATS board out of the page. Slug guessing survives only as a cheap last
+     resort. 3 strikes -> dead (with the careers URL kept in notes so a human
+     or a future generic-page parser can pick it up).
+  3. poll — fetch resolved boards on the drip cadence and upsert role-matched
+     US-or-remote postings with source='abc' (posting_id 'abc:<ats>:<job id>').
+     The existing filter -> tailor -> submit pipeline takes it from there; all
+     five ATS adapters already exist in apply/.
+
+Backfill: watcher/abc_backfill.py seeds this table from the TechCrunch
+archive (last ~3 years of Series A-D announcements) so the scout does not
+start from only the current news window.
 
 Ingestion only: this module never submits anything. Fetches are sequential
 with a per-host gap (polite) and a real UA string.
@@ -50,6 +58,7 @@ RSS_FEEDS = [
     ("techcrunch-startups", "https://techcrunch.com/category/startups/feed/"),
     ("crunchbase-news", "https://news.crunchbase.com/feed/"),
     ("techcrunch-ai", "https://techcrunch.com/category/artificial-intelligence/feed/"),
+    ("venturebeat", "https://venturebeat.com/feed"),  # no trailing slash: /feed/ 308s
 ]
 A16Z_PORTFOLIO = "https://a16z.com/portfolio/"
 
@@ -57,11 +66,17 @@ ATS_ENDPOINTS = {
     "greenhouse": "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",
     "lever": "https://api.lever.co/v0/postings/{slug}?mode=json",
     "ashby": "https://api.ashbyhq.com/posting-api/job-board/{slug}",
+    # Workable widget API: {'name', 'description', 'jobs': [...]}
+    "workable": "https://apply.workable.com/api/v1/widget/accounts/{slug}",
+    # SmartRecruiters public postings API: {'totalFound', 'content': [...]}
+    "smartrecruiters": "https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100",
 }
 CAREERS_URLS = {
     "greenhouse": "https://boards.greenhouse.io/{slug}",
     "lever": "https://jobs.lever.co/{slug}",
     "ashby": "https://jobs.ashbyhq.com/{slug}",
+    "workable": "https://apply.workable.com/{slug}/",
+    "smartrecruiters": "https://careers.smartrecruiters.com/{slug}",
 }
 RESOLVE_MAX_FAILS = 3   # discovery -> dead after this many resolution attempts
 POLL_MAX_FAILS = 5      # resolved -> dead after this many consecutive poll errors
@@ -110,10 +125,14 @@ def _compact(name: str) -> str:
 
 
 def _normalize_round(value) -> str | None:
-    """'Series B' / 'b' -> 'B'; seed / D+ / IPO / junk -> None."""
+    """'Series B' / 'b' -> 'B'; seed / E+ / IPO / junk -> None.
+
+    Series D included since 2026-08-19 (David: "i care about the series
+    a/b/c/d thing a lot").
+    """
     s = str(value or "").strip().upper()
     s = re.sub(r"^SERIES\s+", "", s)
-    return s if s in {"A", "B", "C"} else None
+    return s if s in {"A", "B", "C", "D"} else None
 
 
 _SLUG_SUFFIXES = {"inc", "io", "ai", "labs", "lab", "hq", "technologies",
@@ -176,12 +195,13 @@ def fetch_funding_news() -> list[dict]:
 
 _EXTRACT_PROMPT = (
     "You extract venture funding rounds from news items. For each item below, "
-    "identify every STARTUP that raised a Series A, Series B, or Series C "
-    "equity round (an item may contain several, e.g. weekly digests, or none). "
-    "Skip: seed/pre-seed rounds, Series D or later, debt, IPOs, acquisitions, "
+    "identify every STARTUP that raised a Series A, Series B, Series C, or "
+    "Series D equity round (an item may contain several, e.g. weekly digests, "
+    "or none). "
+    "Skip: seed/pre-seed rounds, Series E or later, debt, IPOs, acquisitions, "
     "and VC firms raising funds (a fund is not a startup).\n"
     "Return ONLY a JSON array; one object per funded startup:\n"
-    '{"i": <item index>, "company": str, "round": "A"|"B"|"C", '
+    '{"i": <item index>, "company": str, "round": "A"|"B"|"C"|"D", '
     '"date": "YYYY-MM-DD" or null, "sector": str, "hq": str or "", '
     '"website": str or null}\n'
     "Items:\n{items}"
@@ -252,7 +272,7 @@ def fetch_a16z() -> list[dict]:
             continue
         ann = d.get("announcement") or {}
         excerpt = str(ann.get("excerpt") or "") if isinstance(ann, dict) else ""
-        m = re.search(r"Series ([ABC])\b", excerpt)
+        m = re.search(r"Series ([ABCD])\b", excerpt)
         if not m:
             continue
         out.append({"company": str(d.get("title") or "").strip(),
@@ -310,7 +330,10 @@ def _probe(ats: str, slug: str) -> list | None:
         d = json.loads(_get(ATS_ENDPOINTS[ats].format(slug=slug), timeout=12))
     except Exception:
         return None
-    jobs = d.get("jobs") if isinstance(d, dict) else d
+    if ats == "smartrecruiters":
+        jobs = d.get("content") if isinstance(d, dict) else None
+    else:
+        jobs = d.get("jobs") if isinstance(d, dict) else d
     return jobs if isinstance(jobs, list) else None
 
 
@@ -323,45 +346,120 @@ def _gh_board_name(slug: str) -> str:
 
 
 _ATS_LINK_RE = re.compile(
-    r"(?:boards|job-boards)\.greenhouse\.io/([A-Za-z0-9_-]{2,})"
+    r"(?:boards|job-boards)\.greenhouse\.io/(?:embed/job_board\?for=)?([A-Za-z0-9_-]{2,})"
     r"|greenhouse\.io/embed/job_board\?for=([A-Za-z0-9_-]{2,})"
     r"|jobs\.lever\.co/([A-Za-z0-9_-]{2,})"
-    r"|jobs\.ashbyhq\.com/([A-Za-z0-9_-]{2,})")
+    r"|jobs\.ashbyhq\.com/([A-Za-z0-9_%-]{2,})"
+    r"|apply\.workable\.com/(?:api/v\d/accounts/)?([A-Za-z0-9_-]{2,})"
+    r"|(?:careers|jobs)\.smartrecruiters\.com/([A-Za-z0-9_-]{2,})")
+
+_CAREERS_LINK_RE = re.compile(
+    r'href=["\']([^"\']*(?:career|jobs|join[- ]?us|join-the-team|work[- ]with[- ]us|openings|hiring)[^"\']*)["\']',
+    re.I)
+
+_BAD_SLUGS = {"embed", "job", "jobs", "board", "boards", "careers", "api", "www", "j"}
 
 
-def _homepage_ats(website: str) -> tuple | None:
-    """Scan the company homepage (and one careers link) for an ATS board URL."""
+def _match_to_hit(m: re.Match) -> tuple | None:
+    gh1, gh2, lever, ashby, workable, smartrec = m.groups()
+    for ats, slug in (("greenhouse", gh1 or gh2), ("lever", lever),
+                      ("ashby", ashby), ("workable", workable),
+                      ("smartrecruiters", smartrec)):
+        if slug and slug.lower() not in _BAD_SLUGS:
+            return ats, urllib.parse.unquote(slug)
+    return None
+
+
+def find_official_domain(name: str) -> str:
+    """Company name -> official website domain via Clearbit autocomplete.
+
+    Free, no key, fast. The name must roughly match to avoid grabbing a
+    lookalike (compact containment either way, e.g. 'Harvey' ~ 'harvey.ai').
+    """
+    q = urllib.parse.quote(str(name or "").strip())
+    if not q:
+        return ""
+    try:
+        rows = json.loads(_get(
+            f"https://autocomplete.clearbit.com/v1/companies/suggest?query={q}", timeout=10))
+    except Exception:
+        return ""
+    want = _compact(name)
+    for r in rows if isinstance(rows, list) else []:
+        got = _compact(str(r.get("name") or ""))
+        domain = str(r.get("domain") or "")
+        dom_core = _compact(domain.split(".")[0])
+        # Exact matches only: containment let 'Cursor' resolve to
+        # cursorinfo.co.il. A missed domain just falls through to slug
+        # guessing; a wrong domain resolves someone else's job board.
+        if domain and (got == want or dom_core == want):
+            return domain
+    return ""
+
+
+def careers_page_ats(website: str, max_pages: int = 6) -> tuple | None:
+    """Crawl the company site (homepage -> careers/jobs links, 2 hops) for an
+    ATS board link. This is the PRIMARY resolution path (David 2026-08-19):
+    read the real careers page instead of guessing board slugs.
+
+    Careers pages often live on subdomains (careers.x.com) or paths (/careers,
+    /about/jobs), and the ATS link usually sits on that second page; sometimes
+    a third ('View openings'). Bounded breadth-first walk, same-site only,
+    max_pages fetches total.
+    """
+    if not website:
+        return None
     if not website.startswith("http"):
         website = "https://" + website.lstrip("/")
-    pages = [website]
-    for depth, url in enumerate(pages):
+    root_host = urllib.parse.urlparse(website).netloc.lower().removeprefix("www.")
+    seen: set[str] = set()
+    queue: list[tuple[str, int]] = [(website, 0)]
+    while queue and len(seen) < max_pages:
+        url, depth = queue.pop(0)
+        norm = url.rstrip("/")
+        if norm in seen:
+            continue
+        seen.add(norm)
         try:
             html = _get(url, timeout=15)
         except Exception:
             continue
         m = _ATS_LINK_RE.search(html)
         if m:
-            gh1, gh2, lever, ashby = m.groups()
-            if gh1 or gh2:
-                return "greenhouse", (gh1 or gh2)
-            if lever:
-                return "lever", lever
-            return "ashby", ashby
-        if depth == 0:
-            c = re.search(r'href="([^"]*(?:careers|jobs)[^"]*)"', html, re.I)
-            if c and not c.group(1).startswith("mailto"):
-                pages.append(urllib.parse.urljoin(url, c.group(1)))
+            hit = _match_to_hit(m)
+            if hit:
+                return hit
+        if depth >= 2:
+            continue
+        for link in _CAREERS_LINK_RE.findall(html)[:4]:
+            if link.startswith(("mailto:", "tel:", "#", "javascript:")):
+                continue
+            nxt = urllib.parse.urljoin(url, link)
+            host = urllib.parse.urlparse(nxt).netloc.lower().removeprefix("www.")
+            # same site or its careers.* subdomain only
+            if host == root_host or host.endswith("." + root_host):
+                queue.append((nxt, depth + 1))
     return None
 
 
 def resolve_company(name: str, website: str = "") -> tuple | None:
-    """Find (ats, board_id, note) for a company via slug guessing, then the
-    homepage fallback. Greenhouse hits are verified against the board's own
-    company name to avoid slug collisions (e.g. 'linear')."""
+    """Find (ats, board_id, note) for a company.
+
+    Order (David 2026-08-19): real careers page first — known website, else
+    Clearbit-resolved official domain — then slug guessing as the cheap last
+    resort. Greenhouse hits are verified against the board's own company name
+    to avoid slug collisions (e.g. 'linear')."""
+    site = website or find_official_domain(name)
+    if site:
+        hit = careers_page_ats(site)
+        if hit:
+            ats, slug = hit
+            if _probe(ats, slug) is not None:
+                return ats, slug, f"resolved via careers page ({site})"
     compact = _compact(name)
     for slug in slug_guesses(name):
         exact = _compact(slug) == compact
-        for ats in ("greenhouse", "ashby", "lever"):
+        for ats in ("greenhouse", "ashby", "lever", "workable", "smartrecruiters"):
             if not exact and len(slug) < 5:
                 continue  # short truncated guesses collide too easily
             jobs = _probe(ats, slug)
@@ -372,12 +470,6 @@ def resolve_company(name: str, website: str = "") -> tuple | None:
                 if board and not (board in compact or compact in board):
                     continue  # someone else's board
             return ats, slug, f"resolved via slug guess '{slug}'"
-    if website:
-        hit = _homepage_ats(website)
-        if hit:
-            ats, slug = hit
-            if _probe(ats, slug) is not None:
-                return ats, slug, f"resolved via homepage careers link ({website})"
     return None
 
 
@@ -399,8 +491,9 @@ def resolve_pending(conn: sqlite3.Connection, limit: int = 40) -> dict:
         else:
             fails += 1
             status = "dead" if fails >= RESOLVE_MAX_FAILS else "discovered"
-            note = (f"ats resolution failed {fails}x (greenhouse/ashby/lever probes"
-                    f"{' + homepage' if website else ''})")
+            note = (f"ats resolution failed {fails}x (careers page"
+                    f"{' via ' + website if website else ' via clearbit domain'}"
+                    f" + 5-ats slug probes)")
             conn.execute(
                 "UPDATE abc_companies SET fail_count=?, status=?, notes=?, last_checked=? "
                 "WHERE key=?", (fails, status, note, now, key))
@@ -411,23 +504,37 @@ def resolve_pending(conn: sqlite3.Connection, limit: int = 40) -> dict:
 
 
 # ---------------------------------------------------------------- polling
+# Wide include (David 2026-08-19): everything engineer-adjacent plus PM and
+# quant; no hardware. filter.py title_ok does the authoritative gating later,
+# so this pre-gate only needs to keep junk volume down.
 TITLE_OK_RE = re.compile(
-    r"software|engineer|\bswe\b|\bml\b|machine learning|\bai\b|developer"
+    r"software|engineer|\bswe\b|\bsde\b|\bml\b|machine learning|\bai\b|developer"
     r"|full[ -]?stack|back[ -]?end|front[ -]?end|infrastructure|platform"
-    r"|data engineer|research|founding|intern", re.I)
+    r"|data engineer|data scientist|applied scientist|research|founding|intern"
+    r"|member of technical staff|\bmts\b|devops|site reliability|\bsre\b"
+    r"|security|systems|compiler|\bios\b|android|mobile|embedded|firmware"
+    r"|robotics|autonomy|perception|simulation|quant|product manager"
+    r"|product management|\bapm\b|forward deployed|solutions engineer"
+    r"|product intern|computer scientist", re.I)
 TITLE_SKIP_RE = re.compile(
-    r"sales|marketing|solutions engineer|field engineer|support|success"
+    r"sales|marketing|\bfield engineer\b|support|success"
     r"|account|recruit|talent|people|designer|counsel|legal|finance|customer"
-    r"|community|hardware|mechanical|electrical|civil|admin|chief|\bvp\b"
+    r"|community|\bhardware\b|mechanical|electrical|civil|admin|chief|\bvp\b"
     r"|head of|director|staff |principal|senior|\bsr\.?\b|manager"
     # hardware/defense/biotech startups list plenty of non-software "engineers"
     # (Saronic 2026-08-17: shipyard/industrial/quality roles got ingested)
     r"|industrial|manufactur|\bquality\b|\bnpi\b|supply|logistics|shipyard"
     r"|\bweld|facilities|mission operations|sustainment|propulsion|avionics"
     r"|structur|thermal|electrician|technician|\blead\b|leadership|\bgtm\b"
-    r"|test engineer|process engineer|integrations? engineer|maintenance"
+    r"|process engineer|maintenance"
     r"|\bux\b|wire harness|\bharness\b|postdoc|clinical|build engineer"
     r"|accuracy control|marine|outfit|tooling|operations specialist", re.I)
+# 'Product Manager' would trip the generic 'manager' skip, so PM titles get a
+# bypass, but only when no seniority marker is present ('Senior Product
+# Manager' stays skipped):
+PM_RE = re.compile(r"product manage|associate product manager|\bapm\b|product intern", re.I)
+SENIORITY_RE = re.compile(
+    r"senior|\bsr\.?\b|staff |principal|director|head of|chief|\bvp\b|\blead\b", re.I)
 
 _STATES = ("AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI"
            "|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX"
@@ -473,6 +580,23 @@ def _job_fields(ats: str, j: dict) -> tuple:
             loc = (loc + " Remote").strip()
         return (str(j.get("id") or ""), str(j.get("text") or "").strip(), loc,
                 str(j.get("hostedUrl") or j.get("applyUrl") or ""))
+    if ats == "workable":
+        # widget API: shortcode is the job id; urls are account-form pages
+        loc = ", ".join(x for x in (str(j.get("city") or ""), str(j.get("state") or ""),
+                                    str(j.get("country") or "")) if x)
+        if j.get("telecommuting"):
+            loc = (loc + " Remote").strip()
+        return (str(j.get("shortcode") or ""), str(j.get("title") or "").strip(), loc,
+                str(j.get("url") or j.get("shortlink") or ""))
+    if ats == "smartrecruiters":
+        loc_d = j.get("location") or {}
+        loc = ", ".join(str(loc_d.get(k) or "") for k in ("city", "region", "country") if loc_d.get(k))
+        if loc_d.get("remote"):
+            loc = (loc + " Remote").strip()
+        company_id = str((j.get("company") or {}).get("identifier") or "")
+        jid = str(j.get("id") or "")
+        return (jid, str(j.get("name") or "").strip(), loc,
+                f"https://jobs.smartrecruiters.com/{company_id}/{jid}" if company_id and jid else "")
     # ashby
     locs = [str(j.get("location") or "")]
     locs += [str((s or {}).get("location") or "") for s in (j.get("secondaryLocations") or [])]
@@ -482,8 +606,8 @@ def _job_fields(ats: str, j: dict) -> tuple:
             "; ".join(x for x in locs if x), str(j.get("jobUrl") or j.get("applyUrl") or ""))
 
 
-def _postings_from_jobs(ats: str, company: str, jobs: list) -> list:
-    """Raw board jobs -> watch.Posting rows (source='abc'). Light SWE/ML +
+def _postings_from_jobs(ats: str, company: str, jobs: list, slug: str = "") -> list:
+    """Raw board jobs -> watch.Posting rows (source='abc'). Light role +
     US-or-remote gate here; filter.py title_ok does the real gating later."""
     from watcher import watch
     out = []
@@ -491,9 +615,16 @@ def _postings_from_jobs(ats: str, company: str, jobs: list) -> list:
         if not isinstance(j, dict) or j.get("isListed") is False:
             continue
         job_id, title, loc, url = _job_fields(ats, j)
+        if ats == "workable" and job_id and slug:
+            # widget shortlinks omit the account; the workable adapter's URL
+            # parser needs apply.workable.com/<account>/j/<CODE>
+            url = f"https://apply.workable.com/{slug}/j/{job_id}/"
         if not job_id or not title or not url:
             continue
-        if not TITLE_OK_RE.search(title) or TITLE_SKIP_RE.search(title):
+        if not TITLE_OK_RE.search(title):
+            continue
+        if TITLE_SKIP_RE.search(title) and not (
+                PM_RE.search(title) and not SENIORITY_RE.search(title)):
             continue
         if not _us_or_remote(loc):
             continue
@@ -521,7 +652,7 @@ def poll_boards(conn: sqlite3.Connection) -> dict:
                 (fails, status, now, f"poll error {fails}x on {ats}:{slug}", key))
             errors += 1
         else:
-            postings = _postings_from_jobs(ats, name, jobs)
+            postings = _postings_from_jobs(ats, name, jobs, slug=slug)
             new += len(watch.upsert(conn, postings))
             conn.execute(
                 "UPDATE abc_companies SET status='polling', fail_count=0, last_checked=?, "
