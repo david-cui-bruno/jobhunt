@@ -178,13 +178,14 @@ with a per-source <code>posting_id</code> convention so re-scrapes dedupe for fr
     <span class="tag acc">simplify</span><span class="tag acc">dreamwork-2027</span><span class="tag acc">zapply-2027</span><span class="tag acc">vansh</span><span class="tag acc">speedy</span>
     <p>The community-maintained Summer/Winter 2027 lists. Diff-polled: only rows not already
     in the DB get inserted. Highest volume, lowest signal-per-row.</p></div>
-  <div class="card"><h4>A/B/C startup scout</h4>
-    <span class="tag ok">abc_startups.py</span>
-    <p>The clever one. Harvests funding announcements (TechCrunch/Crunchbase RSS) and VC
-    portfolio pages (a16z, Sequoia, Index…), LLM-extracts <code>{company, round}</code>, keeps
-    Series A/B/C only, then <b>guesses their ATS board slug</b> and polls the public
-    Greenhouse/Lever/Ashby JSON APIs forever. Finds roles that never hit any list. Compounds:
-    every funding cycle adds companies.</p></div>
+  <div class="card"><h4>A-D startup scout</h4>
+    <span class="tag ok">abc_startups.py</span><span class="tag ok">abc_backfill.py</span>
+    <p>The clever one. Harvests funding announcements (TechCrunch/Crunchbase/VentureBeat
+    RSS) and VC portfolio pages (a16z…), LLM-extracts <code>{company, round}</code>, keeps
+    Series A-D, then resolves each company's <b>real careers page</b> (official domain →
+    careers links → ATS board; slug guessing only as a last resort) and polls the public
+    Greenhouse/Lever/Ashby/Workable/SmartRecruiters JSON APIs forever. A TechCrunch-archive
+    backfill seeded ~3 years of past rounds. Finds roles that never hit any list.</p></div>
   <div class="card"><h4>Big-co direct boards</h4>
     <span class="tag ok">bigco.py</span>
     <p>17 verified public JSON boards for companies that post directly and skip the lists:
@@ -201,11 +202,11 @@ new row. ~82% of discovered postings die here, which is the system working: the 
 of mechanical-engineering co-ops and fall-term roles.</p>
 <div class="tbl"><table>
   <tr><th>rule</th><th>what it enforces</th></tr>
-  <tr><td>roles_include</td><td>SWE / ML / AI / infra / platform / research-engineer titles only</td></tr>
-  <tr><td>roles_exclude</td><td>winter + summer terms only — no fall, no spring, no co-ops, no "new grad" (except YC/startup sources where full-time is wanted)</td></tr>
+  <tr><td>roles_include</td><td>everything engineer-adjacent (word-boundary matched): SWE / ML / AI / infra / MTS / founding, product, forward-deployed, solutions engineer / SRE / security / embedded software / mobile / data science / quant / PM &amp; APM</td></tr>
+  <tr><td>roles_exclude</td><td>winter + summer terms only — no fall, no spring, no co-ops, no "new grad" (except YC/startup sources where full-time is wanted); no product marketing</td></tr>
   <tr><td>batch bans</td><td>no P26 YC companies (David's rule)</td></tr>
   <tr><td>one-app-per-company</td><td>ever. An intern posting beats a pending full-time one at the same company; a submitted application freezes the company forever</td></tr>
-  <tr><td>hard excludes</td><td>PhD-required, unpaid, hardware/EE/mechanical, IT support</td></tr>
+  <tr><td>hard excludes</td><td>PhD-required, unpaid, hardware/EE/mechanical, IT support, non-software "engineering intern" variants (bridge/project/GTM/process…)</td></tr>
 </table></div>
 
 <h2 id="tailor"><span class="num">3</span>Tailor — one resume per job description</h2>
@@ -214,7 +215,8 @@ reword the LaTeX resume against it. Capped at 100/day.</p>
 <div class="grid">
   <div class="card"><h4>Reword-only law</h4><p>Claude may reorder and rephrase bullets from the
   approved <code>resume/bullet_bank.md</code> (every number pre-verified). It may never invent
-  a project, employer, metric, or credential. Grad date June 2028 is immutable.</p></div>
+  a project, employer, metric, or credential. Grad date is track-based (<code>track.py</code>):
+  intern apps May 2028, full-time apps May 2027 (the real early-graduation plan, confirmed).</p></div>
   <div class="card"><h4>Quality gate</h4><p>Each PDF gets structural validation +
   quality metadata written beside it. A resume that fails the gate parks the posting as manual
   rather than sending something broken. (A missing-metadata bug once stranded 13 postings —

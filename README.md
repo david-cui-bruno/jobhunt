@@ -13,24 +13,32 @@ DISCOVER                 FILTER                TAILOR               SUBMIT      
 GitHub listing repos --> role/season/       --> Claude rewords  --> headless Playwright --> Gmail classify --> ONE casual daily
 YC Work at a Startup     location rules         LaTeX bullets       per-ATS adapters        OA/interview/     digest, 6pm ET
 HN hiring threads        1 app per company      (reword only,       8 per run, paced        recruiter/        email + iMessage;
-A/B/C startup scout      no P26 batch           never fabricate)    every 65 min            rejection/offer   replies are commands
+A-D startup scout        no P26 batch           never fabricate)    every 65 min            rejection/offer   replies are commands
 ```
 
 - **Discovery** runs on launchd timers (macOS, this laptop). Sources: the big
   GitHub internship lists, YC's Work at a Startup (intern **and** full-time
-  directories), HN hiring threads, and the **Series A/B/C startup scout**
+  directories), HN hiring threads, and the **Series A-D startup scout**
   (`watcher/abc_startups.py`): harvests funding announcements + VC portfolio
-  pages, LLM-extracts company/round (A/B/C only), resolves each company's
-  Greenhouse/Lever/Ashby board via their public JSON APIs, then polls those
-  boards on every cycle. A-C startups are the roles that never make the lists.
+  pages, LLM-extracts company/round (A-D, David 2026-08-19), then resolves
+  each company's real careers page (official domain -> careers/jobs links ->
+  ATS board URL; slug guessing only as a last resort) and polls the public
+  Greenhouse/Lever/Ashby/Workable/SmartRecruiters JSON APIs on every cycle.
+  `watcher/abc_backfill.py` seeded ~3 years of past rounds from the
+  TechCrunch archive. A-D startups are the roles that never make the lists.
 - **Filtering** enforces David's rules in code (`watcher/filter.py` +
-  `profile/profile.yaml`): SWE/ML titles; winter + summer terms only (no
-  fall/spring/co-op); full-time allowed for YC/startup sources; never
-  P26-batch YC companies; US/remote; one application per company ever.
+  `profile/profile.yaml`): everything engineer-adjacent (SWE/ML/AI, MTS,
+  founding/product/forward-deployed/solutions engineer, SRE/devops/security,
+  embedded **software**, mobile, data science, quant, and PM/APM) with
+  word-boundary matching; no hardware/EE/mechanical; winter + summer terms
+  only (no fall/spring/co-op); full-time allowed for YC/startup sources;
+  never P26-batch YC companies; US/remote; one application per company ever.
 - **Tailoring** (≤100/day): Claude rewords the base LaTeX resume against the
-  JD using only the approved `resume/bullet_bank.md` (numbers pre-verified,
-  grad date June 2028 immutable). A structural quality gate blocks broken
-  PDFs from ever reaching an ATS.
+  JD using only the approved `resume/bullet_bank.md` (numbers pre-verified).
+  Graduation date is **track-based** (David 2026-08-19, `track.py`): intern
+  applications say May 2028, full-time applications say May 2027 (his real
+  early-graduation plan). A structural quality gate blocks broken PDFs from
+  ever reaching an ATS.
 - **Submission** (8 per run, runs every 65 min, 15-45s jittered pacing):
   headless Playwright adapters for Greenhouse, Lever, Ashby, Workday,
   Workable, SmartRecruiters, Rippling, plus WaaS founder messages and email
@@ -117,7 +125,7 @@ environment, queue, browser session, and application-answer file.
 
 ## Layout
 
-- `watcher/`   poll + diff listing sources, filtering rules, A/B/C scout
+- `watcher/`   poll + diff listing sources, filtering rules, A-D scout + backfill
 - `sprint.py`  fast lane: every 4 min, brand-new postings are tailored +
                submitted immediately (speed-to-apply beats everything)
 - `drip.py`    hourly orchestrator: discovery, tailor batch, email applies
@@ -193,7 +201,8 @@ deployed Kith referral queue should refresh automatically every 15 minutes.
 
 ## Roadmap
 
-1. A/B/C scout maturation: more funding sources, better slug resolution,
+1. A-D scout maturation: more funding sources, generic careers-page parsing
+   for non-standard ATSes,
    compounding coverage of the startups that never hit the lists.
 2. Extend best-judgment answering to identity-trivial required fields
    ("Legal Name", "Country") to shrink the manual pile further.
