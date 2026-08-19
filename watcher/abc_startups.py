@@ -124,6 +124,21 @@ def _compact(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
 
 
+# LLM extraction occasionally emits generic words as company names
+# ('Series' from a headline fragment, backfill 2026-08-19).
+_JUNK_NAMES = {"series", "seriesa", "seriesb", "seriesc", "seriesd", "startup",
+               "startups", "company", "theround", "funding", "venture", "ventures",
+               "capital", "thecompany", "ai", "labs"}
+
+
+def _junk_name(name: str) -> bool:
+    if _compact(name) in _JUNK_NAMES:
+        return True
+    # descriptions-as-names from the extractor: "Sarah Buchner's AI
+    # construction startup", "Ex-Autodesk execs startup" (backfill 2026-08-19)
+    return bool(re.search(r"\b(?:startup|stealth|unnamed|undisclosed)\b", str(name or ""), re.I))
+
+
 def _normalize_round(value) -> str | None:
     """'Series B' / 'b' -> 'B'; seed / E+ / IPO / junk -> None.
 
@@ -228,7 +243,7 @@ def extract_companies(items: list[dict]) -> list[dict]:
             continue
         rnd = _normalize_round(p.get("round"))
         name = str(p.get("company") or "").strip()
-        if not rnd or len(_compact(name)) < 2:
+        if not rnd or len(_compact(name)) < 2 or _junk_name(name):
             continue
         idx = p.get("i")
         date = p.get("date") or (items[idx]["date"] if isinstance(idx, int) and 0 <= idx < len(items) else "")
@@ -325,15 +340,28 @@ def store_companies(conn: sqlite3.Connection, rows: list[dict]) -> int:
 
 # ---------------------------------------------------------------- ATS resolution
 def _probe(ats: str, slug: str) -> list | None:
-    """Hit the public board API; a job list (possibly empty) means it exists."""
+    """Hit the public board API; a job list (possibly empty) means it exists.
+
+    SmartRecruiters returns HTTP 200 + empty content for ANY slug (verified
+    2026-08-19: the first backfill run 'resolved' dozens of companies to
+    nonexistent SR boards). An SR slug only counts when the postings payload
+    proves a real company: totalFound > 0 and the identifier echoes back.
+    """
     try:
         d = json.loads(_get(ATS_ENDPOINTS[ats].format(slug=slug), timeout=12))
     except Exception:
         return None
     if ats == "smartrecruiters":
-        jobs = d.get("content") if isinstance(d, dict) else None
-    else:
-        jobs = d.get("jobs") if isinstance(d, dict) else d
+        if not isinstance(d, dict):
+            return None
+        content = d.get("content")
+        if not isinstance(content, list):
+            return None
+        if int(d.get("totalFound") or 0) == 0 or not content:
+            return None  # 200-for-anything API: empty board is indistinguishable from no board
+        ident = _compact(str((content[0].get("company") or {}).get("identifier") or ""))
+        return content if ident == _compact(slug) else None
+    jobs = d.get("jobs") if isinstance(d, dict) else d
     return jobs if isinstance(jobs, list) else None
 
 
