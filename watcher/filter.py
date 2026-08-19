@@ -86,7 +86,11 @@ def title_ok(title: str, source: str = "") -> bool:
     if any(r.search(t) for r in exclude):
         return False
     if source in ("waas", "abc") and re.search(
-            r"\b(founding|software|engineer|swe|ml|ai)\b|product manage|product intern\b", t):
+            # startup titles get a slightly looser gate, but 'engineer' alone
+            # is NOT enough: the backfilled A-D pool includes aerospace/
+            # hardware startups whose Mission/Controls/Guidance Engineers all
+            # matched the old bare-\bengineer\b shortcut (2026-08-19).
+            r"\b(founding|software|swe|ml|ai)\b|product manage|product intern\b", t):
         return True
     return any(r.search(t) for r in INCLUDE_RES)
 

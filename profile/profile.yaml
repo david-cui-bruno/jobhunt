@@ -38,7 +38,7 @@ preferences:
   # filter.py matches these with word boundaries on a normalized title.
   roles_include: ["software engineer", "software developer", "swe", "sde",
                   "software development engineer", "ml", "machine learning", "ai",
-                  "artificial intelligence", "infrastructure", "full stack", "backend",
+                  "artificial intelligence", "infrastructure", "full stack", "fullstack", "infra", "backend",
                   "frontend", "web developer", "data engineer", "platform",
                   "research engineer", "member of technical staff", "product engineer",
                   "software engineering", "software development",
