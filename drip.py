@@ -18,8 +18,11 @@ sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT /
 
 DB = ROOT / "out" / "tracker.db"
 ET = ZoneInfo("America/New_York")
-DAILY_CAP = int(os.environ.get("JOBHUNT_DAILY_TAILOR_CAP", "100"))
-TAILOR_PER_RUN = int(os.environ.get("JOBHUNT_TAILOR_PER_RUN", "5"))
+# David 2026-08-19: "you should be able to submit all the applications you
+# find". Submit capacity is ~176/day (8 x 22 runs); tailor must not be the
+# bottleneck, so cap 100->160 and per-run 5->8 (hourly drip + sprint lane).
+DAILY_CAP = int(os.environ.get("JOBHUNT_DAILY_TAILOR_CAP", "160"))
+TAILOR_PER_RUN = int(os.environ.get("JOBHUNT_TAILOR_PER_RUN", "8"))
 
 if DAILY_CAP < 1 or TAILOR_PER_RUN < 1:
     raise ValueError("jobhunt tailoring limits must be at least 1")
