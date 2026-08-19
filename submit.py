@@ -362,6 +362,18 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
     except (ValueError, OSError):
         pass
     ashby_spam_streak = 0
+    # Per-run Ashby cap (2026-08-19): the 12h cooldown alone wasn't enough —
+    # first submissions after it lapsed (Town, Volta 23:27 8/18) were flagged
+    # again, so Ashby's velocity window is longer than one burst. Cap Ashby to
+    # 2 submissions per run (~2 per 65-min timer tick); other ATSs unaffected.
+    ASHBY_PER_RUN = 2
+    ashby_done_this_run = 0
+    # Per-run Ashby cap (2026-08-19): the 12h cooldown alone wasn't enough —
+    # first submissions after it lapsed (Town, Volta 23:27 8/18) were flagged
+    # again, so Ashby's velocity window is longer than one burst. Cap Ashby to
+    # 2 submissions per run (~2 per 65-min timer tick); other ATSs unaffected.
+    ASHBY_PER_RUN = 2
+    ashby_done_this_run = 0
 
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
@@ -384,8 +396,11 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
         if time.monotonic() - run_started > RUN_BUDGET_SECONDS:
             print(f"[submit] run budget ({RUN_BUDGET_SECONDS}s) spent — {done} submitted; leaving the rest for the next timer run")
             break
-        if ashby_blocked and "ashbyhq.com" in (r["url"] or ""):
-            continue  # cooldown active — leave 'ready'; next run retries after it lapses
+        if "ashbyhq.com" in (r["url"] or ""):
+            if ashby_blocked:
+                continue  # cooldown active — leave 'ready'; next run retries after it lapses
+            if ashby_done_this_run >= ASHBY_PER_RUN:
+                continue  # per-run Ashby cap reached — leave 'ready' for the next run
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
         pdf = _runtime_path(r["resume_pdf"])
         # Rows are selected as a batch, so a prior row in this same run may have
@@ -549,6 +564,8 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
                     pass
         elif res.get("detected_ats") == "ashby":
             ashby_spam_streak = 0
+        if res.get("detected_ats") == "ashby" or "ashbyhq.com" in (r["url"] or ""):
+            ashby_done_this_run += 1
         # Keep attempts sequential and lightly staggered without imposing the old
         # one-to-four-minute artificial delay. Do not sleep after reaching the cap.
         if not dry_run and done < limit:
