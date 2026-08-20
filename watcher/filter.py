@@ -34,7 +34,9 @@ def _phrase_re(phrase: str) -> re.Pattern:
     """
     words = re.findall(r"[a-z0-9']+", phrase.lower())
     body = r"[^a-z0-9]+".join(re.escape(w) for w in words)
-    tail = r"" if words and words[-1].isdigit() else r"(?![a-z0-9])"
+    # plural-tolerant tail: 'software engineer' matches 'Software Engineers'.
+    # Digit-tailed phrases stay prefixes ('fall 20' matches 'Fall 2027').
+    tail = r"" if words and words[-1].isdigit() else r"s?(?![a-z0-9])"
     return re.compile(r"(?<![a-z0-9])" + body + tail)
 
 

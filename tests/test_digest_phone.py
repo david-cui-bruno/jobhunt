@@ -26,7 +26,7 @@ class ComposeShortTest(unittest.TestCase):
         # stats alone aren't worth a text, same as compose()
         self.assertIsNone(digest.compose_short(_collected(debt={"no adapter for": 3})))
 
-    def test_top3_stats_and_cap(self):
+    def test_full_content_stats_and_cap(self):
         deadline = (datetime.datetime.now(digest.ET).date()
                     + datetime.timedelta(days=2)).isoformat()
         d = _collected(
@@ -43,14 +43,15 @@ class ComposeShortTest(unittest.TestCase):
         self.assertIn("[OA] Stripe", body)
         self.assertIn("due in 2d", body)
         self.assertIn("[OFFER] Ramp", body)
-        self.assertIn("stuck: Cybernetic Labs", body)
-        # only 3 items make the text; the rest are counted, not listed
-        self.assertNotIn("Medtronic", body)
-        self.assertNotIn("Datadog", body)
-        self.assertIn("(+2 more in the email)", body)
+        self.assertIn("Cybernetic Labs", body)
+        # Telegram is the PRIMARY channel (2026-08-19): full content, not a
+        # 3-item teaser. Everything makes the message now.
+        self.assertIn("Medtronic", body)
+        self.assertIn("Datadog", body)
         self.assertIn("4 submitted today", body)
-        self.assertIn("5 on my side", body)
-        self.assertNotIn("http://", body)  # links live in the email
+        self.assertIn("5 stuck on my side", body)
+        # action items carry their URL (act-from-phone); stuck items don't
+        self.assertIn("http://u", body)
 
     def test_cap_holds_under_pathological_input(self):
         d = _collected(manual_ask=[("C" * 300, "T" * 300, "u", "E" * 400)] * 6)
@@ -66,7 +67,7 @@ class ComposeShortTest(unittest.TestCase):
         with mock.patch("notify.kith_bridge.send_phone") as send:
             digest._send_phone_copy(d)
         send.assert_called_once()
-        self.assertIn("stuck: Stripe", send.call_args[0][0])
+        self.assertIn("Stripe", send.call_args[0][0])
 
 
 class IMessageRepliesTest(unittest.TestCase):

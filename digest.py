@@ -39,7 +39,7 @@ DB = ROOT / "out" / "tracker.db"
 NOTES = ROOT / "out" / "digest-notes.log"
 ET = ZoneInfo("America/New_York")
 SEND_HOUR = 18  # 6pm ET
-SHORT_LIMIT = 1200  # phone copy hard cap
+SHORT_LIMIT = 3800  # phone copy hard cap (Telegram chunks at 3900; was 1200 in the iMessage era)
 
 # manual reasons that are pure engineering debt — the agent handles these; not
 # worth David's attention in the digest beyond a count.
@@ -161,44 +161,60 @@ def compose(d: dict) -> str | None:
 
 
 def compose_short(d: dict) -> str | None:
-    """Phone-sized digest: top 3 items + the stats line, <=SHORT_LIMIT chars.
+    """Phone digest: the real content, sized for one Telegram message.
 
-    Same casual voice as compose(), no URLs (those live in the email).
+    Telegram became the PRIMARY channel 2026-08-19 (David: "I'd rather have
+    jobhunt sent to my telegram via kith more than anything else"); email is
+    the archive copy. So this is no longer a 3-item teaser: action items,
+    stuck applications with the exact asks, unconfirmed submissions, and the
+    stats line, with URLs only where he might act from his phone.
     None -> nothing worth texting (same nothing-to-say rule as compose()).
     """
-    items = []
+    sections = []
     today = datetime.datetime.now(ET).date()
-    for cat, company, role, deadline, _url, _summary in d["action"]:
-        tag = {"oa_invite": "OA", "interview_invite": "interview",
-               "recruiter_reply": "recruiter", "offer": "OFFER"}.get(cat, cat)
-        flag = ""
-        if deadline:
-            try:
-                days = (datetime.date.fromisoformat(deadline) - today).days
-                flag = f" — due in {days}d" if days <= 5 else f" — due {deadline}"
-            except ValueError:
-                flag = f" — due {deadline}"
-        items.append(f"[{tag}] {company} ({role[:40]}){flag}")
-    for company, _title, _url, err in d["manual_ask"]:
-        ask = err
-        if err.startswith("needs answers:"):
-            ask = err[len("needs answers:"):].strip()
-        items.append(f"stuck: {company} — {ask[:70]}")
-    for c, t, _u in d["verify"]:
-        items.append(f"unconfirmed: {c} — {t[:40]}")
-    if not items:
+
+    if d["action"]:
+        lines = []
+        for cat, company, role, deadline, url, _summary in d["action"][:8]:
+            tag = {"oa_invite": "OA", "interview_invite": "interview",
+                   "recruiter_reply": "recruiter", "offer": "OFFER"}.get(cat, cat)
+            flag = ""
+            if deadline:
+                try:
+                    days = (datetime.date.fromisoformat(deadline) - today).days
+                    flag = f" — due in {days}d" if days <= 5 else f" — due {deadline}"
+                except ValueError:
+                    flag = f" — due {deadline}"
+            lines.append(f"• [{tag}] {company} ({role[:45]}){flag}\n  {url}")
+        sections.append("needs you:\n" + "\n".join(lines))
+
+    if d["manual_ask"]:
+        lines = []
+        for company, title, _url, err in d["manual_ask"][:6]:
+            ask = err
+            if err.startswith("needs answers:"):
+                ask = err[len("needs answers:"):].strip()
+            lines.append(f"• {company} — {ask[:110]}")
+        sections.append("stuck (reply \"<company>: <answer>\" or \"skip <company>\"):\n"
+                        + "\n".join(lines))
+
+    if d["verify"]:
+        lines = [f"• {c} — {t[:45]}" for c, t, _u in d["verify"][:5]]
+        sections.append("maybe submitted, unconfirmed:\n" + "\n".join(lines))
+
+    if d["notes"]:
+        sections.append("fleet notes:\n" + "\n".join(f"• {n[:140]}" for n in d["notes"][:3]))
+
+    if not sections:
         return None
 
     s = d["stats"]
     debt = sum(d["manual_debt"].values())
     tail = f"pipeline: {s['submitted_24h']} submitted today · {s['ready']} ready · {s['queued']} queued"
     if debt:
-        tail += f" · {debt} on my side"
-    lines = [f"• {i[:150]}" for i in items[:3]]
-    if len(items) > 3:
-        lines.append(f"(+{len(items) - 3} more in the email)")
-    body = ("hey — jobhunt quick hits:\n" + "\n".join(lines) + f"\n{tail}\n"
-            'reply here works: "skip <company>" / "<company>: <answer>" — or mention jobhunt')
+        tail += f" · {debt} stuck on my side"
+    body = ("hey — jobhunt daily:\n\n" + "\n\n".join(sections) + f"\n\n{tail}\n"
+            "(full links in the email · ask me \"jobhunt status\" anytime)")
     return body[:SHORT_LIMIT]
 
 

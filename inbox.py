@@ -154,6 +154,23 @@ def scan(verbose: bool = True) -> dict:
                 label_msg(m["id"], name, archive)
             except Exception as e:
                 print(f"[inbox] label failed: {e}")
+        # hot events go to Telegram NOW, not at the 6pm digest (David
+        # 2026-08-19: telegram is the primary channel). Best-effort.
+        if cat in ("oa_invite", "interview_invite", "offer", "recruiter_reply"):
+            tag = {"oa_invite": "OA invite", "interview_invite": "interview",
+                   "offer": "OFFER", "recruiter_reply": "recruiter reply"}[cat]
+            msg = f"[{tag}] {c.get('company', '?')} — {c.get('role', '')[:60]}".rstrip(" —")
+            if c.get("deadline"):
+                msg += f"\ndeadline: {c['deadline']}"
+            if c.get("summary"):
+                msg += f"\n{c['summary'][:200]}"
+            if c.get("action_url"):
+                msg += f"\n{c['action_url']}"
+            try:
+                from notify import kith_bridge
+                kith_bridge.send_phone(msg)
+            except Exception as e:
+                print(f"[inbox] instant push failed: {e}")
         if verbose:
             print(f"[inbox] {cat}: {c.get('company')} — {c.get('summary', '')[:80]}")
     conn.execute("INSERT OR REPLACE INTO scan_state VALUES ('last_scan', ?)", (str(int(time.time())),))
@@ -224,6 +241,13 @@ if __name__ == "__main__":
         print(f"sheet: {sheet_tracker.sync()}")
     except Exception as e:
         print(f"sheet sync skipped: {str(e)[:120]}")
+    # kith agent status blob: lets the Telegram bot answer jobhunt questions
+    # from live data (David 2026-08-19: telegram is the primary channel).
+    try:
+        import sync_status
+        print(f"kith status: {sync_status.sync()}")
+    except Exception as e:
+        print(f"kith status sync skipped: {str(e)[:120]}")
     # same rules for texts David sends the kith agent (iMessage via the bridge)
     try:
         import digest_replies
