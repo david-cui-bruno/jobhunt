@@ -16,6 +16,7 @@ import yaml
 from playwright.sync_api import sync_playwright, Page, TimeoutError as PWTimeout
 
 import qa
+import stealth
 from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
 from timeouts import configure_page
 
@@ -72,8 +73,7 @@ def apply_greenhouse(url: str, resume_pdf: Path, slug: str, dry_run: bool = True
     p = PROFILE
     result = {"ok": False, "submitted": False, "reason": "", "unanswered": []}
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-        ctx = browser.new_context(viewport={"width": 1280, "height": 1600})
+        browser, ctx = stealth.launch_stealth_context(pw)
         page = configure_page(ctx.new_page())
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(2500)

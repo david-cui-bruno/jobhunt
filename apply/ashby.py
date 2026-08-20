@@ -13,6 +13,7 @@ import yaml
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 import qa
+import stealth
 from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
 from timeouts import configure_page
 
@@ -78,8 +79,7 @@ def apply_ashby(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
     base = url.split("?")[0].rstrip("/")
     apply_url = base if base.endswith("/application") else base + "/application"
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-        ctx = browser.new_context(viewport={"width": 1280, "height": 1600})
+        browser, ctx = stealth.launch_stealth_context(pw)
         page = configure_page(ctx.new_page())
         page.goto(apply_url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(2500)
