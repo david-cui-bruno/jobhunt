@@ -366,13 +366,21 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
     # first submissions after it lapsed (Town, Volta 23:27 8/18) were flagged
     # again, so Ashby's velocity window is longer than one burst. Cap Ashby to
     # 2 submissions per run (~2 per 65-min timer tick); other ATSs unaffected.
-    ASHBY_PER_RUN = 2
+    # 2026-08-21: lowered 2 -> 1. Even with stealth launch args (dca0708) and
+    # the per-run cap of 2, ~7 of 9 Ashby submissions in the last 24h were
+    # spam-flagged (2 stuck: Cluely, Ambience). One per run ~= 1/65min; if
+    # this still trips the breaker daily, Ashby goes manual-only.
+    ASHBY_PER_RUN = 1
     ashby_done_this_run = 0
     # Per-run Ashby cap (2026-08-19): the 12h cooldown alone wasn't enough —
     # first submissions after it lapsed (Town, Volta 23:27 8/18) were flagged
     # again, so Ashby's velocity window is longer than one burst. Cap Ashby to
     # 2 submissions per run (~2 per 65-min timer tick); other ATSs unaffected.
-    ASHBY_PER_RUN = 2
+    # 2026-08-21: lowered 2 -> 1. Even with stealth launch args (dca0708) and
+    # the per-run cap of 2, ~7 of 9 Ashby submissions in the last 24h were
+    # spam-flagged (2 stuck: Cluely, Ambience). One per run ~= 1/65min; if
+    # this still trips the breaker daily, Ashby goes manual-only.
+    ASHBY_PER_RUN = 1
     ashby_done_this_run = 0
 
     conn = sqlite3.connect(DB)
