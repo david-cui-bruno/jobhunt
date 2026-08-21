@@ -64,6 +64,29 @@ class SourceCoverageTests(unittest.TestCase):
             with self.subTest(title=title):
                 self.assertFalse(filt.title_ok(title))
 
+    def test_explicit_out_of_scope_season_and_coop_terms_are_filtered(self) -> None:
+        for title in (
+            "Social Media Engineering Intern (Fall...",
+            "Fall Software Development Intern",
+            "Site Reliability Internship - Spring ...",
+            "Spring Software Engineer Intern",
+            "Software Engineer Co-op",
+            "Software Engineer Co Op",
+            "Software Engineer Coop",
+        ):
+            with self.subTest(title=title):
+                self.assertFalse(filt.title_ok(title))
+
+    def test_summer_winter_and_unseasoned_roles_remain_in_scope(self) -> None:
+        for title in (
+            "Summer 2027 Software Engineer Intern",
+            "Winter 2027 Software Engineer Intern",
+            "Product Manager Intern",
+            "Backend Engineer",
+        ):
+            with self.subTest(title=title):
+                self.assertTrue(filt.title_ok(title))
+
     def test_manual_company_blocks_a_second_application(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "tracker.db"
