@@ -76,6 +76,27 @@ class ResumeQualityTests(unittest.TestCase):
         self.assertIn("Deep Learning", courses)
         self.assertIn("Operating Systems", courses[-1])
 
+    def test_approved_awards_are_preserved_in_grounded_resumes(self) -> None:
+        result = tailor.build_grounded_resume(
+            "AI Engineer Intern",
+            "Machine learning, deep learning, and PyTorch",
+        )
+        why = []
+
+        self.assertTrue(tailor.validate(result, why), why)
+        self.assertIn(
+            "USACO Platinum; AIME Qualifier (4x); 3rd of 250 teams, "
+            "CMU TartanHacks 2026 (SpaceOverflow)",
+            result,
+        )
+
+    def test_approved_awards_cannot_drift_during_tailoring(self) -> None:
+        result = tailor.BASE_TEX.replace("USACO Platinum", "USACO Gold")
+        why = []
+
+        self.assertFalse(tailor.validate(result, why))
+        self.assertIn("Awards line drift", why)
+
     def test_security_boilerplate_does_not_override_ml_title(self) -> None:
         role = tailor.infer_role_type(
             "Machine Learning Engineer Intern",

@@ -32,10 +32,10 @@ ATS / FORMATTING
 - Single column, no icons/graphics/tables for content. (Our template complies.)
 - Bolding inside bullets is ONLY for the impact phrase (see BULLET FORMULA);
   never bold plain keywords or tech names.
-- Education section: the degree line plus exactly ONE bullet — the "Coursework"
-  list. No second bullet, no extra bolded labels ("Systems Coursework",
-  "Relevant Coursework", per-course project blurbs). Course project detail
-  belongs in Projects, not Education.
+- Education section: the degree line plus exactly TWO reviewed bullets:
+  "Coursework" and "Awards". The Awards line is immutable. No additional
+  bolded labels ("Systems Coursework", "Relevant Coursework", per-course
+  project blurbs). Course project detail belongs in Projects, not Education.
 - Coursework must contain 8-9 verified, role-relevant courses. Never drop it and
   never compress it below 8 courses to make room elsewhere.
 - The header is immutable. It contains only the reviewed email, phone, city,

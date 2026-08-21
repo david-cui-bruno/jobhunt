@@ -227,6 +227,11 @@ DEFAULT_COURSES = (
     "Deep Learning"
 )
 
+APPROVED_AWARDS_LINE = (
+    "USACO Platinum; AIME Qualifier (4x); 3rd of 250 teams, "
+    "CMU TartanHacks 2026 (SpaceOverflow)"
+)
+
 
 def apply_course_variant(tex: str, role_type: str) -> str:
     courses = next(
@@ -426,11 +431,15 @@ def validate(tex: str, why: list | None = None) -> bool:
     # no text-mode arrows / raw angle brackets left (math mode is fine)
     if re.search(r"(?<![$\\{-])->", tex):
         return fail("raw -> present")
-    # education = degree + ONE Coursework bullet, nothing else (David 2026-08-08)
+    # Education has exactly two reviewed bullets: mutable verified Coursework
+    # and the immutable Awards line David approved on 2026-08-21.
     edu = tex[tex.find("EDUCATION"):tex.find("EXPERIENCE")]
-    n_bullets = len(re.findall(r"\\resumeItem(?:NH)?\{", edu))
-    if n_bullets > 1:
-        return fail("extra bullet in Education (only the Coursework line is allowed)")
+    labels = re.findall(r"\\resumeItem(?:NH)?\{([^}]*)\}", edu)
+    if labels != ["Coursework", "Awards"]:
+        return fail(f"Education bullets drift: {labels!r}")
+    awards = re.search(r"\\resumeItem\{Awards\}\s*\{([^}]+)\}", edu)
+    if not awards or " ".join(awards.group(1).split()) != APPROVED_AWARDS_LINE:
+        return fail("Awards line drift")
     # Jake's template: NO summary/objective (David 2026-08-08). Reject any prose
     # between the heading tabular and the first section, and any summary-like section.
     body = tex[tex.find("\\begin{document}"):]
