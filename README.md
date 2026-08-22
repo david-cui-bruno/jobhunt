@@ -12,7 +12,7 @@ a human, and never misrepresent anything.
 DISCOVER                 FILTER                TAILOR               SUBMIT                TRACK               REPORT
 GitHub listing repos --> role/season/       --> Claude rewords  --> resident local    --> Gmail classify --> ONE casual daily
 YC Work at a Startup     location rules         LaTeX bullets       dispatcher polls       OA/interview/     digest, 6pm ET
-HN hiring threads        1 app per company      (reword only,       every 30 seconds       recruiter/        Telegram + email;
+HN hiring threads        canonical dedupe       (reword only,       every 30 seconds       recruiter/        Telegram + email;
 A-D startup scout        no P26 batch           never fabricate)    by ATS lane            rejection/offer   replies are commands
 ```
 
@@ -32,7 +32,8 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   embedded **software**, mobile, data science, quant, and PM/APM) with
   word-boundary matching; no hardware/EE/mechanical; winter + summer terms
   only (no fall/spring/co-op); full-time allowed for YC/startup sources;
-  never P26-batch YC companies; US/remote; one application per company ever.
+  never P26-batch YC companies; US/remote; canonical posting dedupe before
+  any external form or email is touched.
 - **Tailoring** (≤100/day): Claude rewords the base LaTeX resume against the
   JD using only the approved `resume/bullet_bank.md` (numbers pre-verified).
   Graduation date is **track-based** (David 2026-08-19, `track.py`): intern
@@ -82,7 +83,7 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   auto-answered question (`out/qa_answers.log`).
 - Never fabricates: a required field the profile can't truthfully answer
   stops that one application.
-- Caps: 8 submissions/run, 100 tailors/day, one app per company forever.
+- Caps: 8 submissions/run and 100 tailors/day.
 - Gmail token failover: if jobhunt's OAuth token is revoked, `notify/mailer`
   falls back to kith's healthy token for the same account instead of going
   silent.

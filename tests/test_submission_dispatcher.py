@@ -227,3 +227,27 @@ def test_daemon_allows_once_dry_run(monkeypatch) -> None:
 
     assert submit_daemon.main() == 0
     assert calls == [{"dry_run": True}]
+
+
+def test_claimed_row_missing_is_released_without_attempt_or_uncertainty(dispatch_db) -> None:
+    from submission.dispatcher import execute
+    from submission.lanes import DIRECT
+
+    conn = sqlite3.connect(dispatch_db)
+    conn.execute(
+        "INSERT INTO postings (posting_id, company, title, status, url) VALUES (?,?,?,?,?)",
+        ("orphan", "Orphan", "Engineer", "ready", "https://boards.greenhouse.io/acme/jobs/orphan"),
+    )
+    conn.commit()
+    conn.close()
+
+    result = execute("orphan", DIRECT, db_path=dispatch_db, dry_run=False)
+
+    assert result["outcome"] == "manual"
+    assert result["reason"] == "claimed row missing"
+    conn = sqlite3.connect(dispatch_db)
+    assert tuple(
+        conn.execute("SELECT status,outcome,last_error,attempt_count FROM postings WHERE posting_id='orphan'").fetchone()
+    ) == ("manual", "manual", "claimed row missing", 1)
+    assert not conn.execute("SELECT name FROM sqlite_master WHERE name='submission_attempts'").fetchone()
+    conn.close()

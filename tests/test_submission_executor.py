@@ -230,3 +230,66 @@ def test_executor_marks_stale_posting_before_adapter_without_attempt(tmp_path, m
     assert result["outcome"] == "stale"
     assert tuple(conn.execute("SELECT status,outcome,attempt_count FROM postings WHERE posting_id='one'").fetchone()) == ("filtered_out", "stale", 1)
     assert conn.execute("SELECT COUNT(*) FROM submission_attempts").fetchone()[0] == 0
+
+
+def test_executor_quality_gate_uses_normalized_outcome_without_attempt(tmp_path, monkeypatch) -> None:
+    conn, row = ready_row(tmp_path, ats="greenhouse")
+    monkeypatch.setattr("submission.executor._resume_quality_ready", lambda pdf, posting_id: (False, "metadata missing"))
+    monkeypatch.setattr("submission.executor.run_adapter", lambda payload: pytest.fail("adapter should not run"))
+
+    result = execute_claimed_posting(conn, row, lane=DIRECT, dry_run=False, worker_id="direct-1")
+
+    assert result["outcome"] == "manual"
+    assert result["reason"] == "resume quality gate: metadata missing"
+    assert tuple(
+        conn.execute("SELECT status,outcome,last_error,attempt_count FROM postings WHERE posting_id='one'").fetchone()
+    ) == ("manual", "manual", "resume quality gate: metadata missing", 1)
+    assert conn.execute("SELECT COUNT(*) FROM submission_attempts").fetchone()[0] == 0
+
+
+def test_executor_claim_lost_after_confirmed_submit_finishes_attempt_as_manual(tmp_path, monkeypatch) -> None:
+    conn, row = ready_row(tmp_path, ats="greenhouse")
+    monkeypatch.setattr("submission.executor._posting_dead", lambda url: False)
+
+    def adapter(payload):
+        conn.execute(
+            "UPDATE postings SET status='manual', outcome='manual', last_error='claimed elsewhere' WHERE posting_id='one'"
+        )
+        conn.commit()
+        return {
+            "outcome": "submitted",
+            "ok": True,
+            "submitted": True,
+            "detected_ats": "greenhouse",
+            "reason": "confirmed after lost claim",
+            "click_attempted": True,
+        }
+
+    monkeypatch.setattr("submission.executor.run_adapter", adapter)
+
+    result = execute_claimed_posting(conn, row, lane=DIRECT, dry_run=False, worker_id="direct-1")
+
+    assert result["outcome"] == "manual"
+    assert result["reason"] == "submission claim lost; verify"
+    rec = attempt(conn)
+    assert rec["outcome"] == "manual"
+    assert rec["confirmation_observed"] == 0
+    assert conn.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
+
+
+def test_executor_dry_run_rechecks_ready_status_before_adapter(tmp_path, monkeypatch) -> None:
+    conn, row = ready_row(tmp_path, ats="greenhouse")
+    conn.execute("UPDATE postings SET status='submitted', outcome='submitted' WHERE posting_id='one'")
+    conn.commit()
+    monkeypatch.setattr("submission.executor._posting_dead", lambda url: False)
+    monkeypatch.setattr("submission.executor.run_adapter", lambda payload: pytest.fail("adapter should not run"))
+
+    result = execute_claimed_posting(conn, row, lane=DIRECT, dry_run=True, worker_id="direct-1")
+
+    assert result == {
+        "company": "Example",
+        "ats": "unknown",
+        "outcome": "skipped",
+        "reason": "dry-run row no longer ready",
+    }
+    assert conn.execute("SELECT COUNT(*) FROM submission_attempts").fetchone()[0] == 0

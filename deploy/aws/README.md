@@ -174,7 +174,7 @@ Open an SSM shell and enable one stage at a time:
 sudo systemctl enable --now jobhunt@drip.timer jobhunt@inbox.timer
 
 # Ordinary application submission only after reviewing the queue.
-sudo systemctl enable --now jobhunt@submit.timer
+sudo systemctl enable --now jobhunt-submit.service
 
 # Full-auto fast lane last.
 sudo systemctl enable --now jobhunt@sprint.timer
@@ -191,8 +191,8 @@ Stop EC2 workers without destroying state:
 
 ```bash
 sudo systemctl disable --now \
-  jobhunt@drip.timer jobhunt@revise.timer jobhunt@submit.timer \
-  jobhunt@sprint.timer jobhunt@inbox.timer jobhunt-queue-sync.timer
+  jobhunt@drip.timer jobhunt@revise.timer jobhunt@sprint.timer \
+  jobhunt@inbox.timer jobhunt-queue-sync.timer jobhunt-submit.service
 ```
 
 Do not run `terraform destroy` as an operational rollback. The EC2 instance and

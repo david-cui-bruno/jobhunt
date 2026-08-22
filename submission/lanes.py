@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import urllib.parse
 from dataclasses import dataclass
 
 from apply.jd import detect_ats
@@ -20,8 +21,10 @@ DIRECT = LanePolicy("direct", frozenset({"greenhouse", "lever", "workable", "rip
 WORKDAY = LanePolicy("workday", frozenset({"workday"}), 1, 2, True)
 ASHBY = LanePolicy("ashby", frozenset({"ashby"}), 1, 1, False)
 MANUAL = LanePolicy("manual", frozenset({"smartrecruiters"}), 0, 0, False)
+EMAIL = LanePolicy("email", frozenset({"email"}), 0, 0, False)
+WAAS = LanePolicy("waas", frozenset({"waas"}), 0, 0, False)
 UNSUPPORTED = LanePolicy("unsupported", frozenset({"other", "icims"}), 0, 0, False)
-POLICIES = (DIRECT, WORKDAY, ASHBY, MANUAL, UNSUPPORTED)
+POLICIES = (DIRECT, WORKDAY, ASHBY, MANUAL, EMAIL, WAAS, UNSUPPORTED)
 
 
 def lane_for(ats: str) -> LanePolicy:
@@ -29,6 +32,12 @@ def lane_for(ats: str) -> LanePolicy:
 
 
 def classify_url(url: str) -> tuple[str, LanePolicy]:
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower()
+    if parsed.scheme == "mailto" or host.endswith("news.ycombinator.com"):
+        return "email", EMAIL
+    if host.endswith("workatastartup.com"):
+        return "waas", WAAS
     ats = detect_ats(url)
     return ats, lane_for(ats)
 

@@ -23,7 +23,7 @@ test -f /opt/jobhunt/out/tracker.db
 test -f /opt/jobhunt/secrets/gmail_client.json
 test -x /opt/jobhunt/.venv/bin/python
 cd /opt/jobhunt
-systemd-analyze verify /etc/systemd/system/jobhunt@.service /etc/systemd/system/jobhunt-queue-sync.service /etc/systemd/system/jobhunt@drip.timer /etc/systemd/system/jobhunt@revise.timer /etc/systemd/system/jobhunt@submit.timer /etc/systemd/system/jobhunt@sprint.timer /etc/systemd/system/jobhunt@inbox.timer /etc/systemd/system/jobhunt-queue-sync.timer
+systemd-analyze verify /etc/systemd/system/jobhunt@.service /etc/systemd/system/jobhunt-submit.service /etc/systemd/system/jobhunt-queue-sync.service /etc/systemd/system/jobhunt@drip.timer /etc/systemd/system/jobhunt@revise.timer /etc/systemd/system/jobhunt@sprint.timer /etc/systemd/system/jobhunt@inbox.timer /etc/systemd/system/jobhunt-queue-sync.timer
 sudo -u jobhunt env PYTHONDONTWRITEBYTECODE=1 /opt/jobhunt/.venv/bin/python -m unittest discover -v -s /opt/jobhunt -p 'test*.py'
 set -a
 . /etc/jobhunt/jobhunt.env
@@ -32,9 +32,10 @@ sudo -u jobhunt --preserve-env=ANTHROPIC_API_KEY env PYTHONDONTWRITEBYTECODE=1 /
 unset ANTHROPIC_API_KEY
 sudo -u jobhunt env PLAYWRIGHT_BROWSERS_PATH=/opt/jobhunt/.cache/ms-playwright JOBHUNT_HEADLESS=1 /opt/jobhunt/.venv/bin/python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True); page=b.new_page(); page.set_content("<title>jobhunt smoke</title><p>ok</p>"); assert page.title()=="jobhunt smoke"; b.close(); p.stop(); print("chromium_smoke: ok")'
 pdflatex --version | head -1
-for timer in jobhunt@drip.timer jobhunt@revise.timer jobhunt@submit.timer jobhunt@sprint.timer jobhunt@inbox.timer jobhunt-queue-sync.timer; do
+for timer in jobhunt@drip.timer jobhunt@revise.timer jobhunt@sprint.timer jobhunt@inbox.timer jobhunt-queue-sync.timer; do
   test "$(systemctl is-enabled "${timer}" 2>/dev/null || true)" = "disabled"
 done
+test "$(systemctl is-enabled jobhunt-submit.service 2>/dev/null || true)" = "disabled"
 echo VERIFY_OK
 EOF
 

@@ -81,6 +81,26 @@ class AwsDeploymentTests(unittest.TestCase):
         self.assertIn("Restart=always", service)
         self.assertIn("RestartSec=10", service)
 
+    def test_obsolete_submit_timer_is_not_referenced(self) -> None:
+        paths = [
+            ROOT / "deploy" / "VPS.md",
+            AWS / "README.md",
+            AWS / "stage-and-bootstrap.sh",
+            AWS / "verify-instance.sh",
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertNotIn("jobhunt@submit.timer", path.read_text())
+
+    def test_architecture_docs_use_canonical_posting_not_company_freeze(self) -> None:
+        readme = (ROOT / "README.md").read_text()
+        design = (ROOT / "docs" / "system-design.html").read_text()
+        for text in (readme, design):
+            self.assertIn("Canonical posting dedupe", text)
+            self.assertNotIn("one application per company ever", text)
+            self.assertNotIn("one app per company forever", text)
+            self.assertNotIn("freezes the company forever", text)
+
     def test_ssm_scripts_run_remote_checks_in_bash(self) -> None:
         for name in ("stage-and-bootstrap.sh", "verify-instance.sh"):
             script = (AWS / name).read_text()

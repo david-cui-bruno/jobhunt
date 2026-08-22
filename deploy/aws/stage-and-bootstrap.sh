@@ -181,7 +181,7 @@ else
   rm -f /etc/jobhunt/application_answers.yaml.tmp
 fi
 cd /opt/jobhunt
-systemctl disable --now jobhunt@drip.timer jobhunt@revise.timer jobhunt@submit.timer jobhunt@sprint.timer jobhunt@inbox.timer jobhunt-queue-sync.timer || true
+systemctl disable --now jobhunt@drip.timer jobhunt@revise.timer jobhunt@sprint.timer jobhunt@inbox.timer jobhunt-queue-sync.timer jobhunt-submit.service || true
 sudo -u jobhunt env PYTHONDONTWRITEBYTECODE=1 /opt/jobhunt/.venv/bin/python -m unittest discover -v -s /opt/jobhunt -p 'test*.py'
 set -a
 . /etc/jobhunt/jobhunt.env
@@ -265,5 +265,5 @@ Bootstrap finished. No jobhunt timers were enabled.
 Next:
   1. Reauthenticate Gmail using ./gmail-port-forward.sh and deploy/reauth_gmail.py.
   2. Run ./verify-instance.sh.
-  3. Enable revise first, then drip/inbox, submit, and sprint last.
+  3. Enable revise first, then drip/inbox, the submit daemon, and sprint last.
 EOF

@@ -153,7 +153,7 @@ column is the whole coordination mechanism. These are the real transitions:</p>
  │                └──sprint.py (fast lane: new posting──────┤   (4-min timer race:
  │                    tailor + submit in one pass)          │    speed-to-apply wins offers)
  │                                                          │
- ├──▶ <span class="s-dim">filtered_out</span>   wrong role / season / dupe company    ├──▶ <span class="s-warn">manual</span>   needs a human:
+  ├──▶ <span class="s-dim">filtered_out</span>   wrong role / season / duplicate posting ├──▶ <span class="s-warn">manual</span>   needs a human:
  │      (82% of everything discovered — by design)          │      unanswerable required question,
  │                                                          │      CAPTCHA, unsupported ATS,
  ├──▶ <span class="s-dim">skipped</span>        David's explicit rules               │      broken login. <b>Parks aside —
@@ -205,7 +205,7 @@ of mechanical-engineering co-ops and fall-term roles.</p>
   <tr><td>roles_include</td><td>everything engineer-adjacent (word-boundary matched): SWE / ML / AI / infra / MTS / founding, product, forward-deployed, solutions engineer / SRE / security / embedded software / mobile / data science / quant / PM &amp; APM</td></tr>
   <tr><td>roles_exclude</td><td>winter + summer terms only — no fall, no spring, no co-ops, no "new grad" (except YC/startup sources where full-time is wanted); no product marketing</td></tr>
   <tr><td>batch bans</td><td>no P26 YC companies (David's rule)</td></tr>
-  <tr><td>one-app-per-company</td><td>ever. An intern posting beats a pending full-time one at the same company; a submitted application freezes the company forever</td></tr>
+  <tr><td>canonical posting dedupe</td><td>Canonical posting dedupe blocks mirrored rows for the same external posting before any form or email is touched; distinct roles at one company can proceed independently</td></tr>
   <tr><td>hard excludes</td><td>PhD-required, unpaid, hardware/EE/mechanical, IT support, non-software "engineering intern" variants (bridge/project/GTM/process…)</td></tr>
 </table></div>
 

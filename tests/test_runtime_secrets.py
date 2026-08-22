@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import plistlib
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -139,6 +141,35 @@ def test_migration_writes_mode_600_without_printing_values(tmp_path: Path, capsy
     stdout = capsys.readouterr().out
     assert "ANTHROPIC_API_KEY" in stdout
     assert "fake-secret" not in stdout
+
+
+def test_migration_documented_direct_cli_runs_without_exposing_values(tmp_path: Path) -> None:
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    secret_value = "fake-secret-never-print"
+    write_plist(agents / "com.jobhunt.drip.plist", {"ANTHROPIC_API_KEY": secret_value, "PATH": "/usr/bin"})
+    output = tmp_path / "runtime.env"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/migrate_launchd_secrets.py",
+            "--launch-agents",
+            str(agents),
+            "--output",
+            str(output),
+        ],
+        cwd=Path(__file__).resolve().parent.parent,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert output.read_text() == f"ANTHROPIC_API_KEY={secret_value}\n"
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert "ANTHROPIC_API_KEY" in completed.stdout
+    assert secret_value not in completed.stdout
+    assert secret_value not in completed.stderr
 
 
 def test_migration_requires_identical_values_across_plists(tmp_path: Path) -> None:

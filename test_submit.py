@@ -566,7 +566,7 @@ class SubmitSafetyTests(unittest.TestCase):
             self.assertIn("flagged for human review", results[0]["reason"])
             conn = sqlite3.connect(db)
             self.assertEqual(
-                ("manual", "manual", 0),
+                ("manual", "manual", 1),
                 conn.execute(
                     "SELECT status,outcome,attempt_count FROM postings WHERE posting_id='one'"
                 ).fetchone(),

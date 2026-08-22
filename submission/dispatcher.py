@@ -84,6 +84,21 @@ def _mark_worker_failure(db_path: Path, posting_id: str, reason: str) -> None:
         conn.close()
 
 
+def _release_missing_claim(conn: sqlite3.Connection, posting_id: str, reason: str) -> bool:
+    changed = conn.execute(
+        """
+        UPDATE postings
+        SET status='manual', outcome='manual', last_error=?,
+            attempt_count=COALESCE(attempt_count, 0) + 1,
+            last_attempt_at=?
+        WHERE posting_id=? AND status='submitting'
+        """,
+        (reason[:1000], int(time.time()), posting_id),
+    ).rowcount
+    conn.commit()
+    return changed == 1
+
+
 def execute(posting_id: str, lane: LanePolicy, *, db_path: Path = DB, dry_run: bool = False) -> dict:
     """Claim and execute one posting using a fresh SQLite connection in this worker thread."""
     conn = connect_tracker(db_path)
@@ -92,6 +107,9 @@ def execute(posting_id: str, lane: LanePolicy, *, db_path: Path = DB, dry_run: b
             return {"posting_id": posting_id, "lane": lane.name, "outcome": "skipped", "reason": "claim lost"}
         row = _claimed_row(conn, posting_id, dry_run=dry_run)
         if row is None:
+            if not dry_run:
+                _release_missing_claim(conn, posting_id, "claimed row missing")
+                return {"posting_id": posting_id, "lane": lane.name, "outcome": "manual", "reason": "claimed row missing"}
             return {"posting_id": posting_id, "lane": lane.name, "outcome": "skipped", "reason": "claimed row missing"}
         result = execute_claimed_posting(
             conn,

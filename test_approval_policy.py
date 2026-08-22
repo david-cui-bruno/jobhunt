@@ -241,12 +241,13 @@ class AutonomousApprovalPolicyTests(unittest.TestCase):
             )
             conn.close()
 
-    def test_existing_company_application_blocks_email_application(self) -> None:
+    def test_existing_distinct_company_role_does_not_block_email_application(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             db = root / "tracker.db"
             pdf = root / "resume.pdf"
             pdf.write_bytes(b"pdf")
+            _write_quality(pdf, "new")
             conn = sqlite3.connect(db)
             conn.executescript(
                 """
@@ -274,11 +275,61 @@ class AutonomousApprovalPolicyTests(unittest.TestCase):
 
             with (
                 mock.patch.object(email_apply, "DB", db),
+                mock.patch.object(email_apply, "fetch_hn_text", return_value="jobs@example.com"),
+                mock.patch.object(
+                    email_apply,
+                    "_claude",
+                    return_value={"to": "jobs@example.com", "subject": "Application", "body": "Hello"},
+                ) as draft,
+                mock.patch.object(email_apply, "_send_application", return_value={"id": "sent-new"}) as send_company,
+            ):
+                self.assertEqual([" example "], email_apply.compose_ready_email_postings())
+
+            draft.assert_called_once()
+            send_company.assert_called_once()
+
+    def test_existing_same_canonical_posting_blocks_email_application(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / "tracker.db"
+            pdf = root / "resume.pdf"
+            pdf.write_bytes(b"pdf")
+            _write_quality(pdf, "new")
+            conn = sqlite3.connect(db)
+            conn.executescript(
+                """
+                CREATE TABLE postings (
+                    posting_id TEXT PRIMARY KEY, company TEXT, title TEXT,
+                    url TEXT, status TEXT
+                );
+                CREATE TABLE emails (posting_id TEXT PRIMARY KEY, resume_pdf TEXT);
+                CREATE TABLE applications (
+                    posting_id TEXT PRIMARY KEY, resume_path TEXT, ats TEXT,
+                    submitted_at INTEGER, confirmation TEXT, notes TEXT
+                );
+                CREATE TABLE sent_messages (message_id TEXT PRIMARY KEY);
+                INSERT INTO postings VALUES
+                    ('old', 'Example', 'Engineer',
+                     'https://news.ycombinator.com/item?id=2', 'submitted'),
+                    ('new', 'Example', 'Engineer',
+                     'https://news.ycombinator.com/item?id=2', 'ready');
+                INSERT INTO applications VALUES
+                    ('old', 'old.pdf', 'email', 1, 'confirmed', '');
+                """
+            )
+            conn.execute("INSERT INTO emails VALUES (?,?)", ("new", str(pdf)))
+            conn.commit()
+            conn.close()
+
+            with (
+                mock.patch.object(email_apply, "DB", db),
+                mock.patch.object(email_apply, "fetch_hn_text") as fetch,
                 mock.patch.object(email_apply, "_claude") as draft,
                 mock.patch.object(email_apply, "_send_application") as send_company,
             ):
                 self.assertEqual([], email_apply.compose_ready_email_postings())
 
+            fetch.assert_not_called()
             draft.assert_not_called()
             send_company.assert_not_called()
 

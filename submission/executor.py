@@ -94,16 +94,29 @@ def execute_claimed_posting(
     url = row["url"]
     pdf = _runtime_path(row["resume_pdf"])
 
+    if dry_run:
+        current = conn.execute("SELECT status FROM postings WHERE posting_id=?", (posting_id,)).fetchone()
+        if current is None or current[0] != "ready":
+            return {
+                "company": company,
+                "ats": "unknown",
+                "outcome": "skipped",
+                "reason": "dry-run row no longer ready",
+            }
+
     quality_ok, quality_reason = _resume_quality_ready(pdf, posting_id)
     if not quality_ok:
         reason = f"resume quality gate: {quality_reason}"
         if not dry_run:
-            conn.execute(
-                "UPDATE postings SET status='manual', outcome='manual', last_error=? "
-                "WHERE posting_id=? AND status='submitting'",
-                (reason, posting_id),
+            _mark_outcome(
+                conn,
+                posting_id,
+                "manual",
+                "manual",
+                reason,
+                dry_run,
+                expected_status="submitting",
             )
-            conn.commit()
         return {"company": company, "ats": "unknown", "outcome": "manual", "reason": reason}
 
     if _posting_dead(url):
@@ -175,11 +188,17 @@ def execute_claimed_posting(
         if outcome == "submitted" and not dry_run:
             if not changed:
                 conn.rollback()
+                outcome = "manual"
+                reason = "submission claim lost; verify"
+                res = dict(res)
+                res["outcome"] = "manual"
+                res["submitted"] = False
+                res["submission_uncertain"] = False
                 return {
                     "company": company,
                     "ats": res.get("detected_ats", "unknown"),
-                    "outcome": "manual",
-                    "reason": "submission claim lost; verify",
+                    "outcome": outcome,
+                    "reason": reason,
                 }
             detected_ats = str(res.get("detected_ats", "unknown"))
             notes = str(_row_get(row, "application_notes", "") or "")

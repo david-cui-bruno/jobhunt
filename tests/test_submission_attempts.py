@@ -14,6 +14,14 @@ def test_connect_tracker_enables_wal_and_busy_timeout(tmp_path: Path) -> None:
     conn.close()
 
 
+def test_connect_tracker_does_not_enable_foreign_key_enforcement(tmp_path: Path) -> None:
+    conn = connect_tracker(tmp_path / "tracker.db")
+    try:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_attempt_ledger_is_append_only_and_finishes_once() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_submission_attempts(conn)
