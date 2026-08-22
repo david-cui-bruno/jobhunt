@@ -210,6 +210,12 @@ def execute_claimed_posting(
                 )
             except sqlite3.IntegrityError:
                 conn.rollback()
+                outcome = "manual"
+                reason = "already present in applications ledger; not resubmitted"
+                res = dict(res)
+                res["submitted"] = False
+                res["outcome"] = outcome
+                res["reason"] = reason
                 conn.execute(
                     "UPDATE postings SET status='submitted', outcome='submitted', "
                     "last_error='already present in applications ledger' "
@@ -220,8 +226,8 @@ def execute_claimed_posting(
                 return {
                     "company": company,
                     "ats": detected_ats,
-                    "outcome": "submitted",
-                    "reason": "already present in applications ledger; not resubmitted",
+                    "outcome": outcome,
+                    "reason": reason,
                     "attempt_id": attempt_id,
                 }
             conn.commit()

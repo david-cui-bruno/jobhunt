@@ -34,7 +34,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from notify import mailer
-from submission.ashby_policy import ensure_lane_state, load_state
+from submission.ashby_policy import INTERVAL_MINUTES, ensure_lane_state, load_state
 from submission.metrics import attempt_metrics, queue_metrics
 from submission.lanes import ASHBY, classify_url
 
@@ -142,7 +142,7 @@ def _ashby_breaker_state(conn: sqlite3.Connection, now: Optional[int] = None) ->
         "blocked": blocked,
         "resume_at": state.blocked_until if blocked else state.next_attempt_at,
         "tier": state.tier,
-        "interval_minutes": (180, 90, 45)[state.tier],
+        "interval_minutes": INTERVAL_MINUTES[state.tier],
         "consecutive_confirmed": state.consecutive_confirmed,
         "ready_depth": ready_depth,
     }
@@ -162,10 +162,6 @@ def _submission_health_lines(d: dict) -> list[str]:
     if queues:
         lines.append("queues: " + ", ".join(f"{row['lane']} {row['depth']}" for row in queues))
     breaker = d.get("ashby_breaker") or {}
-    if breaker.get("paused") and "ready_depth" not in breaker:
-        resume = datetime.datetime.fromtimestamp(int(breaker["resume_at"]), ET).strftime("%-I:%M%p ET")
-        lines.append(f"ashby breaker: paused until {resume.lower()}")
-        return lines
     if breaker and not (breaker.get("paused") and not breaker.get("blocked") and breaker.get("ready_depth", 0) == 0):
         state = "blocked" if breaker.get("blocked") else ("paused" if breaker.get("paused") else "enabled")
         when = datetime.datetime.fromtimestamp(int(breaker.get("resume_at") or 0), ET).strftime("%-I:%M%p ET")

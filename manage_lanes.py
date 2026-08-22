@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from submission.ashby_policy import enable_canary, load_state, set_enabled
+from submission.ashby_policy import INTERVAL_MINUTES, can_attempt, enable_canary, load_state, set_enabled
 from submission.database import DB, connect_tracker
 from submission.dispatcher import eligible_ashby_posting
 from submission.executor import _resume_quality_ready, _runtime_path
@@ -29,7 +29,7 @@ def _status(conn) -> dict:
         "ats": "ashby",
         "enabled": state.enabled,
         "tier": state.tier,
-        "interval_minutes": (180, 90, 45)[state.tier],
+        "interval_minutes": INTERVAL_MINUTES[state.tier],
         "consecutive_confirmed": state.consecutive_confirmed,
         "next_attempt_at": state.next_attempt_at,
         "blocked_until": state.blocked_until,
@@ -40,9 +40,11 @@ def _status(conn) -> dict:
 
 
 def _preview(conn) -> dict:
+    state = load_state(conn)
     posting_id = eligible_ashby_posting(conn, now=int(time.time()))
     if posting_id is None:
-        return {"ats": "ashby", "posting_id": None, "reason": "no eligible candidate"}
+        code = "no_eligible_candidate" if can_attempt(state, now=int(time.time())) else "policy_not_due"
+        return {"ats": "ashby", "candidate": None, "reason": {"code": code}}
     row = conn.execute(
         "SELECT p.posting_id,p.company,p.title,p.url,e.resume_pdf FROM postings p JOIN emails e USING(posting_id) WHERE p.posting_id=?",
         (posting_id,),

@@ -66,13 +66,23 @@ def _verify_finished_attempt(conn: sqlite3.Connection, attempt_id: str, posting_
 
 
 def _record_ashby_policy_result(db_path: Path, result: dict) -> None:
-    if result.get("outcome") == "skipped" or result.get("reason") == "claim lost":
+    reason_text = str(result.get("reason") or "")
+    outcome = str(result.get("outcome") or "")
+    pre_attempt_exits = (
+        outcome == "skipped"
+        or reason_text == "claim lost"
+        or reason_text == "claimed row missing"
+        or reason_text.startswith("resume quality gate:")
+        or reason_text == "liveness check marked posting stale"
+    )
+    if pre_attempt_exits:
         return
     attempt_id = result.get("attempt_id")
-    if not attempt_id:
-        return
     conn = connect_tracker(db_path)
     try:
+        if not attempt_id:
+            set_enabled(conn, False, now=int(time.time()))
+            return
         row = _verify_finished_attempt(conn, str(attempt_id), str(result.get("posting_id")))
         if row is None:
             set_enabled(conn, False, now=int(time.time()))

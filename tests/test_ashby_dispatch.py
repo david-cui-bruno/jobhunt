@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from submission.ashby_policy import ensure_lane_state, load_state, record_result
+from submission.ashby_policy import INTERVAL_MINUTES, ensure_lane_state, load_state, record_result
 from submission.attempts import ensure_submission_attempts, start_attempt
 
 
@@ -99,6 +99,23 @@ def test_eligible_ashby_posting_obeys_policy_and_exclusions(db: Path, tmp_path: 
     assert eligible_ashby_posting(conn, now=2000) is None
     conn.close()
 
+
+def test_eligible_ashby_posting_selects_oldest_of_multiple_due_candidates(db: Path, tmp_path: Path) -> None:
+    from submission.dispatcher import eligible_ashby_posting
+
+    seed(db, tmp_path, "newer")
+    seed(db, tmp_path, "older")
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE postings SET last_attempt_at=200 WHERE posting_id='newer'")
+    conn.execute("UPDATE postings SET last_attempt_at=100 WHERE posting_id='older'")
+    conn.commit()
+    conn.close()
+    enable_due(db, now=0)
+
+    conn = sqlite3.connect(db)
+    assert eligible_ashby_posting(conn, now=1000) == "older"
+    conn.close()
+
     seed(db, tmp_path, "bad-quality", quality=False)
     seed(db, tmp_path, "eligible")
     conn = sqlite3.connect(db)
@@ -134,7 +151,7 @@ def test_dispatch_cycle_attempts_one_ashby_and_records_only_finished_exact_attem
     assert row[1:] == (1000, "submitted", "confirmed")
     state = load_state(conn)
     assert state.consecutive_confirmed == 1
-    assert state.next_attempt_at == 1000 + 180 * 60
+    assert state.next_attempt_at == 1000 + INTERVAL_MINUTES[0] * 60
     conn.close()
 
 
@@ -167,6 +184,67 @@ def test_dispatcher_pauses_on_missing_or_unfinished_attempt_and_keeps_other_lane
     conn.close()
 
 
+def test_ashby_worker_result_missing_attempt_id_pauses_fail_closed(db: Path, tmp_path: Path, monkeypatch) -> None:
+    from submission.dispatcher import dispatch_cycle
+
+    seed(db, tmp_path, "ashby-1")
+    seed(db, tmp_path, "gh", url="https://boards.greenhouse.io/acme/jobs/1")
+    enable_due(db, now=0)
+
+    def fake_execute(posting_id, lane, **kwargs):
+        if lane.name == "ashby":
+            return {"outcome": "failed", "reason": "dispatcher worker failed: RuntimeError: after launch"}
+        return {"outcome": "submitted", "reason": "confirmed"}
+
+    monkeypatch.setattr("submission.dispatcher.execute", fake_execute)
+
+    results = dispatch_cycle(db)
+
+    assert {r["posting_id"] for r in results} == {"ashby-1", "gh"}
+    conn = sqlite3.connect(db)
+    assert load_state(conn).enabled is False
+    conn.close()
+
+
+def test_claim_loss_quality_stale_missing_row_and_dry_run_do_not_update_policy(db: Path, tmp_path: Path, monkeypatch) -> None:
+    from submission.dispatcher import _record_ashby_policy_result, dispatch_cycle
+
+    seed(db, tmp_path, "ashby-1")
+    enable_due(db, now=0)
+    for result in (
+        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "skipped", "reason": "claim lost"},
+        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "manual", "reason": "claimed row missing"},
+        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "manual", "reason": "resume quality gate: missing"},
+        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "stale", "reason": "liveness check marked posting stale"},
+    ):
+        _record_ashby_policy_result(db, result)
+        conn = sqlite3.connect(db)
+        assert load_state(conn).enabled is True
+        conn.close()
+
+    called = []
+    monkeypatch.setattr("submission.dispatcher._record_ashby_policy_result", lambda *args: called.append(args))
+    dispatch_cycle(db, dry_run=True)
+    assert called == []
+
+
+def test_adapter_exception_has_attempt_id_and_pauses_ashby(db: Path, tmp_path: Path, monkeypatch) -> None:
+    from submission.dispatcher import dispatch_cycle
+
+    seed(db, tmp_path, "ashby-1")
+    enable_due(db, now=0)
+    monkeypatch.setattr("submission.executor._posting_dead", lambda url: False)
+    monkeypatch.setattr("submission.executor.run_adapter", lambda payload: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    [result] = dispatch_cycle(db)
+
+    assert result["attempt_id"]
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT finished_at FROM submission_attempts WHERE attempt_id=?", (result["attempt_id"],)).fetchone()[0]
+    assert load_state(conn).enabled is False
+    conn.close()
+
+
 def test_manage_lanes_json_and_nonexecuting(db: Path, tmp_path: Path) -> None:
     seed(db, tmp_path, "ashby-1")
     status = subprocess.run([sys.executable, "manage_lanes.py", "--db", str(db), "status", "ashby"], check=True, text=True, capture_output=True)
@@ -174,6 +252,9 @@ def test_manage_lanes_json_and_nonexecuting(db: Path, tmp_path: Path) -> None:
     assert data["ats"] == "ashby"
     assert data["ready_depth"] == 1
     assert data["eligible_posting_id"] is None
+    no_candidate = json.loads(subprocess.run([sys.executable, "manage_lanes.py", "--db", str(db), "preview", "ashby"], check=True, text=True, capture_output=True).stdout)
+    assert no_candidate["candidate"] is None
+    assert no_candidate["reason"]["code"] == "policy_not_due"
 
     subprocess.run([sys.executable, "manage_lanes.py", "--db", str(db), "enable-canary", "ashby"], check=True, text=True, capture_output=True)
     preview = json.loads(subprocess.run([sys.executable, "manage_lanes.py", "--db", str(db), "preview", "ashby"], check=True, text=True, capture_output=True).stdout)
