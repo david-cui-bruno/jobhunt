@@ -109,17 +109,21 @@ def start_hide_watchdog(target: ChromeTarget, *, timeout_seconds: float = 5.0) -
     return subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def ensure_hidden_after_launch(target: ChromeTarget, *, timeout_seconds: float = 1.0) -> None:
+def ensure_hidden_after_launch(target: ChromeTarget, *, timeout_seconds: float = 5.0) -> None:
     helper_path = Path(__file__).with_name("hide_macos_browser.py")
     command = [sys.executable, str(helper_path), target.process_name, str(timeout_seconds)]
     result = subprocess.run(
         command,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Dedicated Chrome process {target.process_name!r} could not be hidden after launch.")
+        detail = (result.stderr or "hide helper failed").strip()
+        raise RuntimeError(
+            f"Dedicated Chrome process {target.process_name!r} could not be hidden after launch: {detail}"
+        )
 
 
 @contextmanager
@@ -129,6 +133,8 @@ def persistent_ashby_context(
     profile_dir: Path = PROFILE_DIR,
 ) -> Iterator[object]:
     target = resolve_chrome()
+    if not target.dedicated:
+        raise RuntimeError("Ashby browser automation requires a dedicated Chrome for Testing target.")
     profile_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     profile_dir.chmod(0o700)
     watchdog = start_hide_watchdog(target)

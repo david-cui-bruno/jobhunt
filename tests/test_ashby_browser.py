@@ -169,6 +169,19 @@ def test_persistent_context_rehides_after_launch_before_yield(tmp_path: Path, mo
     assert events == ["launch", "rehide:Google Chrome for Testing", "yield"]
 
 
+def test_persistent_context_rejects_stable_chrome_before_watchdog_or_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = ChromeTarget(make_binary(tmp_path / "Google Chrome"), "Google Chrome", False)
+    monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
+    monkeypatch.setattr(
+        "apply.ashby_browser.start_hide_watchdog",
+        lambda seen_target: pytest.fail("stable Chrome watchdog must not start"),
+    )
+
+    with pytest.raises(RuntimeError, match="dedicated Chrome for Testing"):
+        with persistent_ashby_context(FakePlaywright([], FakeContext()), profile_dir=tmp_path / "profile"):
+            pass
+
+
 def test_persistent_launch_receives_real_browser_arguments_and_no_spoofing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = ChromeTarget(make_binary(tmp_path / "Google Chrome for Testing"), "Google Chrome for Testing", True)
     context = FakeContext()
@@ -237,13 +250,15 @@ def test_post_launch_hide_runs_exact_helper_and_fails_closed(monkeypatch: pytest
     monkeypatch.setattr(ashby_browser.subprocess, "run", fake_run)
     target = ChromeTarget(tmp_path / "Ashby Chrome for Testing", "Ashby Chrome for Testing", True)
 
-    with pytest.raises(RuntimeError, match="could not be hidden after launch"):
-        ashby_browser.ensure_hidden_after_launch(target, timeout_seconds=0.75)
+    with pytest.raises(RuntimeError, match="process never became hideable"):
+        ashby_browser.ensure_hidden_after_launch(target)
 
     command, kwargs = calls[0]
-    assert command[-2:] == ["Ashby Chrome for Testing", "0.75"]
+    assert command[-2:] == ["Ashby Chrome for Testing", "5.0"]
     assert command[0] == ashby_browser.sys.executable
     assert kwargs.get("shell") is not True
+    assert kwargs["stderr"] == subprocess.PIPE
+    assert kwargs["text"] is True
 
 
 def test_helper_command_and_matching_are_exact() -> None:
@@ -356,6 +371,27 @@ def test_watchdog_is_reaped_when_persistent_launch_fails(tmp_path: Path, monkeyp
     assert watchdog.terminate_calls == 1
     assert watchdog.wait_calls == 1
     assert watchdog.kill_calls == 0
+
+
+def test_context_and_watchdog_are_cleaned_up_when_post_launch_hide_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = ChromeTarget(make_binary(tmp_path / "Google Chrome for Testing"), "Google Chrome for Testing", True)
+    watchdog = FakeWatchdogPopen(running=True)
+    context = FakeContext()
+    monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
+    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: watchdog)
+    monkeypatch.setattr(
+        ashby_browser,
+        "ensure_hidden_after_launch",
+        lambda seen_target: (_ for _ in ()).throw(RuntimeError("post-launch hide failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="post-launch hide failed"):
+        with persistent_ashby_context(FakePlaywright([], context), profile_dir=tmp_path / "profile"):
+            pass
+
+    assert context.close_calls == 1
+    assert watchdog.terminate_calls == 1
+    assert watchdog.wait_calls == 1
 
 
 def test_watchdog_cleanup_handles_already_exited_and_kill_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

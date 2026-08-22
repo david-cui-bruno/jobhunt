@@ -102,6 +102,7 @@ def main(argv: list[str]) -> int:
         if hide_once(process_name) == "hidden":
             return 0
         time.sleep(0.1)
+    print(f"timed out hiding {process_name}", file=sys.stderr)
     return 1
 
 

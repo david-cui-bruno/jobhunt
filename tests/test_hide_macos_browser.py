@@ -63,7 +63,13 @@ def test_visibility_query_failures_raise_safe_error(monkeypatch, returncode, std
         hide.visible_windows_for_process("Google Chrome for Testing")
 
 
-def test_hide_helper_fails_when_process_never_becomes_hideable(monkeypatch):
-    monkeypatch.setattr(hide, "hide_once", lambda process_name: "waiting")
+def test_hide_helper_retries_then_fails_when_process_never_becomes_hideable(monkeypatch, capsys):
+    calls = []
+    times = iter([0.0, 0.0, 2.0])
+    monkeypatch.setattr(hide.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(hide.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(hide, "hide_once", lambda process_name: calls.append(process_name) or "waiting")
 
-    assert hide.main(["Ashby Chrome for Testing", "0"]) == 1
+    assert hide.main(["Ashby Chrome for Testing", "1"]) == 1
+    assert calls == ["Ashby Chrome for Testing"]
+    assert "timed out hiding Ashby Chrome for Testing" in capsys.readouterr().err
