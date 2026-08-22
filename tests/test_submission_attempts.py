@@ -22,6 +22,17 @@ def test_connect_tracker_does_not_enable_foreign_key_enforcement(tmp_path: Path)
         conn.close()
 
 
+def test_connect_tracker_initializes_disabled_ashby_lane_state(tmp_path: Path) -> None:
+    conn = connect_tracker(tmp_path / "tracker.db")
+    try:
+        row = conn.execute(
+            "SELECT enabled, tier, consecutive_confirmed, policy_revision FROM ats_lane_state WHERE ats='ashby'"
+        ).fetchone()
+        assert tuple(row) == (0, 0, 0, "ashby-canary-v1")
+    finally:
+        conn.close()
+
+
 def test_attempt_ledger_is_append_only_and_finishes_once() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_submission_attempts(conn)
