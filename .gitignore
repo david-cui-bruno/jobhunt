@@ -4,6 +4,9 @@ node_modules/
 *.env
 secrets/
 out/
+.jobhunt-browser-profiles/
+out/browser-profiles/
+.superpowers/sdd/2026-08-22-ashby-recovery-plan/task-2-report.md
 *.pdf
 *.log
 .DS_Store
