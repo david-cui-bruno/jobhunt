@@ -109,6 +109,19 @@ def start_hide_watchdog(target: ChromeTarget, *, timeout_seconds: float = 5.0) -
     return subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def ensure_hidden_after_launch(target: ChromeTarget, *, timeout_seconds: float = 1.0) -> None:
+    helper_path = Path(__file__).with_name("hide_macos_browser.py")
+    command = [sys.executable, str(helper_path), target.process_name, str(timeout_seconds)]
+    result = subprocess.run(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Dedicated Chrome process {target.process_name!r} could not be hidden after launch.")
+
+
 @contextmanager
 def persistent_ashby_context(
     pw,
@@ -126,6 +139,7 @@ def persistent_ashby_context(
             headless=False,
             executable_path=str(target.executable),
         )
+        ensure_hidden_after_launch(target)
         yield ctx
     except BaseException:
         with suppress(Exception):

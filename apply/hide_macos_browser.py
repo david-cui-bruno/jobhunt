@@ -102,7 +102,7 @@ def main(argv: list[str]) -> int:
         if hide_once(process_name) == "hidden":
             return 0
         time.sleep(0.1)
-    return 0
+    return 1
 
 
 if __name__ == "__main__":

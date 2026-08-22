@@ -61,3 +61,9 @@ def test_visibility_query_failures_raise_safe_error(monkeypatch, returncode, std
 
     with pytest.raises(hide.VisibilityQueryError, match=message):
         hide.visible_windows_for_process("Google Chrome for Testing")
+
+
+def test_hide_helper_fails_when_process_never_becomes_hideable(monkeypatch):
+    monkeypatch.setattr(hide, "hide_once", lambda process_name: "waiting")
+
+    assert hide.main(["Ashby Chrome for Testing", "0"]) == 1

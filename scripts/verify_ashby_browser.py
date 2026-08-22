@@ -68,6 +68,8 @@ def _run_about_blank(target: ChromeTarget) -> dict[str, Any]:
                 if isinstance(exc, VisibilityEvidenceError):
                     raise
                 raise VisibilityEvidenceError(str(exc)) from exc
+            if visibility["visible"]:
+                raise RuntimeError("Dedicated Ashby browser remained visible after the hide watchdog.")
 
     return {
         "mode": "about-blank",

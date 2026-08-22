@@ -263,18 +263,20 @@ like. Detection routes by URL (with redirect-chasing for postings that link a ho
   A 24-hour spam breaker rolls back one tier. Uncertainty pauses. Click-uncertain postings are
   never retried. Postings with completed attempts are never reused.</p><span class="tag warn">disabled by default</span></div>
   <div class="card"><h4>Ashby browser gate</h4><p>The persistent profile lives under ignored
-  <code>.jobhunt-browser-profiles/ashby</code>. When ordinary Chrome is in use, Ashby requires a
-  separately installed Chrome for Testing. Stable Chrome is rejected for native smoke and ordinary
-  Chrome must never be hidden. Verification uses <code>scripts/verify_ashby_browser.py --check-only</code>
+  <code>.jobhunt-browser-profiles/ashby</code>. When ordinary Chrome is in use, Ashby requires the
+  separately installed <code>Ashby Chrome for Testing</code> bundle and exact process name. This
+  keeps its process-scoped hide watchdog isolated from the lister's <code>Google Chrome for Testing</code>.
+  Stable Chrome is rejected for native smoke and ordinary Chrome must never be hidden. Verification uses <code>scripts/verify_ashby_browser.py --check-only</code>
   without launch or System Events, and reviewed <code>--about-blank</code> only after a dedicated
   target exists. It reports only executable, process name, profile path, user agent,
   <code>navigator.webdriver</code>, plugin count, and visibility for the dedicated process. No
   fabricated fingerprint fields are used.</p><span class="tag bad">no stable Chrome smoke</span></div>
-  <div class="card"><h4>Ashby rollout gate</h4><p>Live rollout remains deferred. The exact order is:
+  <div class="card"><h4>Ashby rollout gate</h4><p>The irreversible live canary remains deferred. The exact order is:
   install dedicated browser, about:blank verification, integrate the branch, back up live DB and
   run <code>PRAGMA integrity_check</code>, inspect read-only preview, get explicit approval for one
   irreversible submission, run one cycle, immediately pause, then inspect telemetry. Service reload
-  is pending until those gates pass.</p><span class="tag warn">manual approval required</span></div>
+  is pending until those gates pass. The resident Mac has completed the dedicated install, two native
+  smokes, integration, backup, integrity check, schema migration, and disabled-lane preview.</p><span class="tag warn">manual approval required</span></div>
   <div class="card"><h4>Deferred courtesies removed</h4><p>A "don't submit while David is
   gaming" check matched the idle Steam client and silently froze the pipeline for six days.
   Deleted: headless submissions never show a window anyway. Lesson enshrined below.</p></div>

@@ -71,7 +71,11 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   retries a click-uncertain posting, and never reuses any posting with a
   completed attempt. Live canary and service rollout remain deferred.
 - **Ashby browser verification** requires a separately installed Chrome for
-  Testing when ordinary Chrome is in use. Stable Google Chrome is never accepted
+  Testing when ordinary Chrome is in use. The default local target must expose
+  the exact executable and process name `Ashby Chrome for Testing` at
+  `/Applications/Ashby Chrome for Testing.app/Contents/MacOS/Ashby Chrome for Testing`.
+  This separate name prevents the Ashby hide watchdog from touching the lister's
+  `Google Chrome for Testing` process. Stable Google Chrome is never accepted
   for the Ashby about:blank smoke and ordinary Chrome must never be hidden.
   `python3 scripts/verify_ashby_browser.py --check-only [--json]` resolves the
   target without launching or invoking System Events. `--about-blank [--json]`
@@ -85,9 +89,11 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   about:blank verification, integrate the reviewed branch, back up live
   `out/tracker.db` and run `PRAGMA integrity_check`, inspect the read-only live
   preview, obtain explicit user approval for one irreversible submission, run
-  one canary cycle, immediately pause, and inspect telemetry. Until those gates
-  happen, native smoke, branch integration, live DB backup, live preview, user
-  approval, live canary, and service reload are pending.
+  one canary cycle, immediately pause, and inspect telemetry. The dedicated
+  browser install, two native about:blank smokes, branch integration, live DB
+  backup and integrity check, schema migration, and disabled-lane preview have
+  passed on the resident Mac. User approval, the live canary, telemetry review,
+  and service reload remain pending.
 - **Tracking** (every 30 min): reads Gmail, classifies replies (OA invite /
   interview / recruiter reply / rejection / offer), applies labels, archives
   noise, extracts deadlines.

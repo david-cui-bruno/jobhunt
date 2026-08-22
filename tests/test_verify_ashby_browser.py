@@ -123,6 +123,26 @@ def test_visibility_query_error_fails_closed_as_query_error(monkeypatch, capsys)
     assert "process_visibility" not in payload
 
 
+def test_about_blank_fails_closed_when_dedicated_process_remains_visible(monkeypatch, capsys):
+    target = ChromeTarget(Path("/Applications/Ashby Chrome for Testing.app/Contents/MacOS/Ashby Chrome for Testing"), "Ashby Chrome for Testing", True)
+    monkeypatch.setattr(verify, "resolve_chrome", lambda: target)
+    monkeypatch.setattr(verify, "persistent_ashby_context", FakePersistent(FakeContext()))
+    monkeypatch.setattr(verify, "_sync_playwright", lambda: _FakePlaywright())
+    monkeypatch.setattr(
+        verify,
+        "_visibility_for_process",
+        lambda name: {"process_name": name, "visible": True, "window_count": 1},
+    )
+
+    assert verify.main(["--about-blank", "--json"]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "about-blank"
+    assert payload["ok"] is False
+    assert payload["blocker"]["code"] == "fail_closed"
+    assert "remained visible" in payload["blocker"]["message"]
+
+
 class _FakePlaywright:
     def __enter__(self):
         return object()

@@ -146,6 +146,29 @@ def test_watchdog_starts_before_persistent_context_launch(tmp_path: Path, monkey
     assert events[:2] == ["watchdog:Google Chrome for Testing", "launch"]
 
 
+def test_persistent_context_rehides_after_launch_before_yield(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = ChromeTarget(make_binary(tmp_path / "Google Chrome for Testing"), "Google Chrome for Testing", True)
+    events: list[str] = []
+    context = FakeContext()
+    fake_pw = FakePlaywright(events, context)
+    monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
+    monkeypatch.setattr(
+        "apply.ashby_browser.start_hide_watchdog",
+        lambda seen_target: FakeWatchdogPopen(running=False),
+    )
+    monkeypatch.setattr(
+        ashby_browser,
+        "ensure_hidden_after_launch",
+        lambda seen_target: events.append(f"rehide:{seen_target.process_name}"),
+        raising=False,
+    )
+
+    with persistent_ashby_context(fake_pw, profile_dir=tmp_path / "profile"):
+        events.append("yield")
+
+    assert events == ["launch", "rehide:Google Chrome for Testing", "yield"]
+
+
 def test_persistent_launch_receives_real_browser_arguments_and_no_spoofing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = ChromeTarget(make_binary(tmp_path / "Google Chrome for Testing"), "Google Chrome for Testing", True)
     context = FakeContext()
@@ -202,6 +225,25 @@ def test_watchdog_command_construction_uses_argv_and_no_shell(monkeypatch: pytes
     assert isinstance(calls[0]["cmd"], list)
     assert "Google Chrome for Testing" in calls[0]["cmd"]
     assert calls[0]["kwargs"].get("shell") is not True
+
+
+def test_post_launch_hide_runs_exact_helper_and_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 1, "", "process never became hideable")
+
+    monkeypatch.setattr(ashby_browser.subprocess, "run", fake_run)
+    target = ChromeTarget(tmp_path / "Ashby Chrome for Testing", "Ashby Chrome for Testing", True)
+
+    with pytest.raises(RuntimeError, match="could not be hidden after launch"):
+        ashby_browser.ensure_hidden_after_launch(target, timeout_seconds=0.75)
+
+    command, kwargs = calls[0]
+    assert command[-2:] == ["Ashby Chrome for Testing", "0.75"]
+    assert command[0] == ashby_browser.sys.executable
+    assert kwargs.get("shell") is not True
 
 
 def test_helper_command_and_matching_are_exact() -> None:

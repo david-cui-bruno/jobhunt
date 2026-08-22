@@ -276,6 +276,16 @@ def test_claim_loss_quality_stale_missing_row_and_dry_run_do_not_update_policy(d
 
     called = []
     monkeypatch.setattr("submission.dispatcher._record_ashby_policy_result", lambda *args: called.append(args))
+    monkeypatch.setattr(
+        "submission.dispatcher.execute",
+        lambda posting_id, lane, **kwargs: {
+            "posting_id": posting_id,
+            "lane": lane.name,
+            "outcome": "skipped",
+            "reason": "dry run",
+            "pre_attempt": True,
+        },
+    )
     dispatch_cycle(db, dry_run=True)
     assert called == []
 
