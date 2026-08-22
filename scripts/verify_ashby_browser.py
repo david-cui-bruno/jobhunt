@@ -67,6 +67,14 @@ def _run_about_blank(target: ChromeTarget) -> dict[str, Any]:
     }
 
 
+def _emit_value(key: str, value: Any) -> None:
+    if isinstance(value, dict):
+        for nested_key in sorted(value):
+            _emit_value(f"{key}.{nested_key}", value[nested_key])
+        return
+    print(f"{key}: {value}")
+
+
 def _emit(payload: dict[str, Any], *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(payload, sort_keys=True))
@@ -75,7 +83,7 @@ def _emit(payload: dict[str, Any], *, as_json: bool) -> None:
         print(f"{payload['mode']}: ok")
         for key, value in payload.items():
             if key not in {"mode", "ok"}:
-                print(f"{key}: {value}")
+                _emit_value(key, value)
     else:
         blocker = payload["blocker"]
         print(f"{payload['mode']}: blocked ({blocker['code']}): {blocker['message']}")

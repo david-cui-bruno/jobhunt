@@ -16,9 +16,42 @@ APPLESCRIPT = """on run argv
 end run
 """
 
+VISIBILITY_APPLESCRIPT = """on run argv
+  set processName to item 1 of argv
+  tell application "System Events"
+    if not (exists process processName) then
+      return ""
+    end if
+    set visibleWindowNames to {}
+    repeat with candidateWindow in windows of process processName
+      if visible of candidateWindow then
+        set end of visibleWindowNames to name of candidateWindow
+      end if
+    end repeat
+    set AppleScript's text item delimiters to linefeed
+    return visibleWindowNames as text
+  end tell
+end run
+"""
+
 
 def build_osascript_command(process_name: str) -> list[str]:
     return ["osascript", "-e", APPLESCRIPT, process_name]
+
+
+def build_visible_windows_command(process_name: str) -> list[str]:
+    return ["osascript", "-e", VISIBILITY_APPLESCRIPT, process_name]
+
+
+def visible_windows_for_process(process_name: str) -> list[str]:
+    result = subprocess.run(
+        build_visible_windows_command(process_name),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    return [line for line in result.stdout.splitlines() if line]
 
 
 def hide_once(process_name: str) -> str:

@@ -142,6 +142,32 @@ def test_json_mode_emits_single_object(monkeypatch, capsys):
     assert isinstance(json.loads(out), dict)
 
 
+def test_human_check_only_output_is_readable_not_raw_dict(monkeypatch, capsys):
+    target = ChromeTarget(Path("/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"), "Google Chrome for Testing", True)
+    monkeypatch.setattr(verify, "resolve_chrome", lambda: target)
+
+    assert verify.main(["--check-only"]) == 0
+
+    out = capsys.readouterr().out
+    assert "check-only: ok" in out
+    assert "target.dedicated: True" in out
+    assert "target.executable_path:" in out
+    assert "target.process_name: Google Chrome for Testing" in out
+    assert "{'" not in out
+
+
+def test_visibility_output_is_sanitized_by_production_constructor(monkeypatch):
+    import apply.hide_macos_browser as hide
+
+    monkeypatch.setattr(hide, "visible_windows_for_process", lambda name: ["secret-cookie-window", "answer-bank"])
+
+    payload = verify._visibility_for_process("Google Chrome for Testing")
+
+    assert payload == {"process_name": "Google Chrome for Testing", "visible": True, "window_count": 2}
+    assert "secret-cookie-window" not in json.dumps(payload)
+    assert "answer-bank" not in json.dumps(payload)
+
+
 def test_invalid_or_conflicting_flags_fail_without_launch(monkeypatch):
     monkeypatch.setattr(verify, "resolve_chrome", lambda: pytest.fail("resolver should not run"))
     monkeypatch.setattr(verify, "_run_about_blank", lambda target: pytest.fail("browser should not launch"))
