@@ -18,6 +18,9 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from submission.attempts import ensure_submission_attempts
+from submission.database import connect_tracker
+
 ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT / "apply"), str(ROOT / "notify")]
 
@@ -133,6 +136,7 @@ def _ensure_outcome_columns(conn: sqlite3.Connection) -> None:
     for name, definition in columns.items():
         if name not in existing:
             conn.execute(f"ALTER TABLE postings ADD COLUMN {name} {definition}")
+    ensure_submission_attempts(conn)
     conn.commit()
 
 
@@ -383,8 +387,7 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
     ASHBY_PER_RUN = 1
     ashby_done_this_run = 0
 
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
+    conn = connect_tracker(DB)
     _ensure_outcome_columns(conn)
     rows = conn.execute(
         "SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING(posting_id) "

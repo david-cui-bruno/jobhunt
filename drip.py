@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from submission.database import connect_tracker
+
 ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT / "notify")]
 
@@ -178,8 +180,7 @@ def promote_legacy_tailored(conn: sqlite3.Connection) -> tuple[int, int]:
 
 def run():
     now = datetime.datetime.now(ET)
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
+    conn = connect_tracker(DB)
     recovered = recover_stale_claims(conn)
     if recovered:
         print(f"[drip] recovered {recovered} stale tailoring claims")
