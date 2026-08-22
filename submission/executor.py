@@ -148,13 +148,13 @@ def execute_claimed_posting(
             })
         except Exception as exc:
             res = {
-                "outcome": "retryable_failure",
+                "outcome": "manual",
                 "ok": False,
                 "submitted": False,
-                "retryable": True,
-                "click_attempted": False,
-                "submission_uncertain": False,
-                "reason": f"adapter launch failed: {type(exc).__name__}: {exc}",
+                "retryable": False,
+                "click_attempted": True,
+                "submission_uncertain": True,
+                "reason": f"adapter launch failed: {type(exc).__name__}: {exc}; verify possible prior submission",
             }
         res = _enforce_submission_safety(res, bool(res.get("click_attempted")))
         outcome = _outcome(res)

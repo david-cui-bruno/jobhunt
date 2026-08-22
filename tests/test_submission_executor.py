@@ -137,6 +137,32 @@ def test_executor_leaves_retryable_before_click_ready(tmp_path, monkeypatch) -> 
     assert rec["click_attempted"] == 0
 
 
+def test_executor_adapter_exception_fails_closed_to_manual_uncertain(tmp_path, monkeypatch) -> None:
+    conn, row = ready_row(tmp_path, ats="greenhouse")
+    monkeypatch.setattr("submission.executor._posting_dead", lambda url: False)
+
+    def launch_error(payload):
+        raise RuntimeError("browser launch died after unknown click state")
+
+    monkeypatch.setattr("submission.executor.run_adapter", launch_error)
+    notices: list[tuple[str, str]] = []
+    monkeypatch.setattr("submission.executor._send_notice", lambda subject, body: notices.append((subject, body)) or True)
+
+    result = execute_claimed_posting(conn, row, lane=DIRECT, dry_run=False, worker_id="direct-1")
+
+    assert result["outcome"] == "manual"
+    assert result["submission_uncertain"] is True
+    assert result["click_attempted"] is True
+    assert "adapter launch failed" in result["reason"]
+    assert "verify possible prior submission" in result["reason"]
+    assert tuple(conn.execute("SELECT status,outcome,attempt_count FROM postings WHERE posting_id='one'").fetchone()) == ("manual", "manual", 1)
+    assert notices and "verify possible submission" in notices[0][0]
+    rec = attempt(conn)
+    assert rec["outcome"] == "manual"
+    assert rec["click_attempted"] == 1
+    assert rec["confirmation_observed"] == 0
+
+
 def test_executor_quarantines_uncertain_after_click_and_never_retries(tmp_path, monkeypatch) -> None:
     conn, row = ready_row(tmp_path, ats="greenhouse")
     monkeypatch.setattr("submission.executor._posting_dead", lambda url: False)
