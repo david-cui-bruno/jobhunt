@@ -34,7 +34,17 @@ def _ashby_company_context(url: str) -> str:
 
 def _shot(page, slug, stage):
     SHOTS.mkdir(parents=True, exist_ok=True)
-    page.screenshot(path=str(SHOTS / f"{slug}_{stage}.png"), full_page=True)
+    try:
+        page.screenshot(
+            path=str(SHOTS / f"{slug}_{stage}.png"),
+            full_page=True,
+            timeout=1000,
+        )
+        return True
+    except Exception:
+        # macOS stops compositing screenshots after System Events hides the
+        # dedicated headful process. Diagnostics must never block submission.
+        return False
 
 
 def _ashby_submission_rejection(body_text: str) -> str:

@@ -147,8 +147,8 @@ class FakeAshbyPage(_SplitNamePage):
             return [{"id": "work_auth", "name": "", "value": "", "chosen": False}]
         return self.required_empty
 
-    def screenshot(self, path, full_page=True):
-        self.screenshots.append((path, full_page))
+    def screenshot(self, path, full_page=True, timeout=None):
+        self.screenshots.append((path, full_page, timeout))
 
     def inner_text(self, selector):
         assert selector == "body"
@@ -262,6 +262,28 @@ def test_run_ashby_form_uploads_fills_qa_screenshots_and_dry_run_does_not_click(
     assert result["reason"] == "dry run — did not submit"
     assert not [event for event in page.events if event[0] == "click"]
     assert page.screenshots and page.screenshots[-1][0].endswith("slug_filled.png")
+
+
+def test_screenshot_timeout_is_best_effort_for_hidden_browser(monkeypatch, tmp_path):
+    class HangingScreenshotPage:
+        def __init__(self):
+            self.calls = []
+
+        def screenshot(self, **kwargs):
+            self.calls.append(kwargs)
+            raise ashby.PWTimeout("hidden compositor did not capture")
+
+    page = HangingScreenshotPage()
+    monkeypatch.setattr(ashby, "SHOTS", tmp_path)
+
+    captured = ashby._shot(page, "ambrook", "filled")
+
+    assert captured is False
+    assert page.calls == [{
+        "path": str(tmp_path / "ambrook_filled.png"),
+        "full_page": True,
+        "timeout": 1000,
+    }]
 
 
 def test_run_ashby_form_upload_failure_returns_without_closing_context(monkeypatch, tmp_path):
