@@ -1,24 +1,14 @@
-"""Shared stealth browser launch for the ATS adapters.
+"""Compatibility stealth browser launch for non-Ashby ATS adapters.
 
-David 2026-08-20: several boards (Ashby's spam filter, SmartRecruiters'
-DataDome gate) reject our submissions not because of a solvable CAPTCHA but
-because the headless browser *looks* like a bot. The IP is already residential
-(David's Mac), so the giveaway is the browser fingerprint:
+This module preserves the generic hardened Chromium launcher used by existing
+adapters that still expect a fresh `(browser, context)` pair. It masks common
+Playwright automation tells for those compatibility paths, but it is not the
+Ashby recovery backend and does not claim to solve Ashby's spam rejection path.
 
-  - navigator.webdriver === true   (the single biggest tell)
-  - headless Chrome UA / GPU strings
-  - no plugins, no languages, empty permissions
-  - Playwright's default automation flags
-
-CapSolver can't help here: Ashby's block is behavioral (no puzzle to solve),
-and its DataDome task needs an extra paid residential proxy and often hits an
-already-banned IP. Hardening the fingerprint is free and addresses BOTH, so it
-is the correct first move. This module centralizes it: one launch, one context,
-one init script, applied identically by every adapter.
-
-Still headless (David hates visible windows), still one killable subprocess
-per posting. This only removes the obvious automation tells; it does not
-fabricate anything about David or the application.
+Ashby uses `apply/ashby_browser.py` instead: a dedicated persistent installed
+Chrome profile that preserves the browser's real user agent, plugins, GPU,
+languages, timezone, and hardware values. Do not route Ashby through this
+launcher.
 """
 from __future__ import annotations
 
