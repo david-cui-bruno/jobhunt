@@ -1,38 +1,51 @@
+from __future__ import annotations
+
 import hashlib
+import re
 import sqlite3
 import time
 import urllib.parse
 
-from apply.jd import canonical_application_url
+
+def _first_query_value(query: dict[str, list[str]], name: str) -> str | None:
+    return (query.get(name) or [None])[0]
+
+
+def _canonical_identity_material(posting_id: str, url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    query = urllib.parse.parse_qs(parsed.query)
+
+    ashby_id = _first_query_value(query, "ashby_jid")
+    if ashby_id and re.fullmatch(r"[0-9a-f-]{36}", ashby_id, re.I):
+        labels = [part for part in parsed.netloc.lower().split(".")
+                  if part not in {"www", "jobs", "careers"}]
+        if labels:
+            org = urllib.parse.quote(labels[0], safe="")
+            job_id = urllib.parse.quote(ashby_id, safe="")
+            return f"https://jobs.ashbyhq.com/{org}/{job_id}"
+
+    greenhouse_id = _first_query_value(query, "gh_jid")
+    if greenhouse_id and re.fullmatch(r"\d+", greenhouse_id):
+        token = urllib.parse.quote(greenhouse_id, safe="")
+        return f"greenhouse:token:{token}"
+
+    host = parsed.netloc.lower()
+    path = parsed.path.rstrip("/")
+    if host.endswith("ashbyhq.com"):
+        return urllib.parse.urlunparse(
+            (parsed.scheme, host, path.removesuffix("/application"), "", "", "")
+        )
+
+    if "greenhouse.io" in host:
+        token = _first_query_value(query, "token")
+        if token and re.fullmatch(r"\d+", token):
+            return f"greenhouse:token:{urllib.parse.quote(token, safe='')}"
+
+    return urllib.parse.urlunparse((parsed.scheme, host, path, "", parsed.query, "")) or posting_id
 
 
 def canonical_posting_key(posting_id: str, url: str) -> str:
-    canonical = canonical_application_url(url).split("#", 1)[0].rstrip("/")
-    parsed = urllib.parse.urlparse(canonical)
-    if parsed.netloc.lower().endswith("ashbyhq.com"):
-        path = parsed.path.removesuffix("/application").rstrip("/")
-        canonical = urllib.parse.urlunparse(
-            (parsed.scheme, parsed.netloc.lower(), path, "", "", "")
-        )
-    elif "greenhouse.io" in parsed.netloc.lower():
-        query = urllib.parse.parse_qs(parsed.query)
-        token = (query.get("token") or [None])[0]
-        board = (query.get("for") or [None])[0]
-        if token:
-            params = {"token": token}
-            if board:
-                params = {"for": board, "token": token}
-            canonical = urllib.parse.urlunparse(
-                (
-                    parsed.scheme,
-                    parsed.netloc.lower(),
-                    parsed.path.rstrip("/"),
-                    "",
-                    urllib.parse.urlencode(params),
-                    "",
-                )
-            )
-    material = canonical or posting_id
+    material = _canonical_identity_material(posting_id, url)
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
