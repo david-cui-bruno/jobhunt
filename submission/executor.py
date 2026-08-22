@@ -117,7 +117,7 @@ def execute_claimed_posting(
                 dry_run,
                 expected_status="submitting",
             )
-        return {"company": company, "ats": "unknown", "outcome": "manual", "reason": reason}
+        return {"company": company, "ats": "unknown", "outcome": "manual", "reason": reason, "pre_attempt": True}
 
     if _posting_dead(url):
         _mark_outcome(
@@ -129,7 +129,7 @@ def execute_claimed_posting(
             dry_run,
             expected_status=None if dry_run else "submitting",
         )
-        return {"company": company, "ats": "unknown", "outcome": "stale", "reason": "liveness check marked posting stale"}
+        return {"company": company, "ats": "unknown", "outcome": "stale", "reason": "liveness check marked posting stale", "pre_attempt": True}
 
     attempt_id = uuid.uuid4().hex
     ats, _detected_lane = classify_url(url)

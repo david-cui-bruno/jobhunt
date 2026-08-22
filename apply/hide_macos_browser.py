@@ -20,19 +20,18 @@ VISIBILITY_APPLESCRIPT = """on run argv
   set processName to item 1 of argv
   tell application "System Events"
     if not (exists process processName) then
-      return ""
+      return "missing"
     end if
-    set visibleWindowNames to {}
-    repeat with candidateWindow in windows of process processName
-      if visible of candidateWindow then
-        set end of visibleWindowNames to name of candidateWindow
-      end if
-    end repeat
-    set AppleScript's text item delimiters to linefeed
-    return visibleWindowNames as text
+    set processVisible to visible of process processName
+    set windowCount to count of windows of process processName
+    return "visible=" & processVisible & linefeed & "window_count=" & windowCount
   end tell
 end run
 """
+
+
+class VisibilityQueryError(RuntimeError):
+    """Safe fail-closed visibility evidence error."""
 
 
 def build_osascript_command(process_name: str) -> list[str]:
@@ -47,11 +46,38 @@ def visible_windows_for_process(process_name: str) -> list[str]:
     result = subprocess.run(
         build_visible_windows_command(process_name),
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
         check=False,
     )
-    return [line for line in result.stdout.splitlines() if line]
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "osascript failed").strip()
+        raise VisibilityQueryError(f"System Events visibility query failed: {detail}")
+    evidence = _parse_visibility_output(result.stdout, process_name)
+    if not evidence["visible"]:
+        return []
+    return ["<process-visible-window>"] * evidence["window_count"]
+
+
+def _parse_visibility_output(stdout: str, process_name: str) -> dict[str, int | bool]:
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if lines == ["missing"]:
+        raise VisibilityQueryError(f"process not found: {process_name}")
+    parsed: dict[str, str] = {}
+    for line in lines:
+        if "=" not in line:
+            raise VisibilityQueryError(f"malformed visibility query output: {line}")
+        key, value = line.split("=", 1)
+        parsed[key] = value
+    if set(parsed) != {"visible", "window_count"} or parsed["visible"] not in {"true", "false"}:
+        raise VisibilityQueryError(f"malformed visibility query output: {stdout.strip()}")
+    try:
+        window_count = int(parsed["window_count"])
+    except ValueError as exc:
+        raise VisibilityQueryError(f"malformed visibility query output: {stdout.strip()}") from exc
+    if window_count < 0:
+        raise VisibilityQueryError(f"malformed visibility query output: {stdout.strip()}")
+    return {"visible": parsed["visible"] == "true", "window_count": window_count}
 
 
 def hide_once(process_name: str) -> str:

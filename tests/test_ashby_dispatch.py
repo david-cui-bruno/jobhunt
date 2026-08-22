@@ -206,16 +206,68 @@ def test_ashby_worker_result_missing_attempt_id_pauses_fail_closed(db: Path, tmp
     conn.close()
 
 
+def test_pre_attempt_requires_structured_marker_not_reason_text(db: Path, tmp_path: Path) -> None:
+    from submission.dispatcher import _record_ashby_policy_result
+
+    seed(db, tmp_path, "ashby-1")
+    enable_due(db, now=0)
+
+    _record_ashby_policy_result(db, {"posting_id": "ashby-1", "lane": "ashby", "outcome": "manual", "reason": "resume quality gate: drifted"})
+
+    conn = sqlite3.connect(db)
+    assert load_state(conn).enabled is False
+    conn.close()
+
+
+def test_structured_pre_attempt_marker_skips_policy_without_attempt_id(db: Path, tmp_path: Path) -> None:
+    from submission.dispatcher import _record_ashby_policy_result
+
+    seed(db, tmp_path, "ashby-1")
+    enable_due(db, now=0)
+
+    _record_ashby_policy_result(db, {"posting_id": "ashby-1", "lane": "ashby", "outcome": "manual", "reason": "renamed pre-launch exit", "pre_attempt": True})
+
+    conn = sqlite3.connect(db)
+    assert load_state(conn).enabled is True
+    conn.close()
+
+
+def test_post_launch_looking_result_cannot_masquerade_as_pre_attempt(db: Path, tmp_path: Path) -> None:
+    from submission.dispatcher import _record_ashby_policy_result
+
+    seed(db, tmp_path, "ashby-1")
+    enable_due(db, now=0)
+
+    _record_ashby_policy_result(db, {"posting_id": "ashby-1", "lane": "ashby", "outcome": "failed", "reason": "adapter launch failed after browser start", "click_attempted": True, "pre_attempt": True})
+
+    conn = sqlite3.connect(db)
+    assert load_state(conn).enabled is False
+    conn.close()
+
+
+def test_submitted_result_cannot_masquerade_as_pre_attempt(db: Path, tmp_path: Path) -> None:
+    from submission.dispatcher import _record_ashby_policy_result
+
+    seed(db, tmp_path, "ashby-1")
+    enable_due(db, now=0)
+
+    _record_ashby_policy_result(db, {"posting_id": "ashby-1", "lane": "ashby", "outcome": "submitted", "reason": "confirmed", "pre_attempt": True})
+
+    conn = sqlite3.connect(db)
+    assert load_state(conn).enabled is False
+    conn.close()
+
+
 def test_claim_loss_quality_stale_missing_row_and_dry_run_do_not_update_policy(db: Path, tmp_path: Path, monkeypatch) -> None:
     from submission.dispatcher import _record_ashby_policy_result, dispatch_cycle
 
     seed(db, tmp_path, "ashby-1")
     enable_due(db, now=0)
     for result in (
-        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "skipped", "reason": "claim lost"},
-        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "manual", "reason": "claimed row missing"},
-        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "manual", "reason": "resume quality gate: missing"},
-        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "stale", "reason": "liveness check marked posting stale"},
+        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "skipped", "reason": "claim lost", "pre_attempt": True},
+        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "manual", "reason": "claimed row missing", "pre_attempt": True},
+        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "manual", "reason": "resume quality gate: missing", "pre_attempt": True},
+        {"posting_id": "ashby-1", "lane": "ashby", "outcome": "stale", "reason": "liveness check marked posting stale", "pre_attempt": True},
     ):
         _record_ashby_policy_result(db, result)
         conn = sqlite3.connect(db)
@@ -264,6 +316,25 @@ def test_manage_lanes_json_and_nonexecuting(db: Path, tmp_path: Path) -> None:
     assert load_state(conn).enabled is False
     assert conn.execute("SELECT status FROM postings WHERE posting_id='ashby-1'").fetchone()[0] == "ready"
     conn.close()
+
+
+def test_manage_lanes_preview_reports_missing_candidate_detail(db: Path, tmp_path: Path, monkeypatch) -> None:
+    import manage_lanes
+
+    seed(db, tmp_path, "ashby-1")
+    enable_due(db, now=0)
+    monkeypatch.setattr(manage_lanes, "eligible_ashby_posting", lambda conn, now: "ashby-1")
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM emails WHERE posting_id='ashby-1'")
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+
+    try:
+        preview = manage_lanes._preview(conn)
+    finally:
+        conn.close()
+
+    assert preview == {"ats": "ashby", "candidate": None, "reason": {"code": "candidate_detail_missing", "posting_id": "ashby-1"}}
 
 
 def test_legacy_submit_ready_skips_ashby_without_adapter(db: Path, tmp_path: Path, monkeypatch) -> None:

@@ -14,6 +14,10 @@ if str(ROOT) not in sys.path:
 from apply.ashby_browser import PROFILE_DIR, ChromeTarget, persistent_ashby_context, resolve_chrome
 
 
+class VisibilityEvidenceError(RuntimeError):
+    """Visibility evidence could not be queried safely."""
+
+
 def _sync_playwright():
     from playwright.sync_api import sync_playwright
 
@@ -25,7 +29,10 @@ def _visibility_for_process(process_name: str) -> dict[str, Any]:
     # the macOS hiding helper. This query is only for dedicated about:blank smoke.
     from apply.hide_macos_browser import visible_windows_for_process
 
-    windows = visible_windows_for_process(process_name)
+    try:
+        windows = visible_windows_for_process(process_name)
+    except Exception as exc:
+        raise VisibilityEvidenceError(str(exc)) from exc
     return {"process_name": process_name, "visible": bool(windows), "window_count": len(windows)}
 
 
@@ -37,8 +44,11 @@ def _target_payload(target: ChromeTarget) -> dict[str, Any]:
     }
 
 
-def _blocker(message: str, *, mode: str) -> dict[str, Any]:
-    return {"mode": mode, "ok": False, "blocker": {"code": "fail_closed", "message": message}}
+def _blocker(message: str, *, mode: str, reason: str | None = None) -> dict[str, Any]:
+    blocker = {"code": "fail_closed", "message": message}
+    if reason is not None:
+        blocker["reason"] = reason
+    return {"mode": mode, "ok": False, "blocker": blocker}
 
 
 def _run_about_blank(target: ChromeTarget) -> dict[str, Any]:
@@ -52,7 +62,12 @@ def _run_about_blank(target: ChromeTarget) -> dict[str, Any]:
             user_agent = page.evaluate("navigator.userAgent")
             webdriver = page.evaluate("navigator.webdriver")
             plugin_count = page.evaluate("navigator.plugins.length")
-            visibility = _visibility_for_process(target.process_name)
+            try:
+                visibility = _visibility_for_process(target.process_name)
+            except Exception as exc:
+                if isinstance(exc, VisibilityEvidenceError):
+                    raise
+                raise VisibilityEvidenceError(str(exc)) from exc
 
     return {
         "mode": "about-blank",
@@ -114,7 +129,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError("Ashby about:blank verification requires a dedicated Chrome for Testing target.")
             payload = _run_about_blank(target)
     except Exception as exc:
-        payload = _blocker(str(exc), mode=mode)
+        reason = "query_error" if isinstance(exc, VisibilityEvidenceError) else None
+        payload = _blocker(str(exc), mode=mode, reason=reason)
         _emit(payload, as_json=args.json)
         return 1
 

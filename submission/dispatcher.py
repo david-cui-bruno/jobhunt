@@ -66,16 +66,7 @@ def _verify_finished_attempt(conn: sqlite3.Connection, attempt_id: str, posting_
 
 
 def _record_ashby_policy_result(db_path: Path, result: dict) -> None:
-    reason_text = str(result.get("reason") or "")
-    outcome = str(result.get("outcome") or "")
-    pre_attempt_exits = (
-        outcome == "skipped"
-        or reason_text == "claim lost"
-        or reason_text == "claimed row missing"
-        or reason_text.startswith("resume quality gate:")
-        or reason_text == "liveness check marked posting stale"
-    )
-    if pre_attempt_exits:
+    if _is_pre_attempt_result(result):
         return
     attempt_id = result.get("attempt_id")
     conn = connect_tracker(db_path)
@@ -98,6 +89,17 @@ def _record_ashby_policy_result(db_path: Path, result: dict) -> None:
             LOG.exception("ashby fail-closed pause failed")
     finally:
         conn.close()
+
+
+def _is_pre_attempt_result(result: dict) -> bool:
+    return (
+        result.get("pre_attempt") is True
+        and str(result.get("outcome") or "") in {"skipped", "manual", "stale"}
+        and not result.get("attempt_id")
+        and not result.get("click_attempted")
+        and not result.get("submission_uncertain")
+        and not result.get("launched")
+    )
 
 
 def select_for_lane(db_path: Path = DB, policy: LanePolicy = DIRECT, limit: int | None = None) -> list[str]:
@@ -187,13 +189,13 @@ def execute(posting_id: str, lane: LanePolicy, *, db_path: Path = DB, dry_run: b
     conn = connect_tracker(db_path)
     try:
         if not dry_run and not _claim(conn, posting_id):
-            return {"posting_id": posting_id, "lane": lane.name, "outcome": "skipped", "reason": "claim lost"}
+            return {"posting_id": posting_id, "lane": lane.name, "outcome": "skipped", "reason": "claim lost", "pre_attempt": True}
         row = _claimed_row(conn, posting_id, dry_run=dry_run)
         if row is None:
             if not dry_run:
                 _release_missing_claim(conn, posting_id, "claimed row missing")
-                return {"posting_id": posting_id, "lane": lane.name, "outcome": "manual", "reason": "claimed row missing"}
-            return {"posting_id": posting_id, "lane": lane.name, "outcome": "skipped", "reason": "claimed row missing"}
+                return {"posting_id": posting_id, "lane": lane.name, "outcome": "manual", "reason": "claimed row missing", "pre_attempt": True}
+            return {"posting_id": posting_id, "lane": lane.name, "outcome": "skipped", "reason": "claimed row missing", "pre_attempt": True}
         result = execute_claimed_posting(
             conn,
             row,

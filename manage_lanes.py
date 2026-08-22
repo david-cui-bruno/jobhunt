@@ -49,6 +49,8 @@ def _preview(conn) -> dict:
         "SELECT p.posting_id,p.company,p.title,p.url,e.resume_pdf FROM postings p JOIN emails e USING(posting_id) WHERE p.posting_id=?",
         (posting_id,),
     ).fetchone()
+    if row is None:
+        return {"ats": "ashby", "candidate": None, "reason": {"code": "candidate_detail_missing", "posting_id": posting_id}}
     ok, reason = _resume_quality_ready(_runtime_path(row["resume_pdf"]), posting_id)
     prior = conn.execute("SELECT COUNT(*) FROM submission_attempts WHERE posting_id=? AND finished_at IS NOT NULL", (posting_id,)).fetchone()[0]
     return {

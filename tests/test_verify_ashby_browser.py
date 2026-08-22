@@ -107,6 +107,22 @@ def test_about_blank_uses_persistent_context_once_and_only_navigates_about_blank
     assert payload["process_visibility"]["process_name"] == "Google Chrome for Testing"
 
 
+def test_visibility_query_error_fails_closed_as_query_error(monkeypatch, capsys):
+    target = ChromeTarget(Path("/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"), "Google Chrome for Testing", True)
+    monkeypatch.setattr(verify, "resolve_chrome", lambda: target)
+    monkeypatch.setattr(verify, "persistent_ashby_context", FakePersistent(FakeContext()))
+    monkeypatch.setattr(verify, "_sync_playwright", lambda: _FakePlaywright())
+    monkeypatch.setattr(verify, "_visibility_for_process", lambda name: (_ for _ in ()).throw(RuntimeError("process not found: Google Chrome for Testing")))
+
+    assert verify.main(["--about-blank", "--json"]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "about-blank"
+    assert payload["ok"] is False
+    assert payload["blocker"] == {"code": "fail_closed", "reason": "query_error", "message": "process not found: Google Chrome for Testing"}
+    assert "process_visibility" not in payload
+
+
 class _FakePlaywright:
     def __enter__(self):
         return object()

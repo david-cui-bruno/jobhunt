@@ -91,6 +91,25 @@ class ComposeShortTest(unittest.TestCase):
         self.assertIn("ashby enabled: tier 1 / 90m", body)
         self.assertIn("ready 1", body)
 
+    def test_paused_unblocked_empty_ashby_state_is_omitted(self):
+        d = _collected(manual_ask=[("Stripe", "SWE", "u", "needs answers: x")])
+        d["attempt_metrics"] = []
+        d["queue_metrics"] = []
+        d["ashby_breaker"] = {
+            "paused": True,
+            "enabled": False,
+            "blocked": False,
+            "resume_at": 1800000000,
+            "tier": 0,
+            "interval_minutes": 180,
+            "consecutive_confirmed": 0,
+            "ready_depth": 0,
+        }
+
+        body = digest.compose_short(d)
+
+        self.assertNotIn("ashby", body.lower())
+
     def test_phone_copy_fails_soft(self):
         d = _collected(manual_ask=[("Stripe", "SWE", "u", "needs answers: x")])
         with mock.patch("notify.kith_bridge.send_phone", side_effect=RuntimeError("bridge down")):
