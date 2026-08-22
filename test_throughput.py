@@ -200,11 +200,21 @@ class BacklogPriorityTests(unittest.TestCase):
         self.assertEqual(submit.SUBMISSIONS_PER_RUN, 8)
         self.assertEqual((submit.PACING_MIN_SECONDS, submit.PACING_MAX_SECONDS), (15.0, 45.0))
 
+        from submission.dispatcher import run_forever
+        import inspect
+
         systemd = Path(__file__).parent / "deploy" / "systemd"
-        submit_timer = (systemd / "jobhunt@submit.timer").read_text()
+        launchd = Path(__file__).parent / "launchd" / "com.jobhunt.submit.plist"
+        submit_service = (systemd / "jobhunt-submit.service").read_text()
         drip_timer = (systemd / "jobhunt@drip.timer").read_text()
-        self.assertIn("OnUnitActiveSec=30min", submit_timer)
+        submit_plist = launchd.read_text()
+        self.assertIn("ExecStart=/opt/jobhunt/.venv/bin/python /opt/jobhunt/submit_daemon.py", submit_service)
+        self.assertIn("Restart=always", submit_service)
         self.assertIn("OnUnitActiveSec=20min", drip_timer)
+        self.assertIn("<key>KeepAlive</key>", submit_plist)
+        self.assertIn("submit_daemon.py", submit_plist)
+        self.assertNotIn("StartInterval", submit_plist)
+        self.assertEqual(inspect.signature(run_forever).parameters["poll_seconds"].default, 30.0)
 
     def test_only_one_worker_can_claim_a_queued_posting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
