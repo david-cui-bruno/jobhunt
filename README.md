@@ -161,6 +161,28 @@ environment, queue, browser session, and application-answer file.
 | com.jobhunt.drip | 60 min | discovery + tailor batch |
 | com.jobhunt.submit | resident | 30-second ATS lane dispatcher |
 
+## Launchd runtime secrets
+
+The committed jobhunt launchd plists do not store long-lived provider secrets.
+They invoke `runtime_secrets.py` first, which reads
+`~/.config/jobhunt/runtime.env`, requires current-user ownership and mode `0600`,
+loads only allowlisted secret keys, and then replaces itself with the target
+Python process via `os.execvpe`.
+
+One-time migration from already installed LaunchAgents is handled by:
+
+```bash
+python3 scripts/migrate_launchd_secrets.py \
+  --launch-agents "$HOME/Library/LaunchAgents" \
+  --output "$HOME/.config/jobhunt/runtime.env"
+```
+
+The migration writes the env file atomically with mode `0600` and prints key
+names only. Review the generated file permissions before installing sanitized
+plists or reloading launchd agents. Provider-side rotation is recommended for
+any key that previously appeared in plists or Git history, but revoking and
+issuing a replacement key requires separate approval.
+
 ## Decisions log (abridged)
 
 - Full-auto submission; per-item approval emails retired in favor of the

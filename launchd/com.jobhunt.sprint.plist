@@ -2,27 +2,28 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key>
-  <string>com.jobhunt.sprint</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/Applications/Xcode.app/Contents/Developer/usr/bin/python3</string>
-    <string>/Users/davidcui824/jobhunt/sprint.py</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>ANTHROPIC_API_KEY</key>
-    <string>__ANTHROPIC_KEY__</string>
-    <key>PATH</key>
-    <string>/usr/bin:/bin:/usr/sbin:/sbin:/Library/TeX/texbin</string>
-  </dict>
-  <key>StartInterval</key>
-  <integer>240</integer>
-  <key>RunAtLoad</key>
-  <false/>
-  <key>StandardOutPath</key>
-  <string>/Users/davidcui824/jobhunt/out/sprint.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/davidcui824/jobhunt/out/sprint.log</string>
+	<key>Label</key>
+	<string>com.jobhunt.sprint</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/davidcui824/jobhunt/runtime_secrets.py</string>
+		<string>--</string>
+		<string>/usr/bin/python3</string>
+		<string>/Users/davidcui824/jobhunt/sprint.py</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/bin:/bin:/usr/sbin:/sbin:/Library/TeX/texbin</string>
+	</dict>
+	<key>StartInterval</key>
+	<integer>240</integer>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardOutPath</key>
+	<string>/Users/davidcui824/jobhunt/out/sprint.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/davidcui824/jobhunt/out/sprint.log</string>
 </dict>
 </plist>
