@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Iterator
 
 ATS = "ashby"
 POLICY_REVISION = "ashby-canary-v1"
@@ -20,6 +22,7 @@ class AshbyState:
 
 
 def ensure_lane_state(conn: sqlite3.Connection) -> None:
+    should_commit = not conn.in_transaction
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS ats_lane_state (
@@ -45,7 +48,24 @@ def ensure_lane_state(conn: sqlite3.Connection) -> None:
         """,
         (ATS, POLICY_REVISION),
     )
-    conn.commit()
+    if should_commit:
+        conn.commit()
+
+
+@contextmanager
+def _write_transaction(conn: sqlite3.Connection) -> Iterator[None]:
+    if conn.in_transaction:
+        yield
+        return
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
 
 
 def _row_to_state(row: sqlite3.Row | tuple) -> AshbyState:
@@ -79,16 +99,16 @@ def can_attempt(state: AshbyState, *, now: int) -> bool:
 
 
 def set_enabled(conn: sqlite3.Connection, enabled: bool, *, now: int) -> AshbyState:
-    ensure_lane_state(conn)
-    conn.execute(
-        """
-        UPDATE ats_lane_state
-        SET enabled=?, updated_at=?
-        WHERE ats=?
-        """,
-        (1 if enabled else 0, now, ATS),
-    )
-    conn.commit()
+    with _write_transaction(conn):
+        ensure_lane_state(conn)
+        conn.execute(
+            """
+            UPDATE ats_lane_state
+            SET enabled=?, updated_at=?
+            WHERE ats=?
+            """,
+            (1 if enabled else 0, now, ATS),
+        )
     return load_state(conn)
 
 
@@ -113,45 +133,52 @@ def _tier_after_confirmation(streak: int) -> int:
 
 
 def record_result(conn: sqlite3.Connection, *, outcome: str, reason: str, now: int) -> AshbyState:
-    state = load_state(conn)
-    enabled = state.enabled
-    tier = state.tier
-    streak = state.consecutive_confirmed
-    next_attempt_at = state.next_attempt_at
-    blocked_until = state.blocked_until
+    with _write_transaction(conn):
+        state = load_state(conn)
+        enabled = state.enabled
+        tier = state.tier
+        streak = state.consecutive_confirmed
+        next_attempt_at = state.next_attempt_at
+        blocked_until = state.blocked_until
 
-    if _is_confirmed(outcome, reason):
-        streak += 1
-        tier = _tier_after_confirmation(streak)
-        next_attempt_at = now + INTERVAL_MINUTES[tier] * 60
-    elif _is_spam(reason):
-        tier = max(0, tier - 1)
-        streak = 0
-        blocked_until = now + SPAM_BLOCK_SECONDS
-    elif _needs_answers(reason):
-        next_attempt_at = now
-    else:
-        enabled = False
+        if _is_confirmed(outcome, reason):
+            streak += 1
+            tier = _tier_after_confirmation(streak)
+            next_attempt_at = now + INTERVAL_MINUTES[tier] * 60
+        elif _is_spam(reason):
+            tier = max(0, tier - 1)
+            streak = 0
+            blocked_until = now + SPAM_BLOCK_SECONDS
+        elif _needs_answers(reason):
+            next_attempt_at = now + INTERVAL_MINUTES[tier] * 60
+        else:
+            enabled = False
 
-    conn.execute(
-        """
-        UPDATE ats_lane_state
-        SET enabled=?, tier=?, consecutive_confirmed=?, next_attempt_at=?, blocked_until=?,
-            last_outcome=?, last_reason=?, policy_revision=?, updated_at=?
-        WHERE ats=?
-        """,
-        (
-            1 if enabled else 0,
-            tier,
-            streak,
-            next_attempt_at,
-            blocked_until,
-            outcome,
-            reason,
-            POLICY_REVISION,
-            now,
-            ATS,
-        ),
-    )
-    conn.commit()
-    return load_state(conn)
+        conn.execute(
+            """
+            UPDATE ats_lane_state
+            SET enabled=?, tier=?, consecutive_confirmed=?, next_attempt_at=?, blocked_until=?,
+                last_outcome=?, last_reason=?, policy_revision=?, updated_at=?
+            WHERE ats=?
+            """,
+            (
+                1 if enabled else 0,
+                tier,
+                streak,
+                next_attempt_at,
+                blocked_until,
+                outcome,
+                reason,
+                POLICY_REVISION,
+                now,
+                ATS,
+            ),
+        )
+        return AshbyState(
+            enabled=enabled,
+            tier=tier,
+            consecutive_confirmed=streak,
+            next_attempt_at=next_attempt_at,
+            blocked_until=blocked_until,
+            last_outcome=outcome,
+        )

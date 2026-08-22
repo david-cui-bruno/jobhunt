@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 
 from submission.ashby_policy import (
     can_attempt,
@@ -76,5 +77,28 @@ def test_needs_answers_keeps_tier_and_requires_new_posting_without_pause() -> No
     assert state.enabled is True
     assert state.tier == 1
     assert state.consecutive_confirmed == 3
-    assert state.next_attempt_at == 30_000
-    assert can_attempt(state, now=30_000) is True
+    assert state.next_attempt_at == 30_000 + 90 * 60
+    assert can_attempt(state, now=30_000) is False
+
+
+def test_record_result_owns_immediate_transaction_before_reading_file_backed_state(tmp_path: Path) -> None:
+    db_path = tmp_path / "tracker.db"
+    conn = sqlite3.connect(db_path)
+    ensure_lane_state(conn)
+    set_enabled(conn, True, now=1_000)
+
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+
+    record_result(conn, outcome="submitted", reason="confirmed", now=1_000)
+
+    begin_index = next(
+        index for index, statement in enumerate(statements) if statement.upper().startswith("BEGIN")
+    )
+    state_read_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if "FROM ats_lane_state" in statement and "SELECT" in statement.upper()
+    )
+    assert statements[begin_index].upper().startswith("BEGIN IMMEDIATE")
+    assert begin_index < state_read_index
