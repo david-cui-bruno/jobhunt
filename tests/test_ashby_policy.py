@@ -1,6 +1,8 @@
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from submission.ashby_policy import (
     can_attempt,
     ensure_lane_state,
@@ -102,3 +104,44 @@ def test_record_result_owns_immediate_transaction_before_reading_file_backed_sta
     )
     assert statements[begin_index].upper().startswith("BEGIN IMMEDIATE")
     assert begin_index < state_read_index
+
+
+def test_record_result_reuses_caller_transaction_without_committing_it(tmp_path: Path) -> None:
+    db_path = tmp_path / "tracker.db"
+    conn = sqlite3.connect(db_path)
+    ensure_lane_state(conn)
+    set_enabled(conn, True, now=1_000)
+
+    conn.execute("BEGIN IMMEDIATE")
+    state = record_result(conn, outcome="submitted", reason="confirmed", now=1_000)
+
+    assert conn.in_transaction is True
+    assert state.consecutive_confirmed == 1
+    conn.rollback()
+    assert load_state(conn).consecutive_confirmed == 0
+
+
+def test_record_result_rolls_back_owned_transaction_on_update_exception(tmp_path: Path) -> None:
+    db_path = tmp_path / "tracker.db"
+    conn = sqlite3.connect(db_path)
+    ensure_lane_state(conn)
+    set_enabled(conn, True, now=1_000)
+    conn.execute(
+        """
+        CREATE TRIGGER fail_ashby_policy_update
+        BEFORE UPDATE ON ats_lane_state
+        WHEN NEW.last_reason = 'explode'
+        BEGIN
+            SELECT RAISE(ABORT, 'boom');
+        END
+        """
+    )
+    conn.commit()
+
+    with pytest.raises(sqlite3.DatabaseError, match="boom"):
+        record_result(conn, outcome="manual", reason="explode", now=2_000)
+
+    assert conn.in_transaction is False
+    state = load_state(conn)
+    assert state.enabled is True
+    assert state.last_outcome == ""
