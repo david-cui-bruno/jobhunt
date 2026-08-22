@@ -199,6 +199,7 @@ def execute_claimed_posting(
                     "ats": res.get("detected_ats", "unknown"),
                     "outcome": outcome,
                     "reason": reason,
+                    "attempt_id": attempt_id,
                 }
             detected_ats = str(res.get("detected_ats", "unknown"))
             notes = str(_row_get(row, "application_notes", "") or "")
@@ -221,6 +222,7 @@ def execute_claimed_posting(
                     "ats": detected_ats,
                     "outcome": "submitted",
                     "reason": "already present in applications ledger; not resubmitted",
+                    "attempt_id": attempt_id,
                 }
             conn.commit()
         elif res.get("submission_uncertain") and not dry_run:
@@ -238,6 +240,8 @@ def execute_claimed_posting(
                 "Reply with answers and I'll retry, or apply manually.",
             )
         output = {"company": company, "ats": res.get("detected_ats", ats), "outcome": outcome, "reason": reason}
+        if launched and not dry_run:
+            output["attempt_id"] = attempt_id
         for key in ("submission_uncertain", "click_attempted", "definitive_rejection", "unanswered"):
             if key in res:
                 output[key] = res[key]

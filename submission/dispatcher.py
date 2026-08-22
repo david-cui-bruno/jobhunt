@@ -9,12 +9,85 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from drip import recover_stale_claims
+from submission.ashby_policy import can_attempt, ensure_lane_state, load_state, record_result, set_enabled
 from submission.database import DB, connect_tracker
 from submission.executor import execute_claimed_posting
-from submission.lanes import DIRECT, WORKDAY, LanePolicy, classify_url
+from submission.lanes import ASHBY, DIRECT, WORKDAY, LanePolicy, classify_url
 
 LOG = logging.getLogger(__name__)
 AUTOMATIC_POLICIES = (DIRECT, WORKDAY)
+
+
+def eligible_ashby_posting(conn: sqlite3.Connection, *, now: int) -> str | None:
+    """Return the oldest Ashby canary candidate without mutating state."""
+    ensure_lane_state(conn)
+    if not can_attempt(load_state(conn), now=now):
+        return None
+    attempts_exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='submission_attempts'").fetchone()
+    prior_attempt_filter = (
+        "AND NOT EXISTS (SELECT 1 FROM submission_attempts sa "
+        "WHERE sa.posting_id=p.posting_id AND sa.finished_at IS NOT NULL)"
+        if attempts_exists
+        else ""
+    )
+    rows = conn.execute(
+        f"""
+        SELECT p.posting_id, p.url, e.resume_pdf
+        FROM postings p JOIN emails e USING(posting_id)
+        WHERE p.status='ready'
+          AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.posting_id=p.posting_id)
+          {prior_attempt_filter}
+        ORDER BY COALESCE(p.last_attempt_at, 0), p.rowid, p.posting_id
+        """
+    ).fetchall()
+    for row in rows:
+        posting_id = row["posting_id"] if isinstance(row, sqlite3.Row) else row[0]
+        url = row["url"] if isinstance(row, sqlite3.Row) else row[1]
+        resume_pdf = row["resume_pdf"] if isinstance(row, sqlite3.Row) else row[2]
+        _ats, lane = classify_url(url)
+        if lane.name != ASHBY.name:
+            continue
+        from submission.executor import _resume_quality_ready, _runtime_path
+
+        ok, _reason = _resume_quality_ready(_runtime_path(resume_pdf), posting_id)
+        if ok:
+            return posting_id
+    return None
+
+
+def _verify_finished_attempt(conn: sqlite3.Connection, attempt_id: str, posting_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT * FROM submission_attempts
+        WHERE attempt_id=? AND posting_id=? AND finished_at IS NOT NULL
+        """,
+        (attempt_id, posting_id),
+    ).fetchone()
+
+
+def _record_ashby_policy_result(db_path: Path, result: dict) -> None:
+    if result.get("outcome") == "skipped" or result.get("reason") == "claim lost":
+        return
+    attempt_id = result.get("attempt_id")
+    if not attempt_id:
+        return
+    conn = connect_tracker(db_path)
+    try:
+        row = _verify_finished_attempt(conn, str(attempt_id), str(result.get("posting_id")))
+        if row is None:
+            set_enabled(conn, False, now=int(time.time()))
+            return
+        outcome = str(row["outcome"] or result.get("outcome") or "")
+        reason = str(row["raw_reason"] or result.get("reason") or "")
+        record_result(conn, outcome=outcome, reason=reason, now=int(time.time()))
+    except Exception:
+        LOG.exception("ashby policy update failed; pausing ashby")
+        try:
+            set_enabled(conn, False, now=int(time.time()))
+        except Exception:
+            LOG.exception("ashby fail-closed pause failed")
+    finally:
+        conn.close()
 
 
 def select_for_lane(db_path: Path = DB, policy: LanePolicy = DIRECT, limit: int | None = None) -> list[str]:
@@ -157,8 +230,23 @@ def dispatch_cycle(db_path: Path = DB, *, dry_run: bool = False) -> list[dict]:
             )
             for posting_id in select_for_lane(db_path, policy, policy.attempts_per_cycle):
                 futures.append(executors[policy.name].submit(_execute_by_id, db_path, posting_id, policy, dry_run))
+        ashby_candidate = None
+        try:
+            conn = connect_tracker(db_path)
+            try:
+                ashby_candidate = eligible_ashby_posting(conn, now=int(time.time()))
+            finally:
+                conn.close()
+        except Exception:
+            LOG.exception("ashby candidate selection failed")
+        if ashby_candidate is not None:
+            executors[ASHBY.name] = stack.enter_context(ThreadPoolExecutor(max_workers=1, thread_name_prefix="submit-ashby"))
+            futures.append(executors[ASHBY.name].submit(_execute_by_id, db_path, ashby_candidate, ASHBY, dry_run))
         for future in as_completed(futures):
-            results.append(future.result())
+            result = future.result()
+            results.append(result)
+            if result.get("lane") == ASHBY.name and not dry_run:
+                _record_ashby_policy_result(db_path, result)
     return results
 
 

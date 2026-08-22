@@ -324,17 +324,6 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
     from submission.executor import execute_claimed_posting
     from submission.lanes import classify_url
 
-    ashby_cooldown_file = ROOT / "out" / "ashby_cooldown"
-    ashby_blocked = False
-    try:
-        if ashby_cooldown_file.exists() and float(ashby_cooldown_file.read_text().strip()) > time.time():
-            ashby_blocked = True
-    except (ValueError, OSError):
-        pass
-    ashby_spam_streak = 0
-    ASHBY_PER_RUN = 1
-    ashby_done_this_run = 0
-
     conn = connect_tracker(DB)
     _ensure_outcome_columns(conn)
     rows = conn.execute(
@@ -355,11 +344,9 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
                     f"{attempted} attempted; leaving the rest for the next timer run"
                 )
                 break
-            if "ashbyhq.com" in (r["url"] or ""):
-                if ashby_blocked:
-                    continue
-                if ashby_done_this_run >= ASHBY_PER_RUN:
-                    continue
+            _ats, lane = classify_url(r["url"])
+            if lane.name == "ashby":
+                continue
 
             # Rows are selected as a batch, so a prior mirror row in this same run may
             # have just created a canonical application ledger entry. Re-check before
@@ -401,7 +388,6 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
                 if claim != "claimed":
                     continue
 
-            _ats, lane = classify_url(r["url"])
             result = execute_claimed_posting(
                 conn,
                 r,
@@ -411,21 +397,6 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
             )
             results.append(result)
             attempted += 1
-
-            reason = str(result.get("reason", ""))
-            if "possible spam" in reason:
-                ashby_spam_streak += 1
-                if ashby_spam_streak >= 2 and not ashby_blocked:
-                    ashby_blocked = True
-                    try:
-                        ashby_cooldown_file.write_text(str(time.time() + 12 * 3600))
-                        print("[submit] ashby breaker tripped: 2 consecutive spam rejections — 12h cooldown")
-                    except OSError:
-                        pass
-            elif result.get("ats") == "ashby":
-                ashby_spam_streak = 0
-            if result.get("ats") == "ashby" or "ashbyhq.com" in (r["url"] or ""):
-                ashby_done_this_run += 1
 
             if not dry_run and attempted < limit:
                 time.sleep(random.uniform(PACING_MIN_SECONDS, PACING_MAX_SECONDS))

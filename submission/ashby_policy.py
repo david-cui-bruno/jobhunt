@@ -112,6 +112,21 @@ def set_enabled(conn: sqlite3.Connection, enabled: bool, *, now: int) -> AshbySt
     return load_state(conn)
 
 
+def enable_canary(conn: sqlite3.Connection, *, now: int) -> AshbyState:
+    with _write_transaction(conn):
+        ensure_lane_state(conn)
+        conn.execute(
+            """
+            UPDATE ats_lane_state
+            SET enabled=1, tier=0, consecutive_confirmed=0, next_attempt_at=?,
+                blocked_until=0, policy_revision=?, updated_at=?
+            WHERE ats=?
+            """,
+            (now, POLICY_REVISION, now, ATS),
+        )
+    return load_state(conn)
+
+
 def _is_confirmed(outcome: str, reason: str) -> bool:
     return outcome == "submitted" and reason.strip().lower() == "confirmed"
 

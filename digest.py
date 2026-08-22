@@ -34,7 +34,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from notify import mailer
+from submission.ashby_policy import ensure_lane_state, load_state
 from submission.metrics import attempt_metrics, queue_metrics
+from submission.lanes import ASHBY, classify_url
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "out" / "tracker.db"
@@ -120,20 +122,30 @@ def collect(conn, since: int) -> dict:
     return {"manual_ask": manual_ask, "manual_debt": manual_debt, "verify": verify,
             "action": action, "stats": stats, "notes": [n for n in notes if n],
             "attempt_metrics": ats_metrics, "queue_metrics": queues,
-            "ashby_breaker": _ashby_breaker_state()}
+            "ashby_breaker": _ashby_breaker_state(conn)}
 
 
-def _ashby_breaker_state(now: Optional[int] = None) -> dict:
-    cooldown = ROOT / "out" / "ashby_cooldown"
+def _ashby_breaker_state(conn: sqlite3.Connection, now: Optional[int] = None) -> dict:
     if now is None:
         now = int(time.time())
-    try:
-        resume_at = int(float(cooldown.read_text().strip()))
-    except (OSError, ValueError):
-        return {"paused": False, "resume_at": None}
-    if resume_at <= now:
-        return {"paused": False, "resume_at": resume_at}
-    return {"paused": True, "resume_at": resume_at}
+    ensure_lane_state(conn)
+    state = load_state(conn)
+    ready_depth = 0
+    for row in conn.execute("SELECT url FROM postings WHERE status='ready'").fetchall():
+        _ats, lane = classify_url(row[0] if not isinstance(row, sqlite3.Row) else row["url"])
+        if lane.name == ASHBY.name:
+            ready_depth += 1
+    blocked = state.blocked_until > now
+    return {
+        "paused": not state.enabled,
+        "enabled": state.enabled,
+        "blocked": blocked,
+        "resume_at": state.blocked_until if blocked else state.next_attempt_at,
+        "tier": state.tier,
+        "interval_minutes": (180, 90, 45)[state.tier],
+        "consecutive_confirmed": state.consecutive_confirmed,
+        "ready_depth": ready_depth,
+    }
 
 
 def _submission_health_lines(d: dict) -> list[str]:
@@ -150,9 +162,17 @@ def _submission_health_lines(d: dict) -> list[str]:
     if queues:
         lines.append("queues: " + ", ".join(f"{row['lane']} {row['depth']}" for row in queues))
     breaker = d.get("ashby_breaker") or {}
-    if breaker.get("paused"):
+    if breaker.get("paused") and "ready_depth" not in breaker:
         resume = datetime.datetime.fromtimestamp(int(breaker["resume_at"]), ET).strftime("%-I:%M%p ET")
         lines.append(f"ashby breaker: paused until {resume.lower()}")
+        return lines
+    if breaker and not (breaker.get("paused") and not breaker.get("blocked") and breaker.get("ready_depth", 0) == 0):
+        state = "blocked" if breaker.get("blocked") else ("paused" if breaker.get("paused") else "enabled")
+        when = datetime.datetime.fromtimestamp(int(breaker.get("resume_at") or 0), ET).strftime("%-I:%M%p ET")
+        lines.append(
+            f"ashby {state}: tier {breaker.get('tier')} / {breaker.get('interval_minutes')}m, "
+            f"next {when.lower()}, streak {breaker.get('consecutive_confirmed')}, ready {breaker.get('ready_depth')}"
+        )
     return lines
 
 

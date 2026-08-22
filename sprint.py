@@ -46,6 +46,7 @@ def run() -> list[dict]:
     from jd import fetch_jd, detect_ats
     from tailor import tailor
     from drip import claim_posting, release_claim
+    from submission.lanes import classify_url
     import mailer
 
     results = []
@@ -66,6 +67,9 @@ def run() -> list[dict]:
                          (pid,)).fetchone()
         if not r:
             continue  # filtered out, closed, or deduped
+        _ats, lane = classify_url(r["url"])
+        if lane.name == "ashby":
+            continue
         print(f"[sprint] NEW: {r['company']} — {r['title']}", flush=True)
         attempted += 1
         if not claim_posting(conn, r["posting_id"], "sprinting"):
@@ -84,7 +88,6 @@ def run() -> list[dict]:
 
         import submit as submit_mod
         from submission.executor import execute_claimed_posting
-        from submission.lanes import classify_url
 
         # record the resume paths (submit machinery + revise thread need them)
         conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
@@ -117,7 +120,6 @@ def run() -> list[dict]:
             "FROM postings p JOIN emails e USING(posting_id) WHERE p.posting_id=?",
             (r["posting_id"],),
         ).fetchone()
-        _ats, lane = classify_url(r["url"])
         result = execute_claimed_posting(
             conn,
             row,
