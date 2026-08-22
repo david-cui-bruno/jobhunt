@@ -131,4 +131,5 @@ def persistent_ashby_context(
             if ctx is not None:
                 ctx.close()
         finally:
-            _stop_watchdog(watchdog)
+            with suppress(Exception):
+                _stop_watchdog(watchdog)

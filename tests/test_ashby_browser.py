@@ -340,6 +340,21 @@ def test_watchdog_is_stopped_when_context_close_raises(tmp_path: Path, monkeypat
     assert watchdog.kill_calls == 0
 
 
+def test_watchdog_cleanup_error_does_not_mask_context_close_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = ChromeTarget(make_binary(tmp_path / "Google Chrome for Testing"), "Google Chrome for Testing", True)
+    watchdog = FailingCleanupWatchdog(running=True)
+    context = FailingCloseContext()
+    monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
+    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: watchdog)
+
+    with pytest.raises(RuntimeError, match="context close failed"):
+        with persistent_ashby_context(FakePlaywright([], context), profile_dir=tmp_path / "profile"):
+            pass
+
+    assert context.close_calls == 1
+    assert watchdog.terminate_calls == 1
+
+
 def test_profile_paths_are_ignored_and_report_specific_ignore_is_not_redundant() -> None:
     gitignore = Path(".gitignore").read_text(encoding="utf-8")
 
