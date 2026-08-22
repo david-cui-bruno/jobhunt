@@ -33,8 +33,8 @@ def _ashby_company_context(url: str) -> str:
 
 
 def _shot(page, slug, stage):
-    SHOTS.mkdir(parents=True, exist_ok=True)
     try:
+        SHOTS.mkdir(parents=True, exist_ok=True)
         page.screenshot(
             path=str(SHOTS / f"{slug}_{stage}.png"),
             full_page=True,

@@ -262,6 +262,7 @@ def test_run_ashby_form_uploads_fills_qa_screenshots_and_dry_run_does_not_click(
     assert result["reason"] == "dry run — did not submit"
     assert not [event for event in page.events if event[0] == "click"]
     assert page.screenshots and page.screenshots[-1][0].endswith("slug_filled.png")
+    assert page.screenshots[-1][1:] == (True, 1000)
 
 
 def test_screenshot_timeout_is_best_effort_for_hidden_browser(monkeypatch, tmp_path):
@@ -284,6 +285,18 @@ def test_screenshot_timeout_is_best_effort_for_hidden_browser(monkeypatch, tmp_p
         "full_page": True,
         "timeout": 1000,
     }]
+
+
+def test_screenshot_directory_failure_is_best_effort(monkeypatch, tmp_path):
+    blocked = tmp_path / "not-a-directory"
+    blocked.write_text("occupied")
+    page = FakeAshbyPage()
+    monkeypatch.setattr(ashby, "SHOTS", blocked)
+
+    captured = ashby._shot(page, "ambrook", "filled")
+
+    assert captured is False
+    assert page.screenshots == []
 
 
 def test_run_ashby_form_upload_failure_returns_without_closing_context(monkeypatch, tmp_path):
