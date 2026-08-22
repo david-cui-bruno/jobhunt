@@ -811,6 +811,67 @@ class SubmitSafetyTests(unittest.TestCase):
             )
             conn.close()
 
+    def test_submit_ready_limit_counts_retryable_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / "tracker.db"
+            pdf_one = root / "one.pdf"
+            pdf_two = root / "two.pdf"
+            pdf_one.write_bytes(b"pdf")
+            pdf_two.write_bytes(b"pdf")
+            _write_quality(pdf_one, "one")
+            _write_quality(pdf_two, "two")
+            conn = sqlite3.connect(db)
+            conn.executescript(
+                """
+                CREATE TABLE postings (
+                    posting_id TEXT PRIMARY KEY, company TEXT, title TEXT,
+                    status TEXT, url TEXT, outcome TEXT, last_attempt_at INTEGER,
+                    attempt_count INTEGER NOT NULL DEFAULT 0, last_error TEXT
+                );
+                CREATE TABLE emails (posting_id TEXT PRIMARY KEY, resume_pdf TEXT);
+                CREATE TABLE applications (
+                    posting_id TEXT PRIMARY KEY, resume_path TEXT, ats TEXT,
+                    submitted_at INTEGER, confirmation TEXT, notes TEXT
+                );
+                INSERT INTO postings (posting_id,company,title,status,url) VALUES
+                    ('one','One','Engineer','ready','https://boards.greenhouse.io/embed/job_app?token=1'),
+                    ('two','Two','Engineer','ready','https://boards.greenhouse.io/embed/job_app?token=2');
+                """
+            )
+            conn.executemany(
+                "INSERT INTO emails VALUES (?,?)",
+                [("one", str(pdf_one)), ("two", str(pdf_two))],
+            )
+            conn.commit()
+            conn.close()
+
+            result = {
+                "outcome": "retryable_failure",
+                "ok": False,
+                "submitted": False,
+                "retryable": True,
+                "click_attempted": False,
+                "reason": "network before click",
+                "detected_ats": "greenhouse",
+            }
+            with (
+                mock.patch.object(submit, "DB", db),
+                mock.patch.object(submit, "_posting_dead", return_value=False),
+                mock.patch.object(submit, "_isolated_adapter", return_value=result) as adapter,
+                mock.patch.object(submit.time, "sleep"),
+            ):
+                results = submit.submit_ready(limit=1)
+
+            self.assertEqual(1, len(results))
+            self.assertEqual(1, adapter.call_count)
+            conn = sqlite3.connect(db)
+            self.assertEqual(
+                1,
+                conn.execute("SELECT SUM(attempt_count) FROM postings").fetchone()[0],
+            )
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()
