@@ -166,6 +166,30 @@ class BacklogPriorityTests(unittest.TestCase):
         self.assertEqual(drip.pick_next(conn)["posting_id"], "supported")
         conn.close()
 
+    def test_pick_next_skips_unsupported_and_nonautomatic_ashby_lanes(self) -> None:
+        conn = self._connection()
+        conn.executemany(
+            "INSERT INTO postings VALUES (?,?,?,?,?)",
+            [
+                ("unknown", "queued", "https://example.com/careers/1", "San Francisco", 30),
+                ("ashby", "queued", "https://jobs.ashbyhq.com/acme/id", "San Francisco", 20),
+                ("workable", "queued", "https://apply.workable.com/acme/j/ABC", "Ohio", 10),
+            ],
+        )
+
+        self.assertEqual(drip.pick_next(conn)["posting_id"], "workable")
+        conn.close()
+
+    def test_pick_next_keeps_smartrecruiters_preparable_for_handoff(self) -> None:
+        conn = self._connection()
+        conn.execute(
+            "INSERT INTO postings VALUES (?,?,?,?,?)",
+            ("smart", "queued", "https://jobs.smartrecruiters.com/acme/1", "Remote", 10),
+        )
+
+        self.assertEqual(drip.pick_next(conn)["posting_id"], "smart")
+        conn.close()
+
     def test_tailoring_batch_is_bounded_but_material(self) -> None:
         # raised 2026-08-19 (David: tailor must never be the bottleneck;
         # submit capacity is ~176/day)

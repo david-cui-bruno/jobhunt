@@ -14,6 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from submission.database import connect_tracker
+from submission.lanes import classify_url, quarantine_unsupported
 
 ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT / "notify")]
@@ -31,7 +32,7 @@ if DAILY_CAP < 1 or TAILOR_PER_RUN < 1:
 
 LOC_PRIORITY = ["san francisco", "sf", "bay area", "palo alto", "mountain view", "menlo",
                 "new york", "nyc", "manhattan", "brooklyn", "remote"]
-SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workday", "smartrecruiters", "rippling")
+SUPPORTED_ATS = ("greenhouse", "lever", "workable", "workday", "smartrecruiters", "rippling")
 CLAIM_TIMEOUT_SECONDS = 2 * 60 * 60
 CLAIM_TRANSITIONS = {
     ("queued", "tailoring"),
@@ -61,16 +62,21 @@ def loc_score(locations: str) -> int:
 
 
 def pick_next(conn: sqlite3.Connection, excluded: set[str] | None = None):
-    from jd import detect_ats
     rows = conn.execute("SELECT * FROM postings WHERE status='queued'").fetchall()
     excluded = excluded or set()
-    rows = [r for r in rows if r["posting_id"] not in excluded]
-    if not rows:
+    candidates = []
+    for row in rows:
+        if row["posting_id"] in excluded:
+            continue
+        ats, lane = classify_url(row["url"])
+        if lane.automatic or lane.name == "manual":
+            candidates.append((row, ats))
+    if not candidates:
         return None
-    def key(r):
-        ats = detect_ats(r["url"])
+    def key(candidate):
+        r, ats = candidate
         return (0 if ats in SUPPORTED_ATS else 1, loc_score(r["locations"]), -r["first_seen"])
-    return sorted(rows, key=key)[0]
+    return sorted(candidates, key=key)[0][0]
 
 
 def sent_today(conn) -> int:
@@ -242,6 +248,9 @@ def run():
     # 3) Tailor a bounded batch and queue it directly, with no approval email.
     # This used to prepare one resume per hour only between 9am and 9pm, leaving
     # a nine-day backlog despite ample submission capacity.
+    quarantined = quarantine_unsupported(conn)
+    if quarantined:
+        print(f"[drip] quarantined unsupported ATS rows: {quarantined}")
     attempts = min(TAILOR_PER_RUN, max(0, DAILY_CAP - sent_today(conn)))
     excluded: set[str] = set()
     for _ in range(attempts):

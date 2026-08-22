@@ -18,9 +18,12 @@ sys.path[:0] = [str(ROOT / "apply"), str(ROOT / "notify"), str(ROOT / "watcher")
 
 def _adapter(ats: str, url: str):
     from jd import canonical_application_url, detect_ats
+    from submission.lanes import lane_for
 
     target_url = canonical_application_url(url)
     detected = ats if ats and ats != "other" else detect_ats(target_url)
+    if lane_for(detected).name == "unsupported":
+        return None, False, detected, target_url
     if detected == "greenhouse":
         from greenhouse import apply_greenhouse
         return apply_greenhouse, False, detected, target_url
