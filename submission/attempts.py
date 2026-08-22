@@ -29,8 +29,11 @@ ON submission_attempts(ats, started_at);
 
 
 def ensure_submission_attempts(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA)
-    conn.commit()
+    should_commit = not conn.in_transaction
+    for statement in [part.strip() for part in SCHEMA.split(";") if part.strip()]:
+        conn.execute(statement)
+    if should_commit:
+        conn.commit()
 
 
 def start_attempt(conn, *, attempt_id, posting_id, ats, lane, worker_id,

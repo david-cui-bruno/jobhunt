@@ -33,6 +33,97 @@ def test_connect_tracker_initializes_disabled_ashby_lane_state(tmp_path: Path) -
         conn.close()
 
 
+def test_connect_tracker_initializes_submission_attempts_schema(tmp_path: Path) -> None:
+    conn = connect_tracker(tmp_path / "tracker.db")
+    try:
+        columns = {
+            row[1]: row[2]
+            for row in conn.execute("PRAGMA table_info(submission_attempts)").fetchall()
+        }
+        assert columns == {
+            "attempt_id": "TEXT",
+            "posting_id": "TEXT",
+            "ats": "TEXT",
+            "lane": "TEXT",
+            "worker_id": "TEXT",
+            "browser_mode": "TEXT",
+            "policy_revision": "TEXT",
+            "started_at": "INTEGER",
+            "finished_at": "INTEGER",
+            "duration_ms": "INTEGER",
+            "outcome": "TEXT",
+            "reason_code": "TEXT",
+            "raw_reason": "TEXT",
+            "click_attempted": "INTEGER",
+            "confirmation_observed": "INTEGER",
+            "artifact_refs_json": "TEXT",
+        }
+        indexes = {
+            row[1]
+            for row in conn.execute("PRAGMA index_list(submission_attempts)").fetchall()
+        }
+        assert "submission_attempts_posting_idx" in indexes
+        assert "submission_attempts_ats_idx" in indexes
+    finally:
+        conn.close()
+
+
+def test_manage_lanes_status_initializes_attempt_schema_without_preseed(tmp_path: Path, capsys) -> None:
+    from manage_lanes import main
+
+    db = tmp_path / "tracker.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE postings (
+            posting_id TEXT PRIMARY KEY,
+            company TEXT,
+            title TEXT,
+            status TEXT,
+            url TEXT,
+            outcome TEXT,
+            last_attempt_at INTEGER,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            application_notes TEXT
+        );
+        CREATE TABLE emails (posting_id TEXT PRIMARY KEY, resume_pdf TEXT);
+        CREATE TABLE applications (
+            posting_id TEXT PRIMARY KEY, resume_path TEXT, ats TEXT,
+            submitted_at INTEGER, confirmation TEXT, notes TEXT
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    assert main(["--db", str(db), "status", "ashby"]) == 0
+    capsys.readouterr()
+
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='submission_attempts'"
+        ).fetchone() == (1,)
+    finally:
+        conn.close()
+
+
+def test_ensure_submission_attempts_preserves_caller_transaction() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE caller_owned (id INTEGER PRIMARY KEY)")
+    conn.execute("INSERT INTO caller_owned (id) VALUES (1)")
+
+    ensure_submission_attempts(conn)
+
+    assert conn.in_transaction
+    conn.rollback()
+    assert conn.execute("SELECT COUNT(*) FROM caller_owned").fetchone() == (0,)
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='submission_attempts'"
+    ).fetchone() is None
+
+
 def test_attempt_ledger_is_append_only_and_finishes_once() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_submission_attempts(conn)
