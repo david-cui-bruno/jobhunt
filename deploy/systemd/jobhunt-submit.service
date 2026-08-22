@@ -1,0 +1,15 @@
+[Unit]
+Description=Run jobhunt submit dispatcher continuously
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/jobhunt
+EnvironmentFile=-/etc/jobhunt/jobhunt.env
+ExecStart=/opt/jobhunt/.venv/bin/python /opt/jobhunt/submit_daemon.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -98,10 +98,10 @@ print('active_rows:', len(read_active_postings()))
 print('submit_dry_run:', submit_ready(limit=1, dry_run=True))
 PY
 sudo systemd-analyze verify /etc/systemd/system/jobhunt@.service \
+  /etc/systemd/system/jobhunt-submit.service \
   /etc/systemd/system/jobhunt-queue-sync.service \
   /etc/systemd/system/jobhunt@drip.timer \
   /etc/systemd/system/jobhunt@revise.timer \
-  /etc/systemd/system/jobhunt@submit.timer \
   /etc/systemd/system/jobhunt@sprint.timer \
   /etc/systemd/system/jobhunt@inbox.timer \
   /etc/systemd/system/jobhunt-queue-sync.timer
@@ -128,7 +128,7 @@ Only after manually reviewing the queue should you enable application
 submission:
 
 ```bash
-sudo systemctl enable --now jobhunt@submit.timer
+sudo systemctl enable --now jobhunt-submit.service
 ```
 
 Leave `jobhunt@sprint.timer` disabled initially. It submits newly discovered
@@ -161,8 +161,8 @@ To stop VPS activity without deleting state:
 
 ```bash
 sudo systemctl disable --now \
-  jobhunt@drip.timer jobhunt@revise.timer jobhunt@submit.timer \
-  jobhunt@sprint.timer jobhunt@inbox.timer jobhunt-queue-sync.timer
+  jobhunt@drip.timer jobhunt@revise.timer jobhunt@sprint.timer \
+  jobhunt@inbox.timer jobhunt-queue-sync.timer jobhunt-submit.service
 ```
 
 The SQLite database and generated resumes remain under `/opt/jobhunt/out` and

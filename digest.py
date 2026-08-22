@@ -29,10 +29,14 @@ import json
 import sqlite3
 import sys
 import time
+from typing import Optional
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from notify import mailer
+from submission.ashby_policy import INTERVAL_MINUTES, ensure_lane_state, load_state
+from submission.metrics import attempt_metrics, queue_metrics
+from submission.lanes import ASHBY, classify_url
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "out" / "tracker.db"
@@ -107,8 +111,65 @@ def collect(conn, since: int) -> dict:
                     notes.append(obj.get("note", ""))
             except (json.JSONDecodeError, ValueError):
                 continue
+    try:
+        ats_metrics = attempt_metrics(conn, since=since)
+    except sqlite3.OperationalError:
+        ats_metrics = []
+    try:
+        queues = queue_metrics(conn)
+    except sqlite3.OperationalError:
+        queues = []
     return {"manual_ask": manual_ask, "manual_debt": manual_debt, "verify": verify,
-            "action": action, "stats": stats, "notes": [n for n in notes if n]}
+            "action": action, "stats": stats, "notes": [n for n in notes if n],
+            "attempt_metrics": ats_metrics, "queue_metrics": queues,
+            "ashby_breaker": _ashby_breaker_state(conn)}
+
+
+def _ashby_breaker_state(conn: sqlite3.Connection, now: Optional[int] = None) -> dict:
+    if now is None:
+        now = int(time.time())
+    ensure_lane_state(conn)
+    state = load_state(conn)
+    ready_depth = 0
+    for row in conn.execute("SELECT url FROM postings WHERE status='ready'").fetchall():
+        _ats, lane = classify_url(row[0] if not isinstance(row, sqlite3.Row) else row["url"])
+        if lane.name == ASHBY.name:
+            ready_depth += 1
+    blocked = state.blocked_until > now
+    return {
+        "paused": not state.enabled,
+        "enabled": state.enabled,
+        "blocked": blocked,
+        "resume_at": state.blocked_until if blocked else state.next_attempt_at,
+        "tier": state.tier,
+        "interval_minutes": INTERVAL_MINUTES[state.tier],
+        "consecutive_confirmed": state.consecutive_confirmed,
+        "ready_depth": ready_depth,
+    }
+
+
+def _submission_health_lines(d: dict) -> list[str]:
+    metrics = d.get("attempt_metrics") or []
+    failing = sorted(
+        (row for row in metrics if row.get("attempts", 0) - row.get("confirmed", 0) > 0),
+        key=lambda row: (-(row.get("attempts", 0) - row.get("confirmed", 0)), row.get("ats", "")),
+    )[:3]
+    lines = [
+        f"{row['ats']} {row.get('confirmed', 0)}/{row.get('attempts', 0)} confirmed"
+        for row in failing
+    ]
+    queues = [row for row in (d.get("queue_metrics") or []) if row.get("depth", 0) > 0]
+    if queues:
+        lines.append("queues: " + ", ".join(f"{row['lane']} {row['depth']}" for row in queues))
+    breaker = d.get("ashby_breaker") or {}
+    if breaker and not (breaker.get("paused") and not breaker.get("blocked") and breaker.get("ready_depth", 0) == 0):
+        state = "blocked" if breaker.get("blocked") else ("paused" if breaker.get("paused") else "enabled")
+        when = datetime.datetime.fromtimestamp(int(breaker.get("resume_at") or 0), ET).strftime("%-I:%M%p ET")
+        lines.append(
+            f"ashby {state}: tier {breaker.get('tier')} / {breaker.get('interval_minutes')}m, "
+            f"next {when.lower()}, streak {breaker.get('consecutive_confirmed')}, ready {breaker.get('ready_depth')}"
+        )
+    return lines
 
 
 def compose(d: dict) -> str | None:
@@ -147,6 +208,10 @@ def compose(d: dict) -> str | None:
 
     if d["notes"]:
         sections.append("fleet notes:\n" + "\n".join(f"• {n[:160]}" for n in d["notes"][:5]))
+
+    health = _submission_health_lines(d)
+    if health:
+        sections.append("submission health:\n" + "\n".join(f"• {line}" for line in health))
 
     s = d["stats"]
     debt = sum(d["manual_debt"].values())
@@ -204,6 +269,10 @@ def compose_short(d: dict) -> str | None:
 
     if d["notes"]:
         sections.append("fleet notes:\n" + "\n".join(f"• {n[:140]}" for n in d["notes"][:3]))
+
+    health = _submission_health_lines(d)
+    if health:
+        sections.append("submission health:\n" + "\n".join(f"• {line}" for line in health))
 
     if not sections:
         return None

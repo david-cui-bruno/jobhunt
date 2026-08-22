@@ -57,6 +57,59 @@ class ComposeShortTest(unittest.TestCase):
         d = _collected(manual_ask=[("C" * 300, "T" * 300, "u", "E" * 400)] * 6)
         self.assertLessEqual(len(digest.compose_short(d)), digest.SHORT_LIMIT)
 
+    def test_digest_includes_compact_submission_health(self):
+        d = _collected(
+            manual_ask=[("Stripe", "SWE", "u", "needs answers: x")],
+            stats={"submitted_24h": 4, "ready": 2, "queued": 31},
+        )
+        d["attempt_metrics"] = [
+            {"ats": "greenhouse", "attempts": 2, "confirmed": 1, "confirmation_rate": 0.5,
+             "failed": 0, "manual": 1, "p50_duration_ms": 2000, "p95_duration_ms": 3000},
+            {"ats": "workday", "attempts": 3, "confirmed": 0, "confirmation_rate": 0.0,
+             "failed": 3, "manual": 0, "p50_duration_ms": 5000, "p95_duration_ms": 9000},
+        ]
+        d["queue_metrics"] = [
+            {"lane": "direct", "depth": 5, "automatic": True},
+            {"lane": "workday", "depth": 1, "automatic": True},
+            {"lane": "ashby", "depth": 2, "automatic": False},
+        ]
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE postings (posting_id TEXT PRIMARY KEY, company TEXT, title TEXT, status TEXT, url TEXT, first_seen INTEGER)")
+        conn.execute("INSERT INTO postings VALUES ('a1','Ashby Co','SWE','ready','https://jobs.ashbyhq.com/acme/1',0)")
+        from submission.ashby_policy import ensure_lane_state
+        ensure_lane_state(conn)
+        conn.execute("UPDATE ats_lane_state SET enabled=1,tier=1,consecutive_confirmed=3,next_attempt_at=1800000000 WHERE ats='ashby'")
+        d["ashby_breaker"] = digest._ashby_breaker_state(conn, now=1700000000)
+
+        body = digest.compose_short(d)
+
+        self.assertLessEqual(len(body), digest.SHORT_LIMIT)
+        self.assertIn("workday 0/3 confirmed", body)
+        self.assertIn("greenhouse 1/2 confirmed", body)
+        self.assertIn("queues: direct 5, workday 1, ashby 2", body)
+        self.assertIn("ashby enabled: tier 1 / 90m", body)
+        self.assertIn("ready 1", body)
+
+    def test_paused_unblocked_empty_ashby_state_is_omitted(self):
+        d = _collected(manual_ask=[("Stripe", "SWE", "u", "needs answers: x")])
+        d["attempt_metrics"] = []
+        d["queue_metrics"] = []
+        d["ashby_breaker"] = {
+            "paused": True,
+            "enabled": False,
+            "blocked": False,
+            "resume_at": 1800000000,
+            "tier": 0,
+            "interval_minutes": 180,
+            "consecutive_confirmed": 0,
+            "ready_depth": 0,
+        }
+
+        body = digest.compose_short(d)
+
+        self.assertNotIn("ashby", body.lower())
+
     def test_phone_copy_fails_soft(self):
         d = _collected(manual_ask=[("Stripe", "SWE", "u", "needs answers: x")])
         with mock.patch("notify.kith_bridge.send_phone", side_effect=RuntimeError("bridge down")):

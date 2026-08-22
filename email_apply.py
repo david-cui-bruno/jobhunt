@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT / "notify")]
 import mailer  # noqa: E402
 import track as _track  # noqa: E402  (track-based graduation, David 2026-08-19)
+from submission.identity import _active_posting_claimed, posting_already_applied  # noqa: E402
 
 DB = ROOT / "out" / "tracker.db"
 MODEL = "claude-sonnet-5"
@@ -129,14 +130,13 @@ def compose_ready_email_postings(limit: int = 3) -> list[str]:
         "WHERE p.status='ready' AND p.url LIKE '%news.ycombinator.com%' "
         "AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.posting_id=p.posting_id) "
         "AND NOT EXISTS (SELECT 1 FROM email_apps ea WHERE ea.posting_id=p.posting_id) "
-        "AND NOT EXISTS ("
-        "  SELECT 1 FROM applications a2 JOIN postings p2 USING(posting_id) "
-        "  WHERE lower(trim(p2.company))=lower(trim(p.company))"
-        ") LIMIT ?",
+        "LIMIT ?",
         (limit,)).fetchall()
     done = []
     for r in rows:
         if conn.execute("SELECT 1 FROM email_apps WHERE posting_id=?", (r["posting_id"],)).fetchone():
+            continue
+        if posting_already_applied(conn, r["posting_id"], r["url"]):
             continue
         pdf = _runtime_path(r["resume_pdf"])
         import submit as submit_mod
@@ -197,16 +197,9 @@ def compose_ready_email_postings(limit: int = 3) -> list[str]:
             ).fetchone() or conn.execute(
                 "SELECT 1 FROM email_apps WHERE posting_id=?",
                 (r["posting_id"],),
-            ).fetchone() or conn.execute(
-                "SELECT 1 FROM applications a JOIN postings prior USING(posting_id) "
-                "WHERE lower(trim(prior.company))=lower(trim(?)) LIMIT 1",
-                (r["company"],),
-            ).fetchone() or conn.execute(
-                "SELECT 1 FROM postings WHERE posting_id<>? "
-                "AND lower(trim(company))=lower(trim(?)) "
-                "AND status IN ('submitting','sprinting') LIMIT 1",
-                (r["posting_id"], r["company"]),
-            ).fetchone():
+            ).fetchone() or posting_already_applied(
+                conn, r["posting_id"], r["url"]
+            ) or _active_posting_claimed(conn, r["posting_id"], r["url"]):
                 conn.rollback()
                 continue
             changed = conn.execute(

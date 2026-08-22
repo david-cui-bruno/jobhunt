@@ -2,25 +2,30 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key>
-  <string>com.jobhunt.submit</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/python3</string>
-    <string>/Users/davidcui824/jobhunt/submit.py</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>ANTHROPIC_API_KEY</key>
-    <string>__ANTHROPIC_KEY__</string>
-    <key>PATH</key>
-    <string>/Library/TeX/texbin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-  </dict>
-  <key>StartInterval</key>
-  <integer>3900</integer>
-  <key>StandardOutPath</key>
-  <string>/Users/davidcui824/jobhunt/out/submit.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/davidcui824/jobhunt/out/submit.log</string>
+	<key>Label</key>
+	<string>com.jobhunt.submit</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/davidcui824/jobhunt/runtime_secrets.py</string>
+		<string>--</string>
+		<string>/usr/bin/python3</string>
+		<string>/Users/davidcui824/jobhunt/submit_daemon.py</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/Library/TeX/texbin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>/Users/davidcui824/jobhunt/out/submit.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/davidcui824/jobhunt/out/submit.log</string>
 </dict>
 </plist>

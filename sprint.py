@@ -45,7 +45,8 @@ def run() -> list[dict]:
     from watcher import watch, filter as filt
     from jd import fetch_jd, detect_ats
     from tailor import tailor
-    from drip import claim_posting, release_claim, transition_claim
+    from drip import claim_posting, release_claim
+    from submission.lanes import classify_url
     import mailer
 
     results = []
@@ -66,6 +67,9 @@ def run() -> list[dict]:
                          (pid,)).fetchone()
         if not r:
             continue  # filtered out, closed, or deduped
+        _ats, lane = classify_url(r["url"])
+        if lane.name == "ashby":
+            continue
         print(f"[sprint] NEW: {r['company']} — {r['title']}", flush=True)
         attempted += 1
         if not claim_posting(conn, r["posting_id"], "sprinting"):
@@ -83,24 +87,7 @@ def run() -> list[dict]:
             continue
 
         import submit as submit_mod
-        quality_ok, quality_reason = submit_mod._resume_quality_ready(
-            Path(pdf), r["posting_id"]
-        )
-        if not quality_ok:
-            conn.execute(
-                "UPDATE postings SET status='manual', outcome='manual', last_error=? "
-                "WHERE posting_id=? AND status='sprinting'",
-                (f"resume quality gate: {quality_reason}", r["posting_id"]),
-            )
-            conn.commit()
-            print(
-                f"[sprint] resume quarantined for {r['company']}: {quality_reason}",
-                flush=True,
-            )
-            continue
-        if submit_mod._posting_dead(r["url"]):
-            transition_claim(conn, r["posting_id"], "sprinting", "filtered_out")
-            continue
+        from submission.executor import execute_claimed_posting
 
         # record the resume paths (submit machinery + revise thread need them)
         conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
@@ -110,14 +97,14 @@ def run() -> list[dict]:
         # This marker separates a safely retryable tailoring crash from a browser
         # crash whose remote submission result may be unknowable.
         claim = submit_mod._claim_submission(
-            conn, r["posting_id"], r["company"], from_status="sprinting"
+            conn, r["posting_id"], r["url"], from_status="sprinting"
         )
         if claim != "claimed":
             conn.rollback()
-            if claim in {"already_applied", "company_claimed"}:
+            if claim in {"already_applied", "posting_claimed"}:
                 conn.execute(
                     "UPDATE postings SET status='filtered_out', outcome='stale', "
-                    "last_error='company already applied or being submitted' "
+                    "last_error='canonical posting already applied or being submitted' "
                     "WHERE posting_id=? AND status='sprinting'",
                     (r["posting_id"],),
                 )
@@ -128,51 +115,21 @@ def run() -> list[dict]:
             )
             continue
 
-        # submit RIGHT NOW via the isolated adapter (same as submit.py)
-        slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
-        try:
-            res = submit_mod._isolated_adapter({
-                "url": r["url"], "resume_pdf": str(pdf), "slug": slug,
-                "title": r["title"], "dry_run": False,
-            })
-        except Exception as exc:
-            submit_mod._mark_outcome(
-                conn, r["posting_id"], "manual", "retryable_failure",
-                f"adapter execution failed: {type(exc).__name__}: {exc}",
-                expected_status="submitting",
-            )
-            print(f"[sprint] adapter crashed for {r['company']}: {type(exc).__name__}: {exc}",
-                  flush=True)
-            continue
-        outcome = submit_mod._outcome(res)
-        reason = str(res.get("reason", ""))
+        row = conn.execute(
+            "SELECT p.*, e.resume_pdf, 'sprint' AS application_notes "
+            "FROM postings p JOIN emails e USING(posting_id) WHERE p.posting_id=?",
+            (r["posting_id"],),
+        ).fetchone()
+        result = execute_claimed_posting(
+            conn,
+            row,
+            lane=lane,
+            dry_run=False,
+            worker_id=f"sprint-{lane.name}",
+        )
+        outcome = result.get("outcome")
+        reason = str(result.get("reason", ""))
         if outcome == "submitted":
-            changed = submit_mod._mark_outcome(
-                conn, r["posting_id"], "submitted", "submitted", reason,
-                expected_status="submitting", commit=False,
-            )
-            if changed:
-                try:
-                    conn.execute("INSERT INTO applications VALUES (?,?,?,?,?,?)",
-                                 (r["posting_id"], str(pdf),
-                                  str(res.get("detected_ats", "unknown")),
-                                  int(time.time()), reason, "sprint"))
-                    conn.commit()
-                except sqlite3.IntegrityError:
-                    conn.rollback()
-                    conn.execute(
-                        "UPDATE postings SET status='manual', outcome='manual', "
-                        "last_error='application ledger conflict after sprint submit; verify' "
-                        "WHERE posting_id=? AND status='submitting'",
-                        (r["posting_id"],),
-                    )
-                    conn.commit()
-                    print(f"[sprint] ledger conflict after adapter: {r['company']}", flush=True)
-                    continue
-            else:
-                conn.rollback()
-                print(f"[sprint] claim lost after adapter: {r['company']}", flush=True)
-                continue
             done += 1
             print(f"[sprint] SUBMITTED: {r['company']} ({reason})", flush=True)
             # FYI audit email (attachment = what was sent)
@@ -191,15 +148,8 @@ def run() -> list[dict]:
             except Exception as e:
                 print(f"[sprint] FYI email failed: {e}", flush=True)
         else:
-            # Release the sprint claim only after its adapter has finished, so
-            # the normal submit lane cannot race the same application.
-            target = "manual" if res.get("submission_uncertain") else "ready"
-            submit_mod._mark_outcome(
-                conn, r["posting_id"], target, outcome, reason,
-                expected_status="submitting",
-            )
             print(f"[sprint] not submitted ({outcome}: {reason[:60]}); "
-                  f"left for {'verification' if target == 'manual' else 'normal lane'}",
+                  f"left for {'verification' if outcome == 'manual' else 'normal lane'}",
                   flush=True)
         results.append({"company": r["company"], "outcome": outcome, "reason": reason})
     conn.close()

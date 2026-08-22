@@ -18,6 +18,10 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from submission.attempts import ensure_submission_attempts
+from submission.database import connect_tracker
+from submission.identity import claim_submission, posting_already_applied
+
 ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT / "apply"), str(ROOT / "notify")]
 
@@ -133,6 +137,7 @@ def _ensure_outcome_columns(conn: sqlite3.Connection) -> None:
     for name, definition in columns.items():
         if name not in existing:
             conn.execute(f"ALTER TABLE postings ADD COLUMN {name} {definition}")
+    ensure_submission_attempts(conn)
     conn.commit()
 
 
@@ -271,14 +276,10 @@ def _send_notice(subject: str, body: str) -> bool:
         return False
 
 
-def _company_already_applied(
-    conn: sqlite3.Connection, company: str, posting_id: str
+def _posting_already_applied(
+    conn: sqlite3.Connection, posting_id: str, url: str
 ) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM applications a JOIN postings prior USING(posting_id) "
-        "WHERE a.posting_id=? OR lower(trim(prior.company))=lower(trim(?)) LIMIT 1",
-        (posting_id, company),
-    ).fetchone() is not None
+    return posting_already_applied(conn, posting_id, url)
 
 
 def _resume_quality_ready(resume_pdf: Path, posting_id: str) -> tuple[bool, str]:
@@ -306,36 +307,12 @@ def _resume_quality_ready(resume_pdf: Path, posting_id: str) -> tuple[bool, str]
 def _claim_submission(
     conn: sqlite3.Connection,
     posting_id: str,
-    company: str,
+    url: str,
     from_status: str = "ready",
 ) -> str:
-    """Atomically reserve one company's external-submission slot."""
-    if from_status not in {"ready", "sprinting"}:
-        raise ValueError(f"invalid submission source status: {from_status}")
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        if _company_already_applied(conn, company, posting_id):
-            conn.rollback()
-            return "already_applied"
-        active = conn.execute(
-            "SELECT 1 FROM postings "
-            "WHERE posting_id<>? AND lower(trim(company))=lower(trim(?)) "
-            "AND status IN ('submitting','sprinting') LIMIT 1",
-            (posting_id, company),
-        ).fetchone()
-        if active:
-            conn.rollback()
-            return "company_claimed"
-        changed = conn.execute(
-            "UPDATE postings SET status='submitting', last_attempt_at=? "
-            "WHERE posting_id=? AND status=?",
-            (int(time.time()), posting_id, from_status),
-        ).rowcount
-        conn.commit()
-        return "claimed" if changed == 1 else "claim_lost"
-    except Exception:
-        conn.rollback()
-        raise
+    return claim_submission(
+        conn, posting_id=posting_id, url=url, from_status=from_status
+    )
 
 
 def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> list[dict]:
@@ -343,247 +320,89 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
     # and speed-to-apply wins. Human-ish pacing between submissions retained.
     # Gaming-defer check REMOVED (David 2026-08-17). It matched the Steam
     # client merely existing (steam_osx idles in the menu bar at login), which
-    # silently blocked nearly every submit run for weeks — throughput fell to
-    # ~1/day with 240 ready. The check was also pointless: every adapter runs
-    # headless Playwright (apply/*.py, headless=True), so submissions never
-    # show a window regardless of what David is doing.
+    # silently blocked nearly every submit run for weeks. Adapters run headless.
+    from submission.executor import execute_claimed_posting
+    from submission.lanes import classify_url
 
-    # ASHBY CIRCUIT BREAKER (2026-08-18): overnight, 35/38 Ashby submissions
-    # were rejected as 'possible spam' — their velocity detection flags bursts
-    # of headless applications from one IP. Two consecutive spam rejections in
-    # a run now skip further Ashby postings and start a 12h cooldown
-    # (out/ashby_cooldown holds the resume-at epoch). Non-Ashby ATSs continue
-    # unaffected; spam-rejected postings stay 'manual' for the digest.
-    ashby_cooldown_file = ROOT / "out" / "ashby_cooldown"
-    ashby_blocked = False
-    try:
-        if ashby_cooldown_file.exists() and float(ashby_cooldown_file.read_text().strip()) > time.time():
-            ashby_blocked = True
-    except (ValueError, OSError):
-        pass
-    ashby_spam_streak = 0
-    # Per-run Ashby cap (2026-08-19): the 12h cooldown alone wasn't enough —
-    # first submissions after it lapsed (Town, Volta 23:27 8/18) were flagged
-    # again, so Ashby's velocity window is longer than one burst. Cap Ashby to
-    # 2 submissions per run (~2 per 65-min timer tick); other ATSs unaffected.
-    # 2026-08-22 FINAL: Ashby is manual-only. The escalation ladder was
-    # burst -> 12h breaker (8/18) -> 2/run cap (8/19) -> stealth args (8/19)
-    # -> 1/run (8/21); at 1/run, 16 of 19 attempts in 24h were STILL flagged
-    # (0 accepted). Conclusion: Ashby has this IP/fingerprint flagged at the
-    # account level, not the velocity level. Automated Ashby submissions only
-    # burn postings, so they are skipped entirely; the daily digest points
-    # David at the manual pile (his trusted browser won't be flagged).
-    ASHBY_PER_RUN = 0
-    ashby_done_this_run = 0
-    # Per-run Ashby cap (2026-08-19): the 12h cooldown alone wasn't enough —
-    # first submissions after it lapsed (Town, Volta 23:27 8/18) were flagged
-    # again, so Ashby's velocity window is longer than one burst. Cap Ashby to
-    # 2 submissions per run (~2 per 65-min timer tick); other ATSs unaffected.
-    # 2026-08-22 FINAL: Ashby is manual-only. The escalation ladder was
-    # burst -> 12h breaker (8/18) -> 2/run cap (8/19) -> stealth args (8/19)
-    # -> 1/run (8/21); at 1/run, 16 of 19 attempts in 24h were STILL flagged
-    # (0 accepted). Conclusion: Ashby has this IP/fingerprint flagged at the
-    # account level, not the velocity level. Automated Ashby submissions only
-    # burn postings, so they are skipped entirely; the daily digest points
-    # David at the manual pile (his trusted browser won't be flagged).
-    ASHBY_PER_RUN = 0
-    ashby_done_this_run = 0
-
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
+    conn = connect_tracker(DB)
     _ensure_outcome_columns(conn)
     rows = conn.execute(
         "SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING(posting_id) "
         "WHERE p.status='ready' "
         "AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.posting_id=p.posting_id) "
-        "AND NOT EXISTS ("
-        "  SELECT 1 FROM applications a2 JOIN postings p2 USING(posting_id) "
-        "  WHERE lower(trim(p2.company))=lower(trim(p.company))"
-        ") "
         "ORDER BY p.rowid DESC").fetchall()
-    results = []
-    done = 0
+    results: list[dict] = []
+    attempted = 0
     run_started = time.monotonic()
-    for r in rows:
-        if done >= limit or (dry_run and len(results) >= limit):
-            break
-        if time.monotonic() - run_started > RUN_BUDGET_SECONDS:
-            print(f"[submit] run budget ({RUN_BUDGET_SECONDS}s) spent — {done} submitted; leaving the rest for the next timer run")
-            break
-        if "ashbyhq.com" in (r["url"] or ""):
-            continue  # Ashby is manual-only (2026-08-22) — see ASHBY_PER_RUN note
-        slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
-        pdf = _runtime_path(r["resume_pdf"])
-        # Rows are selected as a batch, so a prior row in this same run may have
-        # just created a company-level application ledger entry. Re-check before
-        # claiming and touching an external form.
-        if _company_already_applied(conn, r["company"], r["posting_id"]):
-            if not dry_run:
-                conn.execute(
-                    "UPDATE postings SET status='filtered_out', outcome='stale', "
-                    "last_error='company already has an application' "
-                    "WHERE posting_id=? AND status='ready'",
-                    (r["posting_id"],),
+    try:
+        for r in rows:
+            if attempted >= limit or (dry_run and len(results) >= limit):
+                break
+            if time.monotonic() - run_started > RUN_BUDGET_SECONDS:
+                print(
+                    f"[submit] run budget ({RUN_BUDGET_SECONDS}s) spent — "
+                    f"{attempted} attempted; leaving the rest for the next timer run"
                 )
-                conn.commit()
-            results.append({
-                "company": r["company"],
-                "ats": "unknown",
-                "outcome": "stale",
-                "reason": "company already has an application; not resubmitted",
-            })
-            continue
-        quality_ok, quality_reason = _resume_quality_ready(pdf, r["posting_id"])
-        if not quality_ok:
-            if not dry_run:
-                conn.execute(
-                    "UPDATE postings SET status='manual', outcome='manual', last_error=? "
-                    "WHERE posting_id=? AND status='ready'",
-                    (f"resume quality gate: {quality_reason}", r["posting_id"]),
-                )
-                conn.commit()
-            results.append({
-                "company": r["company"],
-                "ats": "unknown",
-                "outcome": "manual",
-                "reason": f"resume quality gate: {quality_reason}",
-            })
-            continue
-        if not dry_run:
-            claim = _claim_submission(conn, r["posting_id"], r["company"])
-            if claim in {"already_applied", "company_claimed"}:
-                conn.execute(
-                    "UPDATE postings SET status='filtered_out', outcome='stale', "
-                    "last_error='company already applied or being submitted' "
-                    "WHERE posting_id=? AND status='ready'",
-                    (r["posting_id"],),
-                )
-                conn.commit()
+                break
+            _ats, lane = classify_url(r["url"])
+            if lane.name == "ashby":
+                continue
+
+            # Rows are selected as a batch, so a prior mirror row in this same run may
+            # have just created a canonical application ledger entry. Re-check before
+            # claiming and touching an external form.
+            if _posting_already_applied(conn, r["posting_id"], r["url"]):
+                if not dry_run:
+                    conn.execute(
+                        "UPDATE postings SET status='filtered_out', outcome='stale', "
+                        "last_error='canonical posting already has an application' "
+                        "WHERE posting_id=? AND status='ready'",
+                        (r["posting_id"],),
+                    )
+                    conn.commit()
                 results.append({
                     "company": r["company"],
                     "ats": "unknown",
                     "outcome": "stale",
-                    "reason": "company already applied or being submitted; not resubmitted",
+                    "reason": "canonical posting already has an application; not resubmitted",
                 })
                 continue
-            if claim != "claimed":
-                continue
-        if _posting_dead(r["url"]):
-            _mark_outcome(conn, r["posting_id"], "filtered_out", "stale",
-                          "liveness check marked posting stale", dry_run,
-                          expected_status=None if dry_run else "submitting")
-            results.append({"company": r["company"], "ats": "unknown", "outcome": "stale"})
-            continue
 
-        try:
-            res = _isolated_adapter({
-                "url": r["url"],
-                "resume_pdf": str(pdf),
-                "slug": slug,
-                "title": r["title"],
-                "dry_run": dry_run,
-            })
-        except Exception as exc:
-            res = {
-                "outcome": "retryable_failure",
-                "ok": False,
-                "submitted": False,
-                "submission_uncertain": True,
-                "reason": f"adapter launch failed: {type(exc).__name__}: {exc}",
-            }
-        outcome = _outcome(res)
-        # retryable (timeouts, network blips): stay 'ready' so the next hourly
-        # sweep retries automatically, up to 3 attempts, then settle failed.
-        # (Before this, retryable_failure settled 'failed' and was never retried;
-        # Kastle and Scale both needed manual requeues on 2026-08-08.)
-        attempts = (r["attempt_count"] or 0) if "attempt_count" in r.keys() else 0
-        if res.get("submission_uncertain"):
-            status_for_outcome = "manual"
-        elif outcome == "retryable_failure" and attempts < 2:
-            status_for_outcome = "ready"
-        else:
-            status_for_outcome = {
-                "submitted": "submitted",
-                "manual": "manual",
-                "stale": "filtered_out",
-                "retryable_failure": "failed",
-                "failed": "failed",
-            }.get(outcome, "failed")
-        reason = str(res.get("reason", ""))
-        changed = _mark_outcome(
-            conn, r["posting_id"], status_for_outcome, outcome, reason, dry_run,
-            expected_status=None if dry_run else "submitting",
-            commit=not (outcome == "submitted" and not dry_run),
-        )
-        if outcome == "submitted" and not dry_run:
-            if not changed:
-                conn.rollback()
-                results.append({"company": r["company"], "ats": res.get("detected_ats", "unknown"),
-                                "outcome": "manual", "reason": "submission claim lost; verify"})
-                continue
-            ats = str(res.get("detected_ats", "unknown"))
-            # Never overwrite a prior submission record. The ready-query anti-join
-            # is the first guard; this unique insert closes the race if another
-            # worker records the application after rows were selected.
-            try:
-                conn.execute(
-                    "INSERT INTO applications VALUES (?,?,?,?,?,?)",
-                    (r["posting_id"], str(pdf), ats, int(time.time()), reason, ""))
-            except sqlite3.IntegrityError:
-                conn.rollback()
-                conn.execute(
-                    "UPDATE postings SET status='submitted', outcome='submitted', "
-                    "last_error='already present in applications ledger' "
-                    "WHERE posting_id=? AND status='submitting'",
-                    (r["posting_id"],),
-                )
-                conn.commit()
-                results.append({
-                    "company": r["company"],
-                    "ats": ats,
-                    "outcome": "submitted",
-                    "reason": "already present in applications ledger; not resubmitted",
-                })
-                continue
-            conn.commit()
-            done += 1
-        elif res.get("submission_uncertain") and not dry_run:
-            _send_notice(
-                f"[jobhunt] verify possible submission: {r['company']}",
-                f"{r['company']} — {r['title']}\n{r['url']}\n\n"
-                f"The adapter attempted Submit but could not verify the result: {reason}\n"
-                "This posting was quarantined and will not be retried automatically.",
+            if not dry_run:
+                claim = _claim_submission(conn, r["posting_id"], r["url"])
+                if claim in {"already_applied", "posting_claimed"}:
+                    conn.execute(
+                        "UPDATE postings SET status='filtered_out', outcome='stale', "
+                        "last_error='canonical posting already applied or being submitted' "
+                        "WHERE posting_id=? AND status='ready'",
+                        (r["posting_id"],),
+                    )
+                    conn.commit()
+                    results.append({
+                        "company": r["company"],
+                        "ats": "unknown",
+                        "outcome": "stale",
+                        "reason": "canonical posting already applied or being submitted; not resubmitted",
+                    })
+                    continue
+                if claim != "claimed":
+                    continue
+
+            result = execute_claimed_posting(
+                conn,
+                r,
+                lane=lane,
+                dry_run=dry_run,
+                worker_id=f"submit-{lane.name}",
             )
-        elif outcome == "manual" and res.get("unanswered") and not dry_run:
-            _send_notice(
-                f"[jobhunt] manual input needed: {r['company']}",
-                f"{r['company']} — {r['title']}\n{r['url']}\n\n"
-                f"Auto-fill couldn't answer: {res['unanswered']}\n"
-                "Reply with answers and I'll retry, or apply manually.",
-            )
-        results.append({"company": r["company"], "ats": res.get("detected_ats", "unknown"),
-                        "outcome": outcome, "reason": reason})
-        # Ashby spam-streak accounting (see breaker comment above).
-        if "possible spam" in (reason or ""):
-            ashby_spam_streak += 1
-            if ashby_spam_streak >= 2 and not ashby_blocked:
-                ashby_blocked = True
-                try:
-                    ashby_cooldown_file.write_text(str(time.time() + 12 * 3600))
-                    print("[submit] ashby breaker tripped: 2 consecutive spam rejections — 12h cooldown")
-                except OSError:
-                    pass
-        elif res.get("detected_ats") == "ashby":
-            ashby_spam_streak = 0
-        if res.get("detected_ats") == "ashby" or "ashbyhq.com" in (r["url"] or ""):
-            ashby_done_this_run += 1
-        # Keep attempts sequential and lightly staggered without imposing the old
-        # one-to-four-minute artificial delay. Do not sleep after reaching the cap.
-        if not dry_run and done < limit:
-            time.sleep(random.uniform(PACING_MIN_SECONDS, PACING_MAX_SECONDS))
-    conn.close()
+            results.append(result)
+            attempted += 1
+
+            if not dry_run and attempted < limit:
+                time.sleep(random.uniform(PACING_MIN_SECONDS, PACING_MAX_SECONDS))
+    finally:
+        conn.close()
     return results
-
 
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv if argv is None else argv

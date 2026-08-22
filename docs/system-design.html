@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>jobhunt — system design</title>
+<title>jobhunt - system design</title>
 <style>
   :root {
     --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --text: #d7dae0;
@@ -100,7 +100,7 @@
 <div class="wrap">
 
 <header id="overview">
-  <h1>jobhunt <span class="dim">— system design</span></h1>
+  <h1>jobhunt <span class="dim">- system design</span></h1>
   <p class="sub">An autonomous job-application pipeline that runs on David's Mac. It discovers
   postings, decides which ones matter, writes a tailored resume, fills and submits the actual
   application forms, reads the inbox for outcomes, and reports back once a day. Human input is
@@ -109,7 +109,7 @@
     <div class="k"><b>7</b><span>pipeline stages</span></div>
     <div class="k"><b>9</b><span>source watchers</span></div>
     <div class="k"><b>8</b><span>ATS adapters</span></div>
-    <div class="k"><b>6</b><span>launchd timers</span></div>
+    <div class="k"><b>5+</b><span>timers plus submit resident</span></div>
     <div class="k"><b>1</b><span>SQLite DB as spine</span></div>
     <div class="k"><b>~5%</b><span>decisions escalated to David</span></div>
   </div>
@@ -128,7 +128,7 @@ services, no IPC. If any stage dies, nothing else notices or cares; the rows jus
   <div class="arrow">→</div>
   <div class="stage"><h4>3 · Tailor</h4><div class="files">tailor/ + drip.py</div><div class="what">Claude rewords resume → PDF</div></div>
   <div class="arrow">→</div>
-  <div class="stage"><h4>4 · Submit</h4><div class="files">submit.py + apply/*</div><div class="what">headless browser fills forms</div></div>
+  <div class="stage"><h4>4 · Submit</h4><div class="files">submit_daemon.py + apply/*</div><div class="what">30-sec ATS lane dispatcher</div></div>
   <div class="arrow">→</div>
   <div class="stage"><h4>5 · Q&amp;A</h4><div class="files">apply/qa.py</div><div class="what">answers form questions</div></div>
   <div class="arrow">→</div>
@@ -153,10 +153,10 @@ column is the whole coordination mechanism. These are the real transitions:</p>
  │                └──sprint.py (fast lane: new posting──────┤   (4-min timer race:
  │                    tailor + submit in one pass)          │    speed-to-apply wins offers)
  │                                                          │
- ├──▶ <span class="s-dim">filtered_out</span>   wrong role / season / dupe company    ├──▶ <span class="s-warn">manual</span>   needs a human:
- │      (82% of everything discovered — by design)          │      unanswerable required question,
+  ├──▶ <span class="s-dim">filtered_out</span>   wrong role / season / duplicate posting ├──▶ <span class="s-warn">manual</span>   needs a human:
+ │      (82% of everything discovered - by design)          │      unanswerable required question,
  │                                                          │      CAPTCHA, unsupported ATS,
- ├──▶ <span class="s-dim">skipped</span>        David's explicit rules               │      broken login. <b>Parks aside —
+ ├──▶ <span class="s-dim">skipped</span>        David's explicit rules               │      broken login. <b>Parks aside -
  │      (fall purge, P26 ban, WaaS pause)                   │      never blocks the queue.</b>
  │                                                          │
  └──▶ <span class="s-bad">failed</span>         posting closed, board broken ────────┘      retryable failures loop
@@ -168,7 +168,7 @@ The single most important property: a posting that needs human input steps OUT o
 Rows behind it keep moving. The daily digest surfaces manual rows with the exact blocking
 question, and David's reply ("skip X" / "for Y: june 1st") is parsed and applied automatically.</div>
 
-<h2 id="discovery"><span class="num">1</span>Discovery — nine watchers, one funnel</h2>
+<h2 id="discovery"><span class="num">1</span>Discovery - nine watchers, one funnel</h2>
 <p class="lede">Supply is the ceiling on everything downstream, so discovery is deliberately
 over-inclusive: cast wide, let the filter be the taste. All watchers write the same row shape
 with a per-source <code>posting_id</code> convention so re-scrapes dedupe for free.</p>
@@ -191,25 +191,25 @@ with a per-source <code>posting_id</code> convention so re-scrapes dedupe for fr
     <p>17 verified public JSON boards for companies that post directly and skip the lists:
     Stripe, OpenAI, Databricks, quant firms. Cheap JSON polling, no scraping.</p></div>
   <div class="card"><h4>HN "Who's hiring" + WaaS</h4>
-    <span class="tag acc">hn-hiring</span><span class="tag warn">waas — PAUSED</span>
+    <span class="tag acc">hn-hiring</span><span class="tag warn">waas - PAUSED</span>
     <p>HN threads flow to an email-application path (founders read email). YC Work-at-a-Startup
     drove founder-DM applications; paused by David 2026-08-18, one env flag to resume.</p></div>
 </div>
 
-<h2 id="filter"><span class="num">2</span>Filter — David's taste, enforced in code</h2>
+<h2 id="filter"><span class="num">2</span>Filter - David's taste, enforced in code</h2>
 <p class="lede"><code>watcher/filter.py</code> + <code>profile/profile.yaml</code>. Runs on every
 new row. ~82% of discovered postings die here, which is the system working: the lists are full
 of mechanical-engineering co-ops and fall-term roles.</p>
 <div class="tbl"><table>
   <tr><th>rule</th><th>what it enforces</th></tr>
   <tr><td>roles_include</td><td>everything engineer-adjacent (word-boundary matched): SWE / ML / AI / infra / MTS / founding, product, forward-deployed, solutions engineer / SRE / security / embedded software / mobile / data science / quant / PM &amp; APM</td></tr>
-  <tr><td>roles_exclude</td><td>winter + summer terms only — no fall, no spring, no co-ops, no "new grad" (except YC/startup sources where full-time is wanted); no product marketing</td></tr>
+  <tr><td>roles_exclude</td><td>winter + summer terms only - no fall, no spring, no co-ops, no "new grad" (except YC/startup sources where full-time is wanted); no product marketing</td></tr>
   <tr><td>batch bans</td><td>no P26 YC companies (David's rule)</td></tr>
-  <tr><td>one-app-per-company</td><td>ever. An intern posting beats a pending full-time one at the same company; a submitted application freezes the company forever</td></tr>
+  <tr><td>canonical posting dedupe</td><td>Canonical posting dedupe blocks mirrored rows for the same external posting before any form or email is touched; distinct roles at one company can proceed independently</td></tr>
   <tr><td>hard excludes</td><td>PhD-required, unpaid, hardware/EE/mechanical, IT support, non-software "engineering intern" variants (bridge/project/GTM/process…)</td></tr>
 </table></div>
 
-<h2 id="tailor"><span class="num">3</span>Tailor — one resume per job description</h2>
+<h2 id="tailor"><span class="num">3</span>Tailor - one resume per job description</h2>
 <p class="lede"><code>drip.py</code> (hourly) pulls queued rows, fetches the JD, and has Claude
 reword the LaTeX resume against it. Capped at 100/day.</p>
 <div class="grid">
@@ -219,17 +219,18 @@ reword the LaTeX resume against it. Capped at 100/day.</p>
   intern apps May 2028, full-time apps May 2027 (the real early-graduation plan, confirmed).</p></div>
   <div class="card"><h4>Quality gate</h4><p>Each PDF gets structural validation +
   quality metadata written beside it. A resume that fails the gate parks the posting as manual
-  rather than sending something broken. (A missing-metadata bug once stranded 13 postings —
+  rather than sending something broken. (A missing-metadata bug once stranded 13 postings -
   now reconciled automatically.)</p></div>
   <div class="card"><h4>Sprint lane</h4><p><code>sprint.py</code> (every 4 min) races brand-new
   postings through tailor + submit in one pass. Speed-to-apply matters: early applications get
   read by humans; day-3 applications get read by rejection filters.</p></div>
 </div>
 
-<h2 id="submit"><span class="num">4</span>Submit — the part that touches the world</h2>
-<p class="lede"><code>submit.py</code> (every 65 min) takes up to 8 ready rows and drives real
-application forms with headless Playwright. This stage has the most armor because failures
-here can be irreversible (double-submits) or invisible (silent no-ops).</p>
+<h2 id="submit"><span class="num">4</span>Submit - the part that touches the world</h2>
+  <p class="lede"><code>submit_daemon.py</code> is a resident local dispatcher. It wakes every
+  30 seconds, groups ready rows by the shared ATS lane classifier, and drives real
+  application forms with headless Playwright. This stage has the most armor because failures
+  here can be irreversible (double-submits) or invisible (silent no-ops).</p>
 
 <h3>Per-ATS adapters <span class="mono" style="color:var(--cyan)">apply/*.py</span></h3>
 <p>Greenhouse · Lever · Ashby · Workday · Workable · SmartRecruiters · Rippling · email. Each
@@ -237,41 +238,67 @@ knows one vendor's DOM: where fields live, how uploads work, what a confirmed su
 like. Detection routes by URL (with redirect-chasing for postings that link a homepage).</p>
 
 <div class="grid">
+  <div class="card"><h4>ATS lanes</h4><p>Greenhouse, Lever, Workable, and Rippling share the
+  direct lane with bounded concurrency. Workday has a single-worker lane. Ashby remains behind
+  a breaker, and unsupported ATSs are parked as manual instead of blocking other rows.</p>
+  <span class="tag ok">direct</span><span class="tag ok">workday</span><span class="tag warn">ashby breaker</span></div>
   <div class="card"><h4>Process isolation</h4><p>Every posting runs in its own killable
   subprocess (<code>submit_worker.py</code>) with a hard 300s deadline. A hung browser cannot
-  take down the run.</p><span class="tag ok">5-min posting cap</span><span class="tag ok">40-min run budget</span></div>
-  <div class="card"><h4>Submission ledger</h4><p><code>applications</code> table has a UNIQUE
-  key per posting; the insert races are closed, so a submission can be recorded once and only
-  once. "Submit clicked but unconfirmed" quarantines the row instead of retrying — a retry
-  could apply twice under David's name.</p><span class="tag bad">never double-apply</span></div>
+  take down the resident dispatcher.</p><span class="tag ok">5-min posting cap</span><span class="tag ok">per-lane budgets</span></div>
+  <div class="card"><h4>Submission ledgers</h4><p><code>applications</code> table has a UNIQUE
+  key per posting; canonical posting dedupe prevents mirrored rows from creating duplicate
+  applications before any external form is touched. <code>submission_attempts</code> is the
+  append-only attempt ledger for ATS, lane, worker, timestamps, outcome, confirmation, and
+  artifacts. "Submit clicked but unconfirmed" quarantines the row instead of retrying.</p>
+  <span class="tag bad">never double-apply</span><span class="tag ok">attempt telemetry</span></div>
   <div class="card"><h4>Workday account self-recovery</h4><p>Workday requires per-tenant
   accounts (30 on file, generated passwords stored in the DB). On sign-in failure the system
   clicks Forgot Password, catches the reset email in Gmail, sets a new password, stores it,
-  and retries — once per tenant per day.</p><span class="tag ok">self-healing</span></div>
+  and retries - once per tenant per day.</p><span class="tag ok">self-healing</span></div>
+  <div class="card"><h4>Ashby canary policy</h4><p>Ashby is disabled by default and its only
+  policy source is SQLite state in <code>out/tracker.db</code>. Operators inspect it with
+  <code>manage_lanes.py status ashby</code> and <code>preview ashby</code>, then use
+  <code>enable-canary ashby</code> or <code>pause ashby</code> only at reviewed gates. The
+  evidence tiers are 180, 90, and 45 minutes. 3 and 10 confirmed submissions advance the lane.
+  A 24-hour spam breaker rolls back one tier. Uncertainty pauses. Click-uncertain postings are
+  never retried. Postings with completed attempts are never reused.</p><span class="tag warn">disabled by default</span></div>
+  <div class="card"><h4>Ashby browser gate</h4><p>The persistent profile lives under ignored
+  <code>.jobhunt-browser-profiles/ashby</code>. When ordinary Chrome is in use, Ashby requires a
+  separately installed Chrome for Testing. Stable Chrome is rejected for native smoke and ordinary
+  Chrome must never be hidden. Verification uses <code>scripts/verify_ashby_browser.py --check-only</code>
+  without launch or System Events, and reviewed <code>--about-blank</code> only after a dedicated
+  target exists. It reports only executable, process name, profile path, user agent,
+  <code>navigator.webdriver</code>, plugin count, and visibility for the dedicated process. No
+  fabricated fingerprint fields are used.</p><span class="tag bad">no stable Chrome smoke</span></div>
+  <div class="card"><h4>Ashby rollout gate</h4><p>Live rollout remains deferred. The exact order is:
+  install dedicated browser, about:blank verification, integrate the branch, back up live DB and
+  run <code>PRAGMA integrity_check</code>, inspect read-only preview, get explicit approval for one
+  irreversible submission, run one cycle, immediately pause, then inspect telemetry. Service reload
+  is pending until those gates pass.</p><span class="tag warn">manual approval required</span></div>
   <div class="card"><h4>Deferred courtesies removed</h4><p>A "don't submit while David is
   gaming" check matched the idle Steam client and silently froze the pipeline for six days.
   Deleted: headless submissions never show a window anyway. Lesson enshrined below.</p></div>
 </div>
 
-<h2 id="qa"><span class="num">5</span>Form Q&amp;A — the judgment layer</h2>
+<h2 id="qa"><span class="num">5</span>Form Q&amp;A - the judgment layer</h2>
 <p class="lede"><code>apply/qa.py</code> (58 functions, the most nuanced file in the repo).
 Application forms ask questions; this decides what may be answered and how.</p>
 
 <div class="states"><pre>
 form controls ──▶ deterministic answers (name, email, school, work auth… from profile.yaml)
                        │
-                       ├──▶ <span class="s-ok">HARD-BLOCKED topics</span> — never auto-answered, even if required:
+                       ├──▶ <span class="s-ok">HARD-BLOCKED topics</span> - never auto-answered, even if required:
                        │      demographics · salary numbers · references · prior-employment
                        │      claims · household questions · anything a wrong answer misrepresents
                        │      └─ required + blocked → posting parks as <span class="s-warn">manual</span>
                        │
-                       ├──▶ <span class="s-q">SOFT topics</span> — truthful best-judgment <b>only when the field is
+                       ├──▶ <span class="s-q">SOFT topics</span> - truthful best-judgment <b>only when the field is
                        │      required</b> (clearance: none · grad timing · availability);
                        │      optional versions stay blank (silence is free)
                        │
-                       └──▶ <span class="s-purple" style="color:var(--purple)">essays</span> — full-auto from the STORY BANK only
+                       └──▶ <span class="s-purple" style="color:var(--purple)">essays</span> - full-auto from the STORY BANK only
                               (docs/interview_stories.md): real stories, real numbers,
-                              80–150 words, no em dashes, never references this pipeline
+                              80-150 words, no em dashes, never references this pipeline
 </pre></div>
 
 <div class="call bad"><b>The self-reference incident</b>
@@ -281,19 +308,20 @@ can't tell what you wrote from what a model assembled."</i> The bullet is gone, 
 agent-factory story about the same engineering without the tell. Rule: the system may never
 describe itself in an application.</div>
 
-<h2 id="track"><span class="num">6</span>Tracking — the inbox is the source of truth</h2>
+<h2 id="track"><span class="num">6</span>Tracking - the inbox is the source of truth</h2>
 <p class="lede"><code>inbox.py</code> (every 30 min) reads Gmail, classifies every job-related
 email with Claude (OA invite / interview / recruiter reply / rejection / offer), labels and
 archives, extracts deadlines, and writes <code>inbox_events</code> keyed by company.</p>
-<p>Outcomes join back onto applications by normalized company name — which is why the sheet
+<p>Outcomes join back onto applications by normalized company name - which is why the sheet
 can show "🟠 OA received" without anyone updating anything.</p>
 
-<h2 id="report"><span class="num">7</span>Reporting — one digest, one sheet, zero spam</h2>
+<h2 id="report"><span class="num">7</span>Reporting - one digest, one sheet, zero spam</h2>
 <div class="grid">
-  <div class="card"><h4>Daily digest (6pm ET, email + iMessage)</h4>
+  <div class="card"><h4>Daily digest (6pm ET, email + Telegram)</h4>
   <p>Casual tone, skimmable in 30 seconds: what needs David (deadline-sorted), stuck
-  applications with the exact blocking question, unverified submissions, pipeline stats.
-  <b>Replies are commands</b>: "skip X", "for Acme: I can start June 1" — parsed and applied.
+  applications with the exact blocking question, unverified submissions, pipeline stats,
+  top failing ATSs, per-ATS confirmed ratios, lane queue depths, and Ashby breaker state when paused.
+  <b>Replies are commands</b>: "skip X", "for Acme: I can start June 1" - parsed and applied.
   All other notification email is muted to a log file.</p></div>
   <div class="card"><h4>Live Google Sheet</h4>
   <p>Three tabs, rewritten every 30 min (one-way; edits never read back): a chill dashboard
@@ -307,16 +335,17 @@ can show "🟠 OA received" without anyone updating anything.</p>
 no way to notice its own death. Three layers, each catching what the previous can't:</p>
 <div class="tbl"><table>
   <tr><th>layer</th><th>cadence</th><th>what it does</th></tr>
-  <tr><td>fleet-doctor.sh</td><td>30 min</td><td>Checks each agent's real health signal (DB freshness, log recency, CDP port up, Gmail reachable — never just "process exists"). One targeted remedy (kickstart); escalates what it can't fix.</td></tr>
+  <tr><td>fleet-doctor.sh</td><td>30 min</td><td>Checks each agent's real health signal (DB freshness, log recency, CDP port up, Gmail reachable - never just "process exists"). One targeted remedy (kickstart); escalates what it can't fix.</td></tr>
   <tr><td>daily agent review</td><td>9am</td><td>An agent session reads escalations + David's digest replies, root-causes, fixes code, commits, reschedules itself. (Self-perpetuating.)</td></tr>
   <tr><td>run budgets</td><td>per run</td><td>5-min per-posting subprocess deadline · 40-min whole-run budget · retry backoff · startup reaper for rows stranded mid-flight by a crash.</td></tr>
 </table></div>
 
-<h2 id="data"><span class="num">§</span>Data model — one database, eleven tables</h2>
+<h2 id="data"><span class="num">§</span>Data model - one database, eleven tables</h2>
 <div class="tbl"><table>
   <tr><th>table</th><th>role</th></tr>
   <tr><td>postings</td><td>the spine: every posting ever seen, its status, source, and audit trail (<code>last_error</code> doubles as a decision log)</td></tr>
-  <tr><td>applications</td><td>append-only submission ledger; UNIQUE per posting; the anti-double-apply mechanism</td></tr>
+  <tr><td>applications</td><td>append-only confirmed submission ledger; UNIQUE per posting; the anti-double-apply mechanism</td></tr>
+  <tr><td>submission_attempts</td><td>append-only attempt telemetry by posting, ATS, lane, worker, timestamps, outcome, confirmation, and artifacts</td></tr>
   <tr><td>emails / batch_emails / email_apps</td><td>resume-delivery + email-application state (HN/founder path)</td></tr>
   <tr><td>inbox_events</td><td>classified Gmail outcomes (OA/interview/rejection/offer) with deadlines</td></tr>
   <tr><td>abc_companies</td><td>the startup scout's memory: company, round, resolved ATS board, polling status</td></tr>
@@ -326,12 +355,12 @@ no way to notice its own death. Three layers, each catching what the previous ca
 
 <h3>Timers (launchd, all local)</h3>
 <div class="timers">
-  <div class="t">4 min</div><div>sprint — fast-lane new postings (tailor + submit in one pass)</div>
-  <div class="t">5 min</div><div>revise — legacy review-thread poller</div>
-  <div class="t">15 min</div><div>queue-sync — mirror pipeline into kith's referral view</div>
-  <div class="t">30 min</div><div>inbox — classify Gmail · digest gate · digest replies · sheet sync</div>
-  <div class="t">60 min</div><div>drip — discovery across all sources · tailor batch · email applies</div>
-  <div class="t">65 min</div><div>submit — up to 8 ready postings through the ATS adapters</div>
+  <div class="t">4 min</div><div>sprint - fast-lane new postings (tailor + submit in one pass)</div>
+  <div class="t">5 min</div><div>revise - legacy review-thread poller</div>
+  <div class="t">15 min</div><div>queue-sync - mirror pipeline into kith's referral view</div>
+  <div class="t">30 min</div><div>inbox - classify Gmail · digest gate · digest replies · sheet sync</div>
+  <div class="t">60 min</div><div>drip - discovery across all sources · tailor batch · email applies</div>
+  <div class="t">resident</div><div>submit - 30-second dispatcher grouped by ATS lane</div>
 </div>
 
 <h2 id="safety"><span class="num">§</span>Safety properties (the invariants)</h2>
@@ -353,7 +382,7 @@ no way to notice its own death. Three layers, each catching what the previous ca
 <h2 id="lessons"><span class="num">§</span>Design lessons (earned the hard way)</h2>
 <details open><summary>Observability beats cleverness</summary>
 <p>The two worst incidents (six-day Steam freeze, missing chromium binary) weren't design
-flaws — they were silent failures in a system that had no immune response. The fix wasn't a
+flaws - they were silent failures in a system that had no immune response. The fix wasn't a
 redesign; it was health checks that observe <b>outcomes</b> (fresh DB writes, log recency),
 never process existence.</p></details>
 <details><summary>Failures must not consume the success budget… but need their own budget</summary>
@@ -363,7 +392,7 @@ legitimately burning its 5-min cap, back to back). Both bounds are needed: per-i
 whole-run budget.</p></details>
 <details><summary>Visibility ≠ existence (browser automation)</summary>
 <p>LinkedIn/ATS DOMs contain hidden duplicate buttons. <code>count() &gt; 0</code> found them;
-<code>click()</code> then waited 45s for visibility and timed out — burning invite budgets on
+<code>click()</code> then waited 45s for visibility and timed out - burning invite budgets on
 doomed attempts. Every affordance check is now <code>isVisible()</code>.</p></details>
 <details><summary>Park, don't block</summary>
 <p>Any item needing a human steps out of the flow into <code>manual</code> with the exact

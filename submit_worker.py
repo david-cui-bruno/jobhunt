@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -18,9 +19,18 @@ sys.path[:0] = [str(ROOT / "apply"), str(ROOT / "notify"), str(ROOT / "watcher")
 
 def _adapter(ats: str, url: str):
     from jd import canonical_application_url, detect_ats
+    from submission.lanes import lane_for
 
     target_url = canonical_application_url(url)
+    host = urllib.parse.urlparse(target_url).netloc.lower()
+    if host.endswith("workatastartup.com"):
+        if os.environ.get("JOBHUNT_WAAS") != "1":
+            return None, False, "waas_paused", target_url
+        from waas import apply_waas
+        return apply_waas, True, "waas", target_url
     detected = ats if ats and ats != "other" else detect_ats(target_url)
+    if lane_for(detected).name == "unsupported":
+        return None, False, detected, target_url
     if detected == "greenhouse":
         from greenhouse import apply_greenhouse
         return apply_greenhouse, False, detected, target_url
@@ -42,9 +52,6 @@ def _adapter(ats: str, url: str):
     if detected == "workable":
         from workable import apply_workable
         return apply_workable, False, detected, target_url
-    if "workatastartup.com" in url:
-        from waas import apply_waas
-        return apply_waas, True, "waas", target_url
     return None, False, detected, target_url
 
 

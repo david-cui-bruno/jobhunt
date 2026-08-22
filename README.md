@@ -10,10 +10,10 @@ a human, and never misrepresent anything.
 
 ```
 DISCOVER                 FILTER                TAILOR               SUBMIT                TRACK               REPORT
-GitHub listing repos --> role/season/       --> Claude rewords  --> headless Playwright --> Gmail classify --> ONE casual daily
-YC Work at a Startup     location rules         LaTeX bullets       per-ATS adapters        OA/interview/     digest, 6pm ET
-HN hiring threads        1 app per company      (reword only,       8 per run, paced        recruiter/        email + iMessage;
-A-D startup scout        no P26 batch           never fabricate)    every 65 min            rejection/offer   replies are commands
+GitHub listing repos --> role/season/       --> Claude rewords  --> resident local    --> Gmail classify --> ONE casual daily
+YC Work at a Startup     location rules         LaTeX bullets       dispatcher polls       OA/interview/     digest, 6pm ET
+HN hiring threads        canonical dedupe       (reword only,       every 30 seconds       recruiter/        Telegram + email;
+A-D startup scout        no P26 batch           never fabricate)    by ATS lane            rejection/offer   replies are commands
 ```
 
 - **Discovery** runs on launchd timers (macOS, this laptop). Sources: the big
@@ -32,17 +32,22 @@ A-D startup scout        no P26 batch           never fabricate)    every 65 min
   embedded **software**, mobile, data science, quant, and PM/APM) with
   word-boundary matching; no hardware/EE/mechanical; winter + summer terms
   only (no fall/spring/co-op); full-time allowed for YC/startup sources;
-  never P26-batch YC companies; US/remote; one application per company ever.
+  never P26-batch YC companies; US/remote; canonical posting dedupe before
+  any external form or email is touched.
 - **Tailoring** (≤100/day): Claude rewords the base LaTeX resume against the
   JD using only the approved `resume/bullet_bank.md` (numbers pre-verified).
   Graduation date is **track-based** (David 2026-08-19, `track.py`): intern
   applications say May 2028, full-time applications say May 2027 (his real
   early-graduation plan). A structural quality gate blocks broken PDFs from
   ever reaching an ATS.
-- **Submission** (8 per run, runs every 65 min, 15-45s jittered pacing):
-  headless Playwright adapters for Greenhouse, Lever, Ashby, Workday,
-  Workable, SmartRecruiters, Rippling, plus WaaS founder messages and email
-  applications. The **form Q&A engine** (`apply/qa.py`) answers questions
+- **Submission** is a resident local dispatcher (`submit_daemon.py`) polling every
+  30 seconds. It groups ready postings by the shared ATS lane classifier:
+  direct lanes for Greenhouse, Lever, Workable, and Rippling run with bounded
+  concurrency, Workday has its own single-worker lane, Ashby remains behind its
+  breaker policy, and unsupported ATSs park as manual. Headless Playwright
+  adapters handle Greenhouse, Lever, Ashby, Workday, Workable, SmartRecruiters,
+  Rippling, plus WaaS founder messages and email applications. The
+  **form Q&A engine** (`apply/qa.py`) answers questions
   from the profile + story bank under a two-tier policy:
   - HARD-blocked (never auto-answered, even required): demographics,
     compensation, references, work history claims, anything a wrong answer
@@ -55,13 +60,42 @@ A-D startup scout        no P26 batch           never fabricate)    every 65 min
     clocked the application as machine-written from exactly that).
   Anything unanswerable parks as `manual` off to the side and never blocks
   the postings behind it.
+- **Ashby canary** is disabled by default and controlled only by SQLite state in
+  `out/tracker.db`, not by files such as legacy cooldown markers. Operators use
+  `python3 manage_lanes.py status ashby`, `preview ashby`, `enable-canary ashby`,
+  and `pause ashby` to inspect or change that policy. Preview prints candidate
+  identity, role, canonical URL, prior completed-attempt count, and resume
+  quality without claiming or executing. The policy has evidence-driven tiers of
+  180, 90, and 45 minutes, advances after 3 and 10 confirmed submissions, uses a
+  24-hour spam breaker plus one-tier rollback, pauses on uncertainty, never
+  retries a click-uncertain posting, and never reuses any posting with a
+  completed attempt. Live canary and service rollout remain deferred.
+- **Ashby browser verification** requires a separately installed Chrome for
+  Testing when ordinary Chrome is in use. Stable Google Chrome is never accepted
+  for the Ashby about:blank smoke and ordinary Chrome must never be hidden.
+  `python3 scripts/verify_ashby_browser.py --check-only [--json]` resolves the
+  target without launching or invoking System Events. `--about-blank [--json]`
+  is reserved for reviewed operator use after a dedicated target exists, visits
+  only `about:blank`, uses the persistent local profile under the ignored
+  `.jobhunt-browser-profiles/ashby` path, and reports only the executable,
+  process name, profile path, user agent, `navigator.webdriver`, plugin count,
+  and process-scoped visibility. The Ashby solution does not fabricate browser
+  fingerprint fields and hiding is scoped only to the dedicated process.
+- **Ashby live gate order** is exact: install a dedicated browser, run
+  about:blank verification, integrate the reviewed branch, back up live
+  `out/tracker.db` and run `PRAGMA integrity_check`, inspect the read-only live
+  preview, obtain explicit user approval for one irreversible submission, run
+  one canary cycle, immediately pause, and inspect telemetry. Until those gates
+  happen, native smoke, branch integration, live DB backup, live preview, user
+  approval, live canary, and service reload are pending.
 - **Tracking** (every 30 min): reads Gmail, classifies replies (OA invite /
   interview / recruiter reply / rejection / offer), applies labels, archives
   noise, extracts deadlines.
-- **Reporting**: exactly ONE email per day (6pm ET) plus an iMessage copy via
+- **Reporting**: exactly ONE email per day (6pm ET) plus a Telegram copy via
   kith-bridge, casual tone, skimmable in 30 seconds: what needs David
   (deadline-sorted), stuck applications with the exact blocking question,
-  unverified submissions, pipeline stats. Replying "skip X" or
+  unverified submissions, pipeline stats, top failing ATSs, per-ATS confirmed
+  ratios, lane queue depths, and Ashby breaker state when paused. Replying "skip X" or
   "for <company>: <answer>" is executed by `digest_replies.py`; freeform
   replies land in the daily agent review. All other notification emails are
   muted (`notify/mailer.py` logs them to `out/notices.log`).
@@ -69,11 +103,15 @@ A-D startup scout        no P26 batch           never fabricate)    every 65 min
 ## Safety rails
 
 - Append-only `applications` ledger; double-submits are structurally blocked.
+- Append-only `submission_attempts` ledger records every external attempt with
+  ATS, lane, worker, timestamps, outcome, confirmation, and artifact references.
+- Canonical posting dedupe prevents mirrored postings from creating duplicate
+  applications before any external form is touched.
 - Screenshot of every filled form (14-day rotation) + an audit line for every
   auto-answered question (`out/qa_answers.log`).
 - Never fabricates: a required field the profile can't truthfully answer
   stops that one application.
-- Caps: 8 submissions/run, 100 tailors/day, one app per company forever.
+- Caps: 8 submissions/run and 100 tailors/day.
 - Gmail token failover: if jobhunt's OAuth token is revoked, `notify/mailer`
   falls back to kith's healthy token for the same account instead of going
   silent.
@@ -94,7 +132,7 @@ stays current.
 
 The canonical branch is `main` in the private GitHub repository. Python 3.12
 is recommended for local and production use (the resident Mac currently runs
-3.9 — keep code 3.9-compatible):
+3.9 - keep code 3.9-compatible):
 
 ```bash
 git clone https://github.com/david-cui-bruno/jobhunt.git
@@ -129,7 +167,8 @@ environment, queue, browser session, and application-answer file.
 - `sprint.py`  fast lane: every 4 min, brand-new postings are tailored +
                submitted immediately (speed-to-apply beats everything)
 - `drip.py`    hourly orchestrator: discovery, tailor batch, email applies
-- `submit.py`  the submitter: ready postings -> ATS adapters (every 65 min)
+- `submit_daemon.py` resident 30-second dispatcher for ready postings by ATS lane
+- `submit.py`  legacy entrypoint and shared submit helpers
 - `tailor/`    LaTeX resume tailoring + PDF compile + quality gate
 - `apply/`     per-ATS Playwright adapters + the form Q&A engine
 - `inbox.py`   Gmail classification + the daily digest trigger
@@ -149,7 +188,29 @@ environment, queue, browser session, and application-answer file.
 | com.jobhunt.queue-sync | 15 min | mirror queue into kith |
 | com.jobhunt.inbox | 30 min | Gmail classify + digest + digest replies |
 | com.jobhunt.drip | 60 min | discovery + tailor batch |
-| com.jobhunt.submit | 65 min | submit up to 8 ready postings |
+| com.jobhunt.submit | resident | 30-second ATS lane dispatcher |
+
+## Launchd runtime secrets
+
+The committed jobhunt launchd plists do not store long-lived provider secrets.
+They invoke `runtime_secrets.py` first, which reads
+`~/.config/jobhunt/runtime.env`, requires current-user ownership and mode `0600`,
+loads only allowlisted secret keys, and then replaces itself with the target
+Python process via `os.execvpe`.
+
+One-time migration from already installed LaunchAgents is handled by:
+
+```bash
+python3 scripts/migrate_launchd_secrets.py \
+  --launch-agents "$HOME/Library/LaunchAgents" \
+  --output "$HOME/.config/jobhunt/runtime.env"
+```
+
+The migration writes the env file atomically with mode `0600` and prints key
+names only. Review the generated file permissions before installing sanitized
+plists or reloading launchd agents. Provider-side rotation is recommended for
+any key that previously appeared in plists or Git history, but revoking and
+issuing a replacement key requires separate approval.
 
 ## Decisions log (abridged)
 

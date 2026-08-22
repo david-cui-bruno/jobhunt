@@ -166,6 +166,30 @@ class BacklogPriorityTests(unittest.TestCase):
         self.assertEqual(drip.pick_next(conn)["posting_id"], "supported")
         conn.close()
 
+    def test_pick_next_skips_unsupported_and_nonautomatic_ashby_lanes(self) -> None:
+        conn = self._connection()
+        conn.executemany(
+            "INSERT INTO postings VALUES (?,?,?,?,?)",
+            [
+                ("unknown", "queued", "https://example.com/careers/1", "San Francisco", 30),
+                ("ashby", "queued", "https://jobs.ashbyhq.com/acme/id", "San Francisco", 20),
+                ("workable", "queued", "https://apply.workable.com/acme/j/ABC", "Ohio", 10),
+            ],
+        )
+
+        self.assertEqual(drip.pick_next(conn)["posting_id"], "workable")
+        conn.close()
+
+    def test_pick_next_keeps_smartrecruiters_preparable_for_handoff(self) -> None:
+        conn = self._connection()
+        conn.execute(
+            "INSERT INTO postings VALUES (?,?,?,?,?)",
+            ("smart", "queued", "https://jobs.smartrecruiters.com/acme/1", "Remote", 10),
+        )
+
+        self.assertEqual(drip.pick_next(conn)["posting_id"], "smart")
+        conn.close()
+
     def test_tailoring_batch_is_bounded_but_material(self) -> None:
         # raised 2026-08-19 (David: tailor must never be the bottleneck;
         # submit capacity is ~176/day)
@@ -176,11 +200,21 @@ class BacklogPriorityTests(unittest.TestCase):
         self.assertEqual(submit.SUBMISSIONS_PER_RUN, 8)
         self.assertEqual((submit.PACING_MIN_SECONDS, submit.PACING_MAX_SECONDS), (15.0, 45.0))
 
+        from submission.dispatcher import run_forever
+        import inspect
+
         systemd = Path(__file__).parent / "deploy" / "systemd"
-        submit_timer = (systemd / "jobhunt@submit.timer").read_text()
+        launchd = Path(__file__).parent / "launchd" / "com.jobhunt.submit.plist"
+        submit_service = (systemd / "jobhunt-submit.service").read_text()
         drip_timer = (systemd / "jobhunt@drip.timer").read_text()
-        self.assertIn("OnUnitActiveSec=30min", submit_timer)
+        submit_plist = launchd.read_text()
+        self.assertIn("ExecStart=/opt/jobhunt/.venv/bin/python /opt/jobhunt/submit_daemon.py", submit_service)
+        self.assertIn("Restart=always", submit_service)
         self.assertIn("OnUnitActiveSec=20min", drip_timer)
+        self.assertIn("<key>KeepAlive</key>", submit_plist)
+        self.assertIn("submit_daemon.py", submit_plist)
+        self.assertNotIn("StartInterval", submit_plist)
+        self.assertEqual(inspect.signature(run_forever).parameters["poll_seconds"].default, 30.0)
 
     def test_only_one_worker_can_claim_a_queued_posting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
