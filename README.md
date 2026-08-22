@@ -60,6 +60,34 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
     clocked the application as machine-written from exactly that).
   Anything unanswerable parks as `manual` off to the side and never blocks
   the postings behind it.
+- **Ashby canary** is disabled by default and controlled only by SQLite state in
+  `out/tracker.db`, not by files such as legacy cooldown markers. Operators use
+  `python3 manage_lanes.py status ashby`, `preview ashby`, `enable-canary ashby`,
+  and `pause ashby` to inspect or change that policy. Preview prints candidate
+  identity, role, canonical URL, prior completed-attempt count, and resume
+  quality without claiming or executing. The policy has evidence-driven tiers of
+  180, 90, and 45 minutes, advances after 3 and 10 confirmed submissions, uses a
+  24-hour spam breaker plus one-tier rollback, pauses on uncertainty, never
+  retries a click-uncertain posting, and never reuses any posting with a
+  completed attempt. Live canary and service rollout remain deferred.
+- **Ashby browser verification** requires a separately installed Chrome for
+  Testing when ordinary Chrome is in use. Stable Google Chrome is never accepted
+  for the Ashby about:blank smoke and ordinary Chrome must never be hidden.
+  `python3 scripts/verify_ashby_browser.py --check-only [--json]` resolves the
+  target without launching or invoking System Events. `--about-blank [--json]`
+  is reserved for reviewed operator use after a dedicated target exists, visits
+  only `about:blank`, uses the persistent local profile under the ignored
+  `.jobhunt-browser-profiles/ashby` path, and reports only the executable,
+  process name, profile path, user agent, `navigator.webdriver`, plugin count,
+  and process-scoped visibility. The Ashby solution does not fabricate browser
+  fingerprint fields and hiding is scoped only to the dedicated process.
+- **Ashby live gate order** is exact: install a dedicated browser, run
+  about:blank verification, integrate the reviewed branch, back up live
+  `out/tracker.db` and run `PRAGMA integrity_check`, inspect the read-only live
+  preview, obtain explicit user approval for one irreversible submission, run
+  one canary cycle, immediately pause, and inspect telemetry. Until those gates
+  happen, native smoke, branch integration, live DB backup, live preview, user
+  approval, live canary, and service reload are pending.
 - **Tracking** (every 30 min): reads Gmail, classifies replies (OA invite /
   interview / recruiter reply / rejection / offer), applies labels, archives
   noise, extracts deadlines.
@@ -104,7 +132,7 @@ stays current.
 
 The canonical branch is `main` in the private GitHub repository. Python 3.12
 is recommended for local and production use (the resident Mac currently runs
-3.9 — keep code 3.9-compatible):
+3.9 - keep code 3.9-compatible):
 
 ```bash
 git clone https://github.com/david-cui-bruno/jobhunt.git
