@@ -366,21 +366,27 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
     # first submissions after it lapsed (Town, Volta 23:27 8/18) were flagged
     # again, so Ashby's velocity window is longer than one burst. Cap Ashby to
     # 2 submissions per run (~2 per 65-min timer tick); other ATSs unaffected.
-    # 2026-08-21: lowered 2 -> 1. Even with stealth launch args (dca0708) and
-    # the per-run cap of 2, ~7 of 9 Ashby submissions in the last 24h were
-    # spam-flagged (2 stuck: Cluely, Ambience). One per run ~= 1/65min; if
-    # this still trips the breaker daily, Ashby goes manual-only.
-    ASHBY_PER_RUN = 1
+    # 2026-08-22 FINAL: Ashby is manual-only. The escalation ladder was
+    # burst -> 12h breaker (8/18) -> 2/run cap (8/19) -> stealth args (8/19)
+    # -> 1/run (8/21); at 1/run, 16 of 19 attempts in 24h were STILL flagged
+    # (0 accepted). Conclusion: Ashby has this IP/fingerprint flagged at the
+    # account level, not the velocity level. Automated Ashby submissions only
+    # burn postings, so they are skipped entirely; the daily digest points
+    # David at the manual pile (his trusted browser won't be flagged).
+    ASHBY_PER_RUN = 0
     ashby_done_this_run = 0
     # Per-run Ashby cap (2026-08-19): the 12h cooldown alone wasn't enough —
     # first submissions after it lapsed (Town, Volta 23:27 8/18) were flagged
     # again, so Ashby's velocity window is longer than one burst. Cap Ashby to
     # 2 submissions per run (~2 per 65-min timer tick); other ATSs unaffected.
-    # 2026-08-21: lowered 2 -> 1. Even with stealth launch args (dca0708) and
-    # the per-run cap of 2, ~7 of 9 Ashby submissions in the last 24h were
-    # spam-flagged (2 stuck: Cluely, Ambience). One per run ~= 1/65min; if
-    # this still trips the breaker daily, Ashby goes manual-only.
-    ASHBY_PER_RUN = 1
+    # 2026-08-22 FINAL: Ashby is manual-only. The escalation ladder was
+    # burst -> 12h breaker (8/18) -> 2/run cap (8/19) -> stealth args (8/19)
+    # -> 1/run (8/21); at 1/run, 16 of 19 attempts in 24h were STILL flagged
+    # (0 accepted). Conclusion: Ashby has this IP/fingerprint flagged at the
+    # account level, not the velocity level. Automated Ashby submissions only
+    # burn postings, so they are skipped entirely; the daily digest points
+    # David at the manual pile (his trusted browser won't be flagged).
+    ASHBY_PER_RUN = 0
     ashby_done_this_run = 0
 
     conn = sqlite3.connect(DB)
@@ -405,10 +411,7 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
             print(f"[submit] run budget ({RUN_BUDGET_SECONDS}s) spent — {done} submitted; leaving the rest for the next timer run")
             break
         if "ashbyhq.com" in (r["url"] or ""):
-            if ashby_blocked:
-                continue  # cooldown active — leave 'ready'; next run retries after it lapses
-            if ashby_done_this_run >= ASHBY_PER_RUN:
-                continue  # per-run Ashby cap reached — leave 'ready' for the next run
+            continue  # Ashby is manual-only (2026-08-22) — see ASHBY_PER_RUN note
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
         pdf = _runtime_path(r["resume_pdf"])
         # Rows are selected as a batch, so a prior row in this same run may have
