@@ -19,3 +19,4 @@ backend.hcl
 crash.log
 crash.*.log
 profile/application_answers.yaml
+.worktrees/
