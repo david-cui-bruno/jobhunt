@@ -10,10 +10,10 @@ a human, and never misrepresent anything.
 
 ```
 DISCOVER                 FILTER                TAILOR               SUBMIT                TRACK               REPORT
-GitHub listing repos --> role/season/       --> Claude rewords  --> headless Playwright --> Gmail classify --> ONE casual daily
-YC Work at a Startup     location rules         LaTeX bullets       per-ATS adapters        OA/interview/     digest, 6pm ET
-HN hiring threads        1 app per company      (reword only,       8 per run, paced        recruiter/        email + iMessage;
-A-D startup scout        no P26 batch           never fabricate)    every 65 min            rejection/offer   replies are commands
+GitHub listing repos --> role/season/       --> Claude rewords  --> resident local    --> Gmail classify --> ONE casual daily
+YC Work at a Startup     location rules         LaTeX bullets       dispatcher polls       OA/interview/     digest, 6pm ET
+HN hiring threads        1 app per company      (reword only,       every 30 seconds       recruiter/        Telegram + email;
+A-D startup scout        no P26 batch           never fabricate)    by ATS lane            rejection/offer   replies are commands
 ```
 
 - **Discovery** runs on launchd timers (macOS, this laptop). Sources: the big
@@ -39,10 +39,14 @@ A-D startup scout        no P26 batch           never fabricate)    every 65 min
   applications say May 2028, full-time applications say May 2027 (his real
   early-graduation plan). A structural quality gate blocks broken PDFs from
   ever reaching an ATS.
-- **Submission** (8 per run, runs every 65 min, 15-45s jittered pacing):
-  headless Playwright adapters for Greenhouse, Lever, Ashby, Workday,
-  Workable, SmartRecruiters, Rippling, plus WaaS founder messages and email
-  applications. The **form Q&A engine** (`apply/qa.py`) answers questions
+- **Submission** is a resident local dispatcher (`submit_daemon.py`) polling every
+  30 seconds. It groups ready postings by the shared ATS lane classifier:
+  direct lanes for Greenhouse, Lever, Workable, and Rippling run with bounded
+  concurrency, Workday has its own single-worker lane, Ashby remains behind its
+  breaker policy, and unsupported ATSs park as manual. Headless Playwright
+  adapters handle Greenhouse, Lever, Ashby, Workday, Workable, SmartRecruiters,
+  Rippling, plus WaaS founder messages and email applications. The
+  **form Q&A engine** (`apply/qa.py`) answers questions
   from the profile + story bank under a two-tier policy:
   - HARD-blocked (never auto-answered, even required): demographics,
     compensation, references, work history claims, anything a wrong answer
@@ -58,10 +62,11 @@ A-D startup scout        no P26 batch           never fabricate)    every 65 min
 - **Tracking** (every 30 min): reads Gmail, classifies replies (OA invite /
   interview / recruiter reply / rejection / offer), applies labels, archives
   noise, extracts deadlines.
-- **Reporting**: exactly ONE email per day (6pm ET) plus an iMessage copy via
+- **Reporting**: exactly ONE email per day (6pm ET) plus a Telegram copy via
   kith-bridge, casual tone, skimmable in 30 seconds: what needs David
   (deadline-sorted), stuck applications with the exact blocking question,
-  unverified submissions, pipeline stats. Replying "skip X" or
+  unverified submissions, pipeline stats, top failing ATSs, per-ATS confirmed
+  ratios, lane queue depths, and Ashby breaker state when paused. Replying "skip X" or
   "for <company>: <answer>" is executed by `digest_replies.py`; freeform
   replies land in the daily agent review. All other notification emails are
   muted (`notify/mailer.py` logs them to `out/notices.log`).
@@ -69,6 +74,10 @@ A-D startup scout        no P26 batch           never fabricate)    every 65 min
 ## Safety rails
 
 - Append-only `applications` ledger; double-submits are structurally blocked.
+- Append-only `submission_attempts` ledger records every external attempt with
+  ATS, lane, worker, timestamps, outcome, confirmation, and artifact references.
+- Canonical posting dedupe prevents mirrored postings from creating duplicate
+  applications before any external form is touched.
 - Screenshot of every filled form (14-day rotation) + an audit line for every
   auto-answered question (`out/qa_answers.log`).
 - Never fabricates: a required field the profile can't truthfully answer
@@ -129,7 +138,8 @@ environment, queue, browser session, and application-answer file.
 - `sprint.py`  fast lane: every 4 min, brand-new postings are tailored +
                submitted immediately (speed-to-apply beats everything)
 - `drip.py`    hourly orchestrator: discovery, tailor batch, email applies
-- `submit.py`  the submitter: ready postings -> ATS adapters (every 65 min)
+- `submit_daemon.py` resident 30-second dispatcher for ready postings by ATS lane
+- `submit.py`  legacy entrypoint and shared submit helpers
 - `tailor/`    LaTeX resume tailoring + PDF compile + quality gate
 - `apply/`     per-ATS Playwright adapters + the form Q&A engine
 - `inbox.py`   Gmail classification + the daily digest trigger
@@ -149,7 +159,7 @@ environment, queue, browser session, and application-answer file.
 | com.jobhunt.queue-sync | 15 min | mirror queue into kith |
 | com.jobhunt.inbox | 30 min | Gmail classify + digest + digest replies |
 | com.jobhunt.drip | 60 min | discovery + tailor batch |
-| com.jobhunt.submit | 65 min | submit up to 8 ready postings |
+| com.jobhunt.submit | resident | 30-second ATS lane dispatcher |
 
 ## Decisions log (abridged)
 

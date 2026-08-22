@@ -57,6 +57,32 @@ class ComposeShortTest(unittest.TestCase):
         d = _collected(manual_ask=[("C" * 300, "T" * 300, "u", "E" * 400)] * 6)
         self.assertLessEqual(len(digest.compose_short(d)), digest.SHORT_LIMIT)
 
+    def test_digest_includes_compact_submission_health(self):
+        d = _collected(
+            manual_ask=[("Stripe", "SWE", "u", "needs answers: x")],
+            stats={"submitted_24h": 4, "ready": 2, "queued": 31},
+        )
+        d["attempt_metrics"] = [
+            {"ats": "greenhouse", "attempts": 2, "confirmed": 1, "confirmation_rate": 0.5,
+             "failed": 0, "manual": 1, "p50_duration_ms": 2000, "p95_duration_ms": 3000},
+            {"ats": "workday", "attempts": 3, "confirmed": 0, "confirmation_rate": 0.0,
+             "failed": 3, "manual": 0, "p50_duration_ms": 5000, "p95_duration_ms": 9000},
+        ]
+        d["queue_metrics"] = [
+            {"lane": "direct", "depth": 5, "automatic": True},
+            {"lane": "workday", "depth": 1, "automatic": True},
+            {"lane": "ashby", "depth": 2, "automatic": False},
+        ]
+        d["ashby_breaker"] = {"paused": True, "resume_at": 1800000000}
+
+        body = digest.compose_short(d)
+
+        self.assertLessEqual(len(body), digest.SHORT_LIMIT)
+        self.assertIn("workday 0/3 confirmed", body)
+        self.assertIn("greenhouse 1/2 confirmed", body)
+        self.assertIn("queues: direct 5, workday 1, ashby 2", body)
+        self.assertIn("ashby breaker: paused", body)
+
     def test_phone_copy_fails_soft(self):
         d = _collected(manual_ask=[("Stripe", "SWE", "u", "needs answers: x")])
         with mock.patch("notify.kith_bridge.send_phone", side_effect=RuntimeError("bridge down")):

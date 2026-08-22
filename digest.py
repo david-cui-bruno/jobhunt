@@ -29,10 +29,12 @@ import json
 import sqlite3
 import sys
 import time
+from typing import Optional
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from notify import mailer
+from submission.metrics import attempt_metrics, queue_metrics
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "out" / "tracker.db"
@@ -107,8 +109,51 @@ def collect(conn, since: int) -> dict:
                     notes.append(obj.get("note", ""))
             except (json.JSONDecodeError, ValueError):
                 continue
+    try:
+        ats_metrics = attempt_metrics(conn, since=since)
+    except sqlite3.OperationalError:
+        ats_metrics = []
+    try:
+        queues = queue_metrics(conn)
+    except sqlite3.OperationalError:
+        queues = []
     return {"manual_ask": manual_ask, "manual_debt": manual_debt, "verify": verify,
-            "action": action, "stats": stats, "notes": [n for n in notes if n]}
+            "action": action, "stats": stats, "notes": [n for n in notes if n],
+            "attempt_metrics": ats_metrics, "queue_metrics": queues,
+            "ashby_breaker": _ashby_breaker_state()}
+
+
+def _ashby_breaker_state(now: Optional[int] = None) -> dict:
+    cooldown = ROOT / "out" / "ashby_cooldown"
+    if now is None:
+        now = int(time.time())
+    try:
+        resume_at = int(float(cooldown.read_text().strip()))
+    except (OSError, ValueError):
+        return {"paused": False, "resume_at": None}
+    if resume_at <= now:
+        return {"paused": False, "resume_at": resume_at}
+    return {"paused": True, "resume_at": resume_at}
+
+
+def _submission_health_lines(d: dict) -> list[str]:
+    metrics = d.get("attempt_metrics") or []
+    failing = sorted(
+        (row for row in metrics if row.get("attempts", 0) - row.get("confirmed", 0) > 0),
+        key=lambda row: (-(row.get("attempts", 0) - row.get("confirmed", 0)), row.get("ats", "")),
+    )[:3]
+    lines = [
+        f"{row['ats']} {row.get('confirmed', 0)}/{row.get('attempts', 0)} confirmed"
+        for row in failing
+    ]
+    queues = [row for row in (d.get("queue_metrics") or []) if row.get("depth", 0) > 0]
+    if queues:
+        lines.append("queues: " + ", ".join(f"{row['lane']} {row['depth']}" for row in queues))
+    breaker = d.get("ashby_breaker") or {}
+    if breaker.get("paused"):
+        resume = datetime.datetime.fromtimestamp(int(breaker["resume_at"]), ET).strftime("%-I:%M%p ET")
+        lines.append(f"ashby breaker: paused until {resume.lower()}")
+    return lines
 
 
 def compose(d: dict) -> str | None:
@@ -147,6 +192,10 @@ def compose(d: dict) -> str | None:
 
     if d["notes"]:
         sections.append("fleet notes:\n" + "\n".join(f"• {n[:160]}" for n in d["notes"][:5]))
+
+    health = _submission_health_lines(d)
+    if health:
+        sections.append("submission health:\n" + "\n".join(f"• {line}" for line in health))
 
     s = d["stats"]
     debt = sum(d["manual_debt"].values())
@@ -204,6 +253,10 @@ def compose_short(d: dict) -> str | None:
 
     if d["notes"]:
         sections.append("fleet notes:\n" + "\n".join(f"• {n[:140]}" for n in d["notes"][:3]))
+
+    health = _submission_health_lines(d)
+    if health:
+        sections.append("submission health:\n" + "\n".join(f"• {line}" for line in health))
 
     if not sections:
         return None

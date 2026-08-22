@@ -109,7 +109,7 @@
     <div class="k"><b>7</b><span>pipeline stages</span></div>
     <div class="k"><b>9</b><span>source watchers</span></div>
     <div class="k"><b>8</b><span>ATS adapters</span></div>
-    <div class="k"><b>6</b><span>launchd timers</span></div>
+    <div class="k"><b>5+</b><span>timers plus submit resident</span></div>
     <div class="k"><b>1</b><span>SQLite DB as spine</span></div>
     <div class="k"><b>~5%</b><span>decisions escalated to David</span></div>
   </div>
@@ -128,7 +128,7 @@ services, no IPC. If any stage dies, nothing else notices or cares; the rows jus
   <div class="arrow">→</div>
   <div class="stage"><h4>3 · Tailor</h4><div class="files">tailor/ + drip.py</div><div class="what">Claude rewords resume → PDF</div></div>
   <div class="arrow">→</div>
-  <div class="stage"><h4>4 · Submit</h4><div class="files">submit.py + apply/*</div><div class="what">headless browser fills forms</div></div>
+  <div class="stage"><h4>4 · Submit</h4><div class="files">submit_daemon.py + apply/*</div><div class="what">30-sec ATS lane dispatcher</div></div>
   <div class="arrow">→</div>
   <div class="stage"><h4>5 · Q&amp;A</h4><div class="files">apply/qa.py</div><div class="what">answers form questions</div></div>
   <div class="arrow">→</div>
@@ -227,9 +227,10 @@ reword the LaTeX resume against it. Capped at 100/day.</p>
 </div>
 
 <h2 id="submit"><span class="num">4</span>Submit — the part that touches the world</h2>
-<p class="lede"><code>submit.py</code> (every 65 min) takes up to 8 ready rows and drives real
-application forms with headless Playwright. This stage has the most armor because failures
-here can be irreversible (double-submits) or invisible (silent no-ops).</p>
+  <p class="lede"><code>submit_daemon.py</code> is a resident local dispatcher. It wakes every
+  30 seconds, groups ready rows by the shared ATS lane classifier, and drives real
+  application forms with headless Playwright. This stage has the most armor because failures
+  here can be irreversible (double-submits) or invisible (silent no-ops).</p>
 
 <h3>Per-ATS adapters <span class="mono" style="color:var(--cyan)">apply/*.py</span></h3>
 <p>Greenhouse · Lever · Ashby · Workday · Workable · SmartRecruiters · Rippling · email. Each
@@ -237,13 +238,19 @@ knows one vendor's DOM: where fields live, how uploads work, what a confirmed su
 like. Detection routes by URL (with redirect-chasing for postings that link a homepage).</p>
 
 <div class="grid">
+  <div class="card"><h4>ATS lanes</h4><p>Greenhouse, Lever, Workable, and Rippling share the
+  direct lane with bounded concurrency. Workday has a single-worker lane. Ashby remains behind
+  a breaker, and unsupported ATSs are parked as manual instead of blocking other rows.</p>
+  <span class="tag ok">direct</span><span class="tag ok">workday</span><span class="tag warn">ashby breaker</span></div>
   <div class="card"><h4>Process isolation</h4><p>Every posting runs in its own killable
   subprocess (<code>submit_worker.py</code>) with a hard 300s deadline. A hung browser cannot
-  take down the run.</p><span class="tag ok">5-min posting cap</span><span class="tag ok">40-min run budget</span></div>
-  <div class="card"><h4>Submission ledger</h4><p><code>applications</code> table has a UNIQUE
-  key per posting; the insert races are closed, so a submission can be recorded once and only
-  once. "Submit clicked but unconfirmed" quarantines the row instead of retrying — a retry
-  could apply twice under David's name.</p><span class="tag bad">never double-apply</span></div>
+  take down the resident dispatcher.</p><span class="tag ok">5-min posting cap</span><span class="tag ok">per-lane budgets</span></div>
+  <div class="card"><h4>Submission ledgers</h4><p><code>applications</code> table has a UNIQUE
+  key per posting; canonical posting dedupe prevents mirrored rows from creating duplicate
+  applications before any external form is touched. <code>submission_attempts</code> is the
+  append-only attempt ledger for ATS, lane, worker, timestamps, outcome, confirmation, and
+  artifacts. "Submit clicked but unconfirmed" quarantines the row instead of retrying.</p>
+  <span class="tag bad">never double-apply</span><span class="tag ok">attempt telemetry</span></div>
   <div class="card"><h4>Workday account self-recovery</h4><p>Workday requires per-tenant
   accounts (30 on file, generated passwords stored in the DB). On sign-in failure the system
   clicks Forgot Password, catches the reset email in Gmail, sets a new password, stores it,
@@ -290,9 +297,10 @@ can show "🟠 OA received" without anyone updating anything.</p>
 
 <h2 id="report"><span class="num">7</span>Reporting — one digest, one sheet, zero spam</h2>
 <div class="grid">
-  <div class="card"><h4>Daily digest (6pm ET, email + iMessage)</h4>
+  <div class="card"><h4>Daily digest (6pm ET, email + Telegram)</h4>
   <p>Casual tone, skimmable in 30 seconds: what needs David (deadline-sorted), stuck
-  applications with the exact blocking question, unverified submissions, pipeline stats.
+  applications with the exact blocking question, unverified submissions, pipeline stats,
+  top failing ATSs, per-ATS confirmed ratios, lane queue depths, and Ashby breaker state when paused.
   <b>Replies are commands</b>: "skip X", "for Acme: I can start June 1" — parsed and applied.
   All other notification email is muted to a log file.</p></div>
   <div class="card"><h4>Live Google Sheet</h4>
@@ -316,7 +324,8 @@ no way to notice its own death. Three layers, each catching what the previous ca
 <div class="tbl"><table>
   <tr><th>table</th><th>role</th></tr>
   <tr><td>postings</td><td>the spine: every posting ever seen, its status, source, and audit trail (<code>last_error</code> doubles as a decision log)</td></tr>
-  <tr><td>applications</td><td>append-only submission ledger; UNIQUE per posting; the anti-double-apply mechanism</td></tr>
+  <tr><td>applications</td><td>append-only confirmed submission ledger; UNIQUE per posting; the anti-double-apply mechanism</td></tr>
+  <tr><td>submission_attempts</td><td>append-only attempt telemetry by posting, ATS, lane, worker, timestamps, outcome, confirmation, and artifacts</td></tr>
   <tr><td>emails / batch_emails / email_apps</td><td>resume-delivery + email-application state (HN/founder path)</td></tr>
   <tr><td>inbox_events</td><td>classified Gmail outcomes (OA/interview/rejection/offer) with deadlines</td></tr>
   <tr><td>abc_companies</td><td>the startup scout's memory: company, round, resolved ATS board, polling status</td></tr>
@@ -331,7 +340,7 @@ no way to notice its own death. Three layers, each catching what the previous ca
   <div class="t">15 min</div><div>queue-sync — mirror pipeline into kith's referral view</div>
   <div class="t">30 min</div><div>inbox — classify Gmail · digest gate · digest replies · sheet sync</div>
   <div class="t">60 min</div><div>drip — discovery across all sources · tailor batch · email applies</div>
-  <div class="t">65 min</div><div>submit — up to 8 ready postings through the ATS adapters</div>
+  <div class="t">resident</div><div>submit - 30-second dispatcher grouped by ATS lane</div>
 </div>
 
 <h2 id="safety"><span class="num">§</span>Safety properties (the invariants)</h2>
