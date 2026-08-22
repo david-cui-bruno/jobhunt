@@ -36,7 +36,7 @@ def attempt_metrics(conn: sqlite3.Connection, *, since: int) -> list[dict]:
     count_rows = conn.execute(
         "SELECT ats, COALESCE(outcome, 'unknown') AS outcome, "
         "COUNT(*) AS attempts, "
-        "SUM(CASE WHEN confirmation_observed=1 OR outcome='submitted' THEN 1 ELSE 0 END) AS confirmed "
+        "SUM(CASE WHEN confirmation_observed=1 AND outcome='submitted' THEN 1 ELSE 0 END) AS confirmed "
         "FROM submission_attempts WHERE started_at >= ? "
         "GROUP BY ats, COALESCE(outcome, 'unknown')",
         (since,),

@@ -47,6 +47,31 @@ def test_attempt_metrics_group_by_ats_and_outcome(metrics_db) -> None:
     assert greenhouse["p95_duration_ms"] == 3000
 
 
+def test_attempt_metrics_requires_observed_confirmation_for_submitted(metrics_db) -> None:
+    seed_attempt(
+        metrics_db,
+        ats="greenhouse",
+        outcome="submitted",
+        duration_ms=1000,
+        confirmation_observed=0,
+    )
+    seed_attempt(
+        metrics_db,
+        ats="greenhouse",
+        outcome="submitted",
+        duration_ms=2000,
+        confirmation_observed=1,
+    )
+
+    rows = attempt_metrics(metrics_db, since=0)
+
+    greenhouse = next(row for row in rows if row["ats"] == "greenhouse")
+    assert greenhouse["attempts"] == 2
+    assert greenhouse["submitted"] == 2
+    assert greenhouse["confirmed"] == 1
+    assert greenhouse["confirmation_rate"] == 0.5
+
+
 def test_attempt_metrics_normalizes_unknown_ats(metrics_db) -> None:
     seed_attempt(metrics_db, ats="", outcome="failed", duration_ms=500)
     seed_attempt(metrics_db, ats="unknownvendor", outcome="submitted", duration_ms=700)
