@@ -53,7 +53,7 @@ class FakePersistent:
 
 
 def test_check_only_reports_dedicated_target_without_launch_or_visibility(monkeypatch, capsys):
-    target = ChromeTarget(Path("/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"), "Google Chrome for Testing", True)
+    target = ChromeTarget(Path("/Applications/Ashby Chrome for Testing.app/Contents/MacOS/Ashby Chrome for Testing"), "Ashby Chrome for Testing", True)
     monkeypatch.setattr(verify, "resolve_chrome", lambda: target)
     monkeypatch.setattr(verify, "_visibility_for_process", lambda name: pytest.fail("visibility should not run"))
     monkeypatch.setattr(verify, "_run_about_blank", lambda target: pytest.fail("browser should not launch"))
@@ -67,7 +67,7 @@ def test_check_only_reports_dedicated_target_without_launch_or_visibility(monkey
         "target": {
             "dedicated": True,
             "executable_path": str(target.executable),
-            "process_name": "Google Chrome for Testing",
+            "process_name": "Ashby Chrome for Testing",
         },
     }
 
@@ -88,7 +88,7 @@ def test_about_blank_rejects_non_dedicated_before_launch(monkeypatch):
 
 
 def test_about_blank_uses_persistent_context_once_and_only_navigates_about_blank(monkeypatch, capsys):
-    target = ChromeTarget(Path("/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"), "Google Chrome for Testing", True)
+    target = ChromeTarget(Path("/Applications/Ashby Chrome for Testing.app/Contents/MacOS/Ashby Chrome for Testing"), "Ashby Chrome for Testing", True)
     context = FakeContext()
     persistent = FakePersistent(context)
     monkeypatch.setattr(verify, "resolve_chrome", lambda: target)
@@ -104,22 +104,22 @@ def test_about_blank_uses_persistent_context_once_and_only_navigates_about_blank
     assert context.pages[0].urls == ["about:blank"]
     payload = json.loads(capsys.readouterr().out)
     assert set(payload) == {"mode", "ok", "executable_path", "process_name", "profile_path", "user_agent", "navigator_webdriver", "plugin_count", "process_visibility"}
-    assert payload["process_visibility"]["process_name"] == "Google Chrome for Testing"
+    assert payload["process_visibility"]["process_name"] == "Ashby Chrome for Testing"
 
 
 def test_visibility_query_error_fails_closed_as_query_error(monkeypatch, capsys):
-    target = ChromeTarget(Path("/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"), "Google Chrome for Testing", True)
+    target = ChromeTarget(Path("/Applications/Ashby Chrome for Testing.app/Contents/MacOS/Ashby Chrome for Testing"), "Ashby Chrome for Testing", True)
     monkeypatch.setattr(verify, "resolve_chrome", lambda: target)
     monkeypatch.setattr(verify, "persistent_ashby_context", FakePersistent(FakeContext()))
     monkeypatch.setattr(verify, "_sync_playwright", lambda: _FakePlaywright())
-    monkeypatch.setattr(verify, "_visibility_for_process", lambda name: (_ for _ in ()).throw(RuntimeError("process not found: Google Chrome for Testing")))
+    monkeypatch.setattr(verify, "_visibility_for_process", lambda name: (_ for _ in ()).throw(RuntimeError("process not found: Ashby Chrome for Testing")))
 
     assert verify.main(["--about-blank", "--json"]) == 1
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["mode"] == "about-blank"
     assert payload["ok"] is False
-    assert payload["blocker"] == {"code": "fail_closed", "reason": "query_error", "message": "process not found: Google Chrome for Testing"}
+    assert payload["blocker"] == {"code": "fail_closed", "reason": "query_error", "message": "process not found: Ashby Chrome for Testing"}
     assert "process_visibility" not in payload
 
 
@@ -135,7 +135,7 @@ def test_approved_fields_do_not_read_or_print_sensitive_data(monkeypatch, tmp_pa
     secret_profile = tmp_path / "profile"
     secret_profile.mkdir()
     (secret_profile / "Cookies").write_text("cookie=secret answer-bank-token")
-    target = ChromeTarget(Path("/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"), "Google Chrome for Testing", True)
+    target = ChromeTarget(Path("/Applications/Ashby Chrome for Testing.app/Contents/MacOS/Ashby Chrome for Testing"), "Ashby Chrome for Testing", True)
     monkeypatch.setattr(verify, "PROFILE_DIR", secret_profile)
     monkeypatch.setattr(verify, "resolve_chrome", lambda: target)
     monkeypatch.setattr(verify, "persistent_ashby_context", FakePersistent(FakeContext()))
@@ -150,7 +150,7 @@ def test_approved_fields_do_not_read_or_print_sensitive_data(monkeypatch, tmp_pa
 
 
 def test_json_mode_emits_single_object(monkeypatch, capsys):
-    target = ChromeTarget(Path("/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"), "Google Chrome for Testing", True)
+    target = ChromeTarget(Path("/Applications/Ashby Chrome for Testing.app/Contents/MacOS/Ashby Chrome for Testing"), "Ashby Chrome for Testing", True)
     monkeypatch.setattr(verify, "resolve_chrome", lambda: target)
     assert verify.main(["--check-only", "--json"]) == 0
     out = capsys.readouterr().out
@@ -159,7 +159,7 @@ def test_json_mode_emits_single_object(monkeypatch, capsys):
 
 
 def test_human_check_only_output_is_readable_not_raw_dict(monkeypatch, capsys):
-    target = ChromeTarget(Path("/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"), "Google Chrome for Testing", True)
+    target = ChromeTarget(Path("/Applications/Ashby Chrome for Testing.app/Contents/MacOS/Ashby Chrome for Testing"), "Ashby Chrome for Testing", True)
     monkeypatch.setattr(verify, "resolve_chrome", lambda: target)
 
     assert verify.main(["--check-only"]) == 0
@@ -168,7 +168,7 @@ def test_human_check_only_output_is_readable_not_raw_dict(monkeypatch, capsys):
     assert "check-only: ok" in out
     assert "target.dedicated: True" in out
     assert "target.executable_path:" in out
-    assert "target.process_name: Google Chrome for Testing" in out
+    assert "target.process_name: Ashby Chrome for Testing" in out
     assert "{'" not in out
 
 
@@ -177,9 +177,9 @@ def test_visibility_output_is_sanitized_by_production_constructor(monkeypatch):
 
     monkeypatch.setattr(hide, "visible_windows_for_process", lambda name: ["secret-cookie-window", "answer-bank"])
 
-    payload = verify._visibility_for_process("Google Chrome for Testing")
+    payload = verify._visibility_for_process("Ashby Chrome for Testing")
 
-    assert payload == {"process_name": "Google Chrome for Testing", "visible": True, "window_count": 2}
+    assert payload == {"process_name": "Ashby Chrome for Testing", "visible": True, "window_count": 2}
     assert "secret-cookie-window" not in json.dumps(payload)
     assert "answer-bank" not in json.dumps(payload)
 

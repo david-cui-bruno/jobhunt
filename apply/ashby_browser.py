@@ -9,7 +9,7 @@ from typing import Iterator
 import os
 
 PROFILE_DIR = Path(".jobhunt-browser-profiles") / "ashby"
-DEFAULT_CHROME_FOR_TESTING = Path("/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
+DEFAULT_CHROME_FOR_TESTING = Path("/Applications/Ashby Chrome for Testing.app/Contents/MacOS/Ashby Chrome for Testing")
 DEFAULT_STABLE_CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 
 
@@ -23,14 +23,17 @@ class ChromeTarget:
 def _classify_chrome_path(path: Path) -> ChromeTarget:
     parts = set(path.parts)
     name = path.name
-    testing_signal = name == "Google Chrome for Testing" or "Google Chrome for Testing.app" in parts
+    ashby_testing_signal = name == "Ashby Chrome for Testing" or "Ashby Chrome for Testing.app" in parts
+    generic_testing_signal = name == "Google Chrome for Testing" or "Google Chrome for Testing.app" in parts
+    testing_signal = ashby_testing_signal or generic_testing_signal
     stable_signal = name == "Google Chrome" or "Google Chrome.app" in parts
     if testing_signal and stable_signal:
         raise RuntimeError(
             f"Conflicting Chrome executable path {path}. Bundle name and executable name disagree."
         )
     if testing_signal:
-        return ChromeTarget(path, "Google Chrome for Testing", True)
+        process_name = "Ashby Chrome for Testing" if ashby_testing_signal else "Google Chrome for Testing"
+        return ChromeTarget(path, process_name, True)
     if stable_signal:
         return ChromeTarget(path, "Google Chrome", False)
     raise RuntimeError(
@@ -69,6 +72,11 @@ def _stop_watchdog(proc: subprocess.Popen, *, timeout_seconds: float = 1.0) -> N
 
 
 def _validate_target_is_safe(target: ChromeTarget) -> ChromeTarget:
+    if target.dedicated and _is_process_running(target.process_name):
+        raise RuntimeError(
+            f"Dedicated Chrome target process {target.process_name!r} is already running. Stop that exact "
+            "process before running Ashby hidden browser automation."
+        )
     if not target.dedicated and _is_process_running(target.process_name):
         raise RuntimeError(
             "Stable Google Chrome is already running. install or configure Chrome for Testing with "
@@ -86,7 +94,7 @@ def resolve_chrome() -> ChromeTarget:
         return _validate_target_is_safe(_classify_chrome_path(path))
 
     if DEFAULT_CHROME_FOR_TESTING.exists():
-        return _classify_chrome_path(DEFAULT_CHROME_FOR_TESTING)
+        return _validate_target_is_safe(_classify_chrome_path(DEFAULT_CHROME_FOR_TESTING))
     if DEFAULT_STABLE_CHROME.exists():
         return _validate_target_is_safe(_classify_chrome_path(DEFAULT_STABLE_CHROME))
     raise RuntimeError(

@@ -46,14 +46,15 @@ def make_binary(path: Path) -> Path:
 def test_explicit_chrome_for_testing_path_is_preferred_and_dedicated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     testing = make_binary(tmp_path / "Google Chrome for Testing.app" / "Contents" / "MacOS" / "Google Chrome for Testing")
     monkeypatch.setenv("JOBHUNT_ASHBY_CHROME_PATH", str(testing))
+    monkeypatch.setattr("apply.ashby_browser._is_process_running", lambda name: False)
 
     target = resolve_chrome()
 
     assert target == ChromeTarget(testing, "Google Chrome for Testing", True)
 
 
-def test_default_chrome_for_testing_wins_over_stable_chrome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    testing = make_binary(tmp_path / "Applications" / "Google Chrome for Testing.app" / "Contents" / "MacOS" / "Google Chrome for Testing")
+def test_default_ashby_chrome_for_testing_uses_unique_process_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    testing = make_binary(tmp_path / "Applications" / "Ashby Chrome for Testing.app" / "Contents" / "MacOS" / "Ashby Chrome for Testing")
     stable = make_binary(tmp_path / "Applications" / "Google Chrome.app" / "Contents" / "MacOS" / "Google Chrome")
     monkeypatch.delenv("JOBHUNT_ASHBY_CHROME_PATH", raising=False)
     monkeypatch.setattr("apply.ashby_browser.DEFAULT_CHROME_FOR_TESTING", testing)
@@ -61,7 +62,33 @@ def test_default_chrome_for_testing_wins_over_stable_chrome(tmp_path: Path, monk
 
     target = resolve_chrome()
 
-    assert target == ChromeTarget(testing, "Google Chrome for Testing", True)
+    assert target == ChromeTarget(testing, "Ashby Chrome for Testing", True)
+
+
+def test_ashby_chrome_for_testing_path_is_classified_as_dedicated(tmp_path: Path) -> None:
+    testing = make_binary(tmp_path / "Ashby Chrome for Testing.app" / "Contents" / "MacOS" / "Ashby Chrome for Testing")
+
+    target = ashby_browser._classify_chrome_path(testing)
+
+    assert target == ChromeTarget(testing, "Ashby Chrome for Testing", True)
+
+
+def test_generic_chrome_for_testing_is_rejected_when_exact_process_is_running(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    testing = make_binary(tmp_path / "Google Chrome for Testing.app" / "Contents" / "MacOS" / "Google Chrome for Testing")
+    monkeypatch.setenv("JOBHUNT_ASHBY_CHROME_PATH", str(testing))
+    monkeypatch.setattr("apply.ashby_browser._is_process_running", lambda name: name == "Google Chrome for Testing")
+
+    with pytest.raises(RuntimeError, match="Google Chrome for Testing.*already running"):
+        resolve_chrome()
+
+
+def test_ashby_chrome_for_testing_is_rejected_when_exact_process_is_running(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    testing = make_binary(tmp_path / "Ashby Chrome for Testing.app" / "Contents" / "MacOS" / "Ashby Chrome for Testing")
+    monkeypatch.setenv("JOBHUNT_ASHBY_CHROME_PATH", str(testing))
+    monkeypatch.setattr("apply.ashby_browser._is_process_running", lambda name: name == "Ashby Chrome for Testing")
+
+    with pytest.raises(RuntimeError, match="Ashby Chrome for Testing.*already running"):
+        resolve_chrome()
 
 
 def test_missing_binaries_produce_clear_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

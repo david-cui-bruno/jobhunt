@@ -161,12 +161,12 @@ from apply.ashby_browser import resolve_chrome
 
 
 def test_chrome_for_testing_is_preferred(tmp_path: Path, monkeypatch) -> None:
-    testing = tmp_path / "Google Chrome for Testing"
+    testing = tmp_path / "Ashby Chrome for Testing"
     testing.write_text("")
     monkeypatch.setenv("JOBHUNT_ASHBY_CHROME_PATH", str(testing))
     target = resolve_chrome()
     assert target.executable == testing
-    assert target.process_name == "Google Chrome for Testing"
+    assert target.process_name == "Ashby Chrome for Testing"
     assert target.dedicated is True
 
 
@@ -192,14 +192,14 @@ Expected: FAIL because `apply.ashby_browser` does not exist.
 Resolution order:
 
 1. `JOBHUNT_ASHBY_CHROME_PATH`
-2. `/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`
+2. `/Applications/Ashby Chrome for Testing.app/Contents/MacOS/Ashby Chrome for Testing`
 3. `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`
 
-Fail with a clear error if no binary exists. For ordinary Chrome, check `pgrep -x 'Google Chrome'`; fail closed when it is already running unless the explicit shared-Chrome override is set.
+Fail with a clear error if no binary exists. The default dedicated target uses the exact process name `Ashby Chrome for Testing`. Explicit generic Chrome for Testing paths remain supported for compatibility, but fail closed when `pgrep -x 'Google Chrome for Testing'` reports an existing process. For ordinary Chrome, check `pgrep -x 'Google Chrome'`; fail closed when it is already running.
 
 - [ ] **Step 4: Implement the process-scoped watchdog**
 
-`apply/hide_macos_browser.py` must poll System Events for exactly `process_name`, set only that process's `visible` property to false, and exit after the timeout. It must not hide `Google Chrome` when the target is `Google Chrome for Testing`.
+`apply/hide_macos_browser.py` must poll System Events for exactly `process_name`, set only that process's `visible` property to false, and exit after the timeout. It must not hide `Google Chrome for Testing` when the target is `Ashby Chrome for Testing`, and it must not hide `Google Chrome` when the target is generic `Google Chrome for Testing`.
 
 Use this AppleScript body:
 
