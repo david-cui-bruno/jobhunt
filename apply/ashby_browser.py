@@ -127,6 +127,8 @@ def persistent_ashby_context(
             _stop_watchdog(watchdog)
         raise
     else:
-        if ctx is not None:
-            ctx.close()
-        _stop_watchdog(watchdog)
+        try:
+            if ctx is not None:
+                ctx.close()
+        finally:
+            _stop_watchdog(watchdog)

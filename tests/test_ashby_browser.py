@@ -226,6 +226,12 @@ class FailingCleanupWatchdog(FakeWatchdogPopen):
         raise RuntimeError("watchdog cleanup failed")
 
 
+class FailingCloseContext(FakeContext):
+    def close(self) -> None:
+        self.close_calls += 1
+        raise RuntimeError("context close failed")
+
+
 def test_is_process_running_maps_pgrep_return_codes_and_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[list[str]] = []
 
@@ -315,6 +321,23 @@ def test_watchdog_cleanup_does_not_mask_primary_browser_exception(tmp_path: Path
             raise ValueError("primary browser exception")
 
     assert watchdog.terminate_calls == 1
+
+
+def test_watchdog_is_stopped_when_context_close_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = ChromeTarget(make_binary(tmp_path / "Google Chrome for Testing"), "Google Chrome for Testing", True)
+    watchdog = FakeWatchdogPopen(running=True)
+    context = FailingCloseContext()
+    monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
+    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: watchdog)
+
+    with pytest.raises(RuntimeError, match="context close failed"):
+        with persistent_ashby_context(FakePlaywright([], context), profile_dir=tmp_path / "profile"):
+            pass
+
+    assert context.close_calls == 1
+    assert watchdog.terminate_calls == 1
+    assert watchdog.wait_calls == 1
+    assert watchdog.kill_calls == 0
 
 
 def test_profile_paths_are_ignored_and_report_specific_ignore_is_not_redundant() -> None:
