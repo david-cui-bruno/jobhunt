@@ -6,8 +6,9 @@ from typing import Any
 
 import pytest
 
+from apply import ashby_browser
 from apply.ashby_browser import ChromeTarget, persistent_ashby_context, resolve_chrome, start_hide_watchdog
-from apply.hide_macos_browser import APPLESCRIPT, build_osascript_command, process_name_matches
+from apply.hide_macos_browser import APPLESCRIPT, build_osascript_command
 
 
 class FakeContext:
@@ -106,7 +107,11 @@ def test_watchdog_starts_before_persistent_context_launch(tmp_path: Path, monkey
     context = FakeContext()
     fake_pw = FakePlaywright(events, context)
     monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
-    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: events.append(f"watchdog:{seen_target.process_name}"))
+    def fake_watchdog(seen_target: ChromeTarget) -> FakeWatchdogPopen:
+        events.append(f"watchdog:{seen_target.process_name}")
+        return FakeWatchdogPopen(running=False)
+
+    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", fake_watchdog)
 
     with persistent_ashby_context(fake_pw, profile_dir=tmp_path / "profile"):
         pass
@@ -120,7 +125,7 @@ def test_persistent_launch_receives_real_browser_arguments_and_no_spoofing(tmp_p
     fake_pw = FakePlaywright([], context)
     profile_dir = tmp_path / "profile"
     monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
-    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: None)
+    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: FakeWatchdogPopen(running=False))
 
     with persistent_ashby_context(fake_pw, profile_dir=profile_dir):
         pass
@@ -139,7 +144,7 @@ def test_persistent_launch_receives_real_browser_arguments_and_no_spoofing(tmp_p
 def test_context_closes_on_normal_and_exceptional_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = ChromeTarget(make_binary(tmp_path / "Google Chrome for Testing"), "Google Chrome for Testing", True)
     monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
-    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: None)
+    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: FakeWatchdogPopen(running=False))
 
     normal = FakeContext()
     with persistent_ashby_context(FakePlaywright([], normal), profile_dir=tmp_path / "normal"):
@@ -179,13 +184,142 @@ def test_helper_command_and_matching_are_exact() -> None:
     assert cmd[-1] == "Google Chrome for Testing"
     assert "processName to item 1 of argv" in APPLESCRIPT
     assert "process processName" in APPLESCRIPT
-    assert process_name_matches("Google Chrome for Testing", "Google Chrome for Testing") is True
-    assert process_name_matches("Google Chrome", "Google Chrome for Testing") is False
-    assert process_name_matches("Google Chrome for Testing", "Google Chrome") is False
 
 
-def test_profile_paths_are_ignored() -> None:
+
+
+class FakeCompletedRun:
+    def __init__(self, returncode: int) -> None:
+        self.returncode = returncode
+
+
+class FakeWatchdogPopen:
+    def __init__(self, *, running: bool = True, wait_timeout_once: bool = False) -> None:
+        self.running = running
+        self.wait_timeout_once = wait_timeout_once
+        self.terminate_calls = 0
+        self.wait_calls = 0
+        self.kill_calls = 0
+
+    def poll(self) -> int | None:
+        return None if self.running else 0
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_calls += 1
+        if self.wait_timeout_once:
+            self.wait_timeout_once = False
+            raise subprocess.TimeoutExpired(cmd="watchdog", timeout=timeout)
+        self.running = False
+        return 0
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        self.running = False
+
+
+class FailingCleanupWatchdog(FakeWatchdogPopen):
+    def terminate(self) -> None:
+        super().terminate()
+        raise RuntimeError("watchdog cleanup failed")
+
+
+def test_is_process_running_maps_pgrep_return_codes_and_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeCompletedRun:
+        seen.append(cmd)
+        return FakeCompletedRun(return_codes.pop(0))
+
+    return_codes = [0, 1]
+    monkeypatch.setattr(ashby_browser.subprocess, "run", fake_run)
+
+    assert ashby_browser._is_process_running("Google Chrome") is True
+    assert ashby_browser._is_process_running("Google Chrome") is False
+    assert seen == [["pgrep", "-x", "Google Chrome"], ["pgrep", "-x", "Google Chrome"]]
+
+    return_codes = [2]
+    with pytest.raises(RuntimeError, match="pgrep.*Google Chrome.*2"):
+        ashby_browser._is_process_running("Google Chrome")
+
+    def launch_error(cmd: list[str], **kwargs: Any) -> FakeCompletedRun:
+        raise OSError("pgrep missing")
+
+    monkeypatch.setattr(ashby_browser.subprocess, "run", launch_error)
+    with pytest.raises(RuntimeError, match="Unable to check.*Google Chrome.*pgrep missing"):
+        ashby_browser._is_process_running("Google Chrome")
+
+
+def test_conflicting_chrome_bundle_and_executable_signals_are_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    conflicting = make_binary(
+        tmp_path / "Google Chrome for Testing.app" / "Contents" / "MacOS" / "Google Chrome"
+    )
+    monkeypatch.setenv("JOBHUNT_ASHBY_CHROME_PATH", str(conflicting))
+
+    with pytest.raises(RuntimeError, match="Conflicting Chrome executable path"):
+        resolve_chrome()
+
+
+def test_watchdog_is_reaped_when_persistent_launch_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = ChromeTarget(make_binary(tmp_path / "Google Chrome for Testing"), "Google Chrome for Testing", True)
+    watchdog = FakeWatchdogPopen(running=True)
+    fake_pw = FakePlaywright([], FakeContext())
+    monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
+    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: watchdog)
+
+    def fail_launch(**kwargs: Any) -> FakeContext:
+        raise RuntimeError("browser launch failed")
+
+    fake_pw.chromium.launch_persistent_context = fail_launch  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="browser launch failed"):
+        with persistent_ashby_context(fake_pw, profile_dir=tmp_path / "profile"):
+            pass
+
+    assert watchdog.terminate_calls == 1
+    assert watchdog.wait_calls == 1
+    assert watchdog.kill_calls == 0
+
+
+def test_watchdog_cleanup_handles_already_exited_and_kill_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = ChromeTarget(make_binary(tmp_path / "Google Chrome for Testing"), "Google Chrome for Testing", True)
+    monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
+
+    already_exited = FakeWatchdogPopen(running=False)
+    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: already_exited)
+    with persistent_ashby_context(FakePlaywright([], FakeContext()), profile_dir=tmp_path / "exited"):
+        pass
+    assert already_exited.terminate_calls == 0
+    assert already_exited.wait_calls == 0
+    assert already_exited.kill_calls == 0
+
+    needs_kill = FakeWatchdogPopen(running=True, wait_timeout_once=True)
+    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: needs_kill)
+    with persistent_ashby_context(FakePlaywright([], FakeContext()), profile_dir=tmp_path / "kill"):
+        pass
+    assert needs_kill.terminate_calls == 1
+    assert needs_kill.wait_calls == 2
+    assert needs_kill.kill_calls == 1
+
+
+def test_watchdog_cleanup_does_not_mask_primary_browser_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = ChromeTarget(make_binary(tmp_path / "Google Chrome for Testing"), "Google Chrome for Testing", True)
+    watchdog = FailingCleanupWatchdog(running=True)
+    monkeypatch.setattr("apply.ashby_browser.resolve_chrome", lambda: target)
+    monkeypatch.setattr("apply.ashby_browser.start_hide_watchdog", lambda seen_target: watchdog)
+
+    with pytest.raises(ValueError, match="primary browser exception"):
+        with persistent_ashby_context(FakePlaywright([], FakeContext()), profile_dir=tmp_path / "profile"):
+            raise ValueError("primary browser exception")
+
+    assert watchdog.terminate_calls == 1
+
+
+def test_profile_paths_are_ignored_and_report_specific_ignore_is_not_redundant() -> None:
     gitignore = Path(".gitignore").read_text(encoding="utf-8")
 
     assert ".jobhunt-browser-profiles/" in gitignore
     assert "out/browser-profiles/" in gitignore
+    assert ".superpowers/sdd/2026-08-22-ashby-recovery-plan/task-2-report.md" not in gitignore

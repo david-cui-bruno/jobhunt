@@ -17,10 +17,6 @@ end run
 """
 
 
-def process_name_matches(candidate: str, target: str) -> bool:
-    return candidate == target
-
-
 def build_osascript_command(process_name: str) -> list[str]:
     return ["osascript", "-e", APPLESCRIPT, process_name]
 
