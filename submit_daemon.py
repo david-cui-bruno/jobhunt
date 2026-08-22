@@ -13,6 +13,8 @@ def main() -> int:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if args.dry_run and not args.once:
+        parser.error("--dry-run is only supported with --once")
     if args.once:
         results = dispatch_cycle(dry_run=args.dry_run)
         for result in results:

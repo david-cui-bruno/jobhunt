@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
@@ -194,8 +195,35 @@ def test_run_forever_recovers_from_cycle_exception(monkeypatch) -> None:
     assert calls == 2
 
 
+
 def test_dispatcher_poll_interval_default_is_30_seconds() -> None:
     import inspect
     from submission.dispatcher import run_forever
 
     assert inspect.signature(run_forever).parameters["poll_seconds"].default == 30.0
+
+
+def test_daemon_rejects_dry_run_without_once_before_dispatch(monkeypatch) -> None:
+    import submit_daemon
+
+    calls = []
+    monkeypatch.setattr(sys, "argv", ["submit_daemon.py", "--dry-run"])
+    monkeypatch.setattr(submit_daemon, "run_forever", lambda: calls.append("forever"))
+    monkeypatch.setattr(submit_daemon, "dispatch_cycle", lambda **kwargs: calls.append("cycle") or [])
+
+    with pytest.raises(SystemExit) as excinfo:
+        submit_daemon.main()
+
+    assert excinfo.value.code != 0
+    assert calls == []
+
+
+def test_daemon_allows_once_dry_run(monkeypatch) -> None:
+    import submit_daemon
+
+    calls = []
+    monkeypatch.setattr(sys, "argv", ["submit_daemon.py", "--once", "--dry-run"])
+    monkeypatch.setattr(submit_daemon, "dispatch_cycle", lambda **kwargs: calls.append(kwargs) or [])
+
+    assert submit_daemon.main() == 0
+    assert calls == [{"dry_run": True}]
