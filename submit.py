@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 from submission.attempts import ensure_submission_attempts
 from submission.database import connect_tracker
+from submission.identity import claim_submission, posting_already_applied
 
 ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT / "apply"), str(ROOT / "notify")]
@@ -275,14 +276,10 @@ def _send_notice(subject: str, body: str) -> bool:
         return False
 
 
-def _company_already_applied(
-    conn: sqlite3.Connection, company: str, posting_id: str
+def _posting_already_applied(
+    conn: sqlite3.Connection, posting_id: str, url: str
 ) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM applications a JOIN postings prior USING(posting_id) "
-        "WHERE a.posting_id=? OR lower(trim(prior.company))=lower(trim(?)) LIMIT 1",
-        (posting_id, company),
-    ).fetchone() is not None
+    return posting_already_applied(conn, posting_id, url)
 
 
 def _resume_quality_ready(resume_pdf: Path, posting_id: str) -> tuple[bool, str]:
@@ -310,36 +307,12 @@ def _resume_quality_ready(resume_pdf: Path, posting_id: str) -> tuple[bool, str]
 def _claim_submission(
     conn: sqlite3.Connection,
     posting_id: str,
-    company: str,
+    url: str,
     from_status: str = "ready",
 ) -> str:
-    """Atomically reserve one company's external-submission slot."""
-    if from_status not in {"ready", "sprinting"}:
-        raise ValueError(f"invalid submission source status: {from_status}")
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        if _company_already_applied(conn, company, posting_id):
-            conn.rollback()
-            return "already_applied"
-        active = conn.execute(
-            "SELECT 1 FROM postings "
-            "WHERE posting_id<>? AND lower(trim(company))=lower(trim(?)) "
-            "AND status IN ('submitting','sprinting') LIMIT 1",
-            (posting_id, company),
-        ).fetchone()
-        if active:
-            conn.rollback()
-            return "company_claimed"
-        changed = conn.execute(
-            "UPDATE postings SET status='submitting', last_attempt_at=? "
-            "WHERE posting_id=? AND status=?",
-            (int(time.time()), posting_id, from_status),
-        ).rowcount
-        conn.commit()
-        return "claimed" if changed == 1 else "claim_lost"
-    except Exception:
-        conn.rollback()
-        raise
+    return claim_submission(
+        conn, posting_id=posting_id, url=url, from_status=from_status
+    )
 
 
 def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> list[dict]:
@@ -393,10 +366,6 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
         "SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING(posting_id) "
         "WHERE p.status='ready' "
         "AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.posting_id=p.posting_id) "
-        "AND NOT EXISTS ("
-        "  SELECT 1 FROM applications a2 JOIN postings p2 USING(posting_id) "
-        "  WHERE lower(trim(p2.company))=lower(trim(p.company))"
-        ") "
         "ORDER BY p.rowid DESC").fetchall()
     results = []
     done = 0
@@ -414,14 +383,14 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
                 continue  # per-run Ashby cap reached — leave 'ready' for the next run
         slug = f"{r['company'].replace(' ', '_')[:40]}_{int(time.time())}"
         pdf = _runtime_path(r["resume_pdf"])
-        # Rows are selected as a batch, so a prior row in this same run may have
-        # just created a company-level application ledger entry. Re-check before
+        # Rows are selected as a batch, so a prior mirror row in this same run may
+        # have just created a canonical application ledger entry. Re-check before
         # claiming and touching an external form.
-        if _company_already_applied(conn, r["company"], r["posting_id"]):
+        if _posting_already_applied(conn, r["posting_id"], r["url"]):
             if not dry_run:
                 conn.execute(
                     "UPDATE postings SET status='filtered_out', outcome='stale', "
-                    "last_error='company already has an application' "
+                    "last_error='canonical posting already has an application' "
                     "WHERE posting_id=? AND status='ready'",
                     (r["posting_id"],),
                 )
@@ -430,7 +399,7 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
                 "company": r["company"],
                 "ats": "unknown",
                 "outcome": "stale",
-                "reason": "company already has an application; not resubmitted",
+                "reason": "canonical posting already has an application; not resubmitted",
             })
             continue
         quality_ok, quality_reason = _resume_quality_ready(pdf, r["posting_id"])
@@ -450,11 +419,11 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
             })
             continue
         if not dry_run:
-            claim = _claim_submission(conn, r["posting_id"], r["company"])
-            if claim in {"already_applied", "company_claimed"}:
+            claim = _claim_submission(conn, r["posting_id"], r["url"])
+            if claim in {"already_applied", "posting_claimed"}:
                 conn.execute(
                     "UPDATE postings SET status='filtered_out', outcome='stale', "
-                    "last_error='company already applied or being submitted' "
+                    "last_error='canonical posting already applied or being submitted' "
                     "WHERE posting_id=? AND status='ready'",
                     (r["posting_id"],),
                 )
@@ -463,7 +432,7 @@ def submit_ready(limit: int = SUBMISSIONS_PER_RUN, dry_run: bool = False) -> lis
                     "company": r["company"],
                     "ats": "unknown",
                     "outcome": "stale",
-                    "reason": "company already applied or being submitted; not resubmitted",
+                    "reason": "canonical posting already applied or being submitted; not resubmitted",
                 })
                 continue
             if claim != "claimed":

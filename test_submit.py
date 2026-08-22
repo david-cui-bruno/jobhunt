@@ -408,15 +408,16 @@ class SubmitSafetyTests(unittest.TestCase):
 
             adapter.assert_not_called()
 
-    def test_two_ready_rows_for_one_company_submit_only_once(self) -> None:
+    def test_two_ready_rows_for_one_company_both_submit_when_postings_differ(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             db = root / "tracker.db"
-            pdf = root / "resume.pdf"
-            pdf.write_bytes(b"pdf")
-            # submit_ready orders newest rows first, so posting "two" owns the
-            # artifact used before the company-level duplicate guard fires.
-            _write_quality(pdf, "two")
+            pdf_one = root / "resume-one.pdf"
+            pdf_two = root / "resume-two.pdf"
+            pdf_one.write_bytes(b"pdf")
+            pdf_two.write_bytes(b"pdf")
+            _write_quality(pdf_one, "one")
+            _write_quality(pdf_two, "two")
             conn = sqlite3.connect(db)
             conn.executescript(
                 """
@@ -431,13 +432,74 @@ class SubmitSafetyTests(unittest.TestCase):
                     submitted_at INTEGER, confirmation TEXT, notes TEXT
                 );
                 INSERT INTO postings (posting_id,company,title,status,url) VALUES
-                    ('one','Example','Engineer I','ready','https://one'),
-                    ('two',' example ','Engineer II','ready','https://two');
+                    ('one','Example','Engineer I','ready','https://jobs.lever.co/example/11111111-1111-1111-1111-111111111111'),
+                    ('two',' example ','Engineer II','ready','https://jobs.lever.co/example/22222222-2222-2222-2222-222222222222');
                 """
             )
             conn.executemany(
                 "INSERT INTO emails VALUES (?,?)",
-                [("one", str(pdf)), ("two", str(pdf))],
+                [("one", str(pdf_one)), ("two", str(pdf_two))],
+            )
+            conn.commit()
+            conn.close()
+
+            result = {
+                "outcome": "submitted",
+                "ok": True,
+                "submitted": True,
+                "reason": "confirmed",
+                "detected_ats": "greenhouse",
+            }
+            with (
+                mock.patch.object(submit, "DB", db),
+                mock.patch.object(submit, "_user_is_gaming", return_value=False),
+                mock.patch.object(submit, "_posting_dead", return_value=False),
+                mock.patch.object(submit, "_isolated_adapter", return_value=result) as adapter,
+                mock.patch.object(submit.time, "sleep"),
+            ):
+                results = submit.submit_ready(limit=2)
+
+            self.assertEqual(2, adapter.call_count)
+            self.assertEqual(["submitted", "submitted"], [r["outcome"] for r in results])
+            conn = sqlite3.connect(db)
+            self.assertEqual(2, conn.execute("SELECT count(*) FROM applications").fetchone()[0])
+            self.assertEqual(
+                [("submitted",), ("submitted",)],
+                conn.execute("SELECT status FROM postings ORDER BY posting_id").fetchall(),
+            )
+            conn.close()
+
+    def test_same_posting_mirror_for_one_company_submits_only_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / "tracker.db"
+            pdf_one = root / "resume-one.pdf"
+            pdf_two = root / "resume-two.pdf"
+            pdf_one.write_bytes(b"pdf")
+            pdf_two.write_bytes(b"pdf")
+            _write_quality(pdf_one, "one")
+            _write_quality(pdf_two, "two")
+            conn = sqlite3.connect(db)
+            conn.executescript(
+                """
+                CREATE TABLE postings (
+                    posting_id TEXT PRIMARY KEY, company TEXT, title TEXT,
+                    status TEXT, url TEXT, outcome TEXT, last_attempt_at INTEGER,
+                    attempt_count INTEGER NOT NULL DEFAULT 0, last_error TEXT
+                );
+                CREATE TABLE emails (posting_id TEXT PRIMARY KEY, resume_pdf TEXT);
+                CREATE TABLE applications (
+                    posting_id TEXT PRIMARY KEY, resume_path TEXT, ats TEXT,
+                    submitted_at INTEGER, confirmation TEXT, notes TEXT
+                );
+                INSERT INTO postings (posting_id,company,title,status,url) VALUES
+                    ('one','Example','Engineer I','ready','https://boards.greenhouse.io/embed/job_app?token=11111111'),
+                    ('two',' example ','Engineer I Mirror','ready','https://boards.greenhouse.io/embed/job_app?token=11111111&embed=true');
+                """
+            )
+            conn.executemany(
+                "INSERT INTO emails VALUES (?,?)",
+                [("one", str(pdf_one)), ("two", str(pdf_two))],
             )
             conn.commit()
             conn.close()
@@ -462,10 +524,6 @@ class SubmitSafetyTests(unittest.TestCase):
             self.assertEqual(["submitted", "stale"], [r["outcome"] for r in results])
             conn = sqlite3.connect(db)
             self.assertEqual(1, conn.execute("SELECT count(*) FROM applications").fetchone()[0])
-            self.assertEqual(
-                [("filtered_out",), ("submitted",)],
-                conn.execute("SELECT status FROM postings ORDER BY status").fetchall(),
-            )
             conn.close()
 
     def test_review_required_resume_is_quarantined_before_adapter_launch(self) -> None:
@@ -565,25 +623,60 @@ class SubmitSafetyTests(unittest.TestCase):
         self.assertIn("os.replace(source, destination)", source)
         self.assertNotIn("shutil.copyfile", source)
 
-    def test_sprint_claim_cannot_pass_an_existing_company_application(self) -> None:
+    def test_sprint_claim_allows_distinct_application_at_same_company(self) -> None:
         conn = sqlite3.connect(":memory:")
         conn.executescript(
             """
             CREATE TABLE postings (
-                posting_id TEXT PRIMARY KEY, company TEXT, status TEXT,
+                posting_id TEXT PRIMARY KEY, company TEXT, status TEXT, url TEXT,
                 last_attempt_at INTEGER
             );
             CREATE TABLE applications (posting_id TEXT PRIMARY KEY);
             INSERT INTO postings VALUES
-                ('old','Example','submitted',1),
-                ('new',' example ','sprinting',1);
+                ('old','Example','submitted','https://jobs.lever.co/example/11111111-1111-1111-1111-111111111111',1),
+                ('new',' example ','sprinting','https://jobs.lever.co/example/22222222-2222-2222-2222-222222222222',1);
+            INSERT INTO applications VALUES ('old');
+            """
+        )
+        self.assertEqual(
+            "claimed",
+            submit._claim_submission(
+                conn,
+                "new",
+                "https://jobs.lever.co/example/22222222-2222-2222-2222-222222222222",
+                from_status="sprinting",
+            ),
+        )
+        self.assertEqual(
+            "submitting",
+            conn.execute(
+                "SELECT status FROM postings WHERE posting_id='new'"
+            ).fetchone()[0],
+        )
+        conn.close()
+
+    def test_sprint_claim_cannot_pass_existing_canonical_application(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            CREATE TABLE postings (
+                posting_id TEXT PRIMARY KEY, company TEXT, status TEXT, url TEXT,
+                last_attempt_at INTEGER
+            );
+            CREATE TABLE applications (posting_id TEXT PRIMARY KEY);
+            INSERT INTO postings VALUES
+                ('old','Example','submitted','https://boards.greenhouse.io/embed/job_app?token=11111111',1),
+                ('new',' example ','sprinting','https://boards.greenhouse.io/embed/job_app?token=11111111&embed=true',1);
             INSERT INTO applications VALUES ('old');
             """
         )
         self.assertEqual(
             "already_applied",
             submit._claim_submission(
-                conn, "new", " example ", from_status="sprinting"
+                conn,
+                "new",
+                "https://boards.greenhouse.io/embed/job_app?token=11111111&embed=true",
+                from_status="sprinting",
             ),
         )
         self.assertEqual(

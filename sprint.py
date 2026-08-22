@@ -110,14 +110,14 @@ def run() -> list[dict]:
         # This marker separates a safely retryable tailoring crash from a browser
         # crash whose remote submission result may be unknowable.
         claim = submit_mod._claim_submission(
-            conn, r["posting_id"], r["company"], from_status="sprinting"
+            conn, r["posting_id"], r["url"], from_status="sprinting"
         )
         if claim != "claimed":
             conn.rollback()
-            if claim in {"already_applied", "company_claimed"}:
+            if claim in {"already_applied", "posting_claimed"}:
                 conn.execute(
                     "UPDATE postings SET status='filtered_out', outcome='stale', "
-                    "last_error='company already applied or being submitted' "
+                    "last_error='canonical posting already applied or being submitted' "
                     "WHERE posting_id=? AND status='sprinting'",
                     (r["posting_id"],),
                 )
