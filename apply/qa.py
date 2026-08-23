@@ -334,6 +334,7 @@ Additional standing instructions:
 - Graduation: {graduation_rule} Never change the date beyond that rule.
 - High school/secondary school: use only the approved answer-bank value. Omit the answer when it is absent; never infer a school or region.
 - Willing to relocate: Yes, without employer relocation assistance. Open to any listed office location; prefer SF then NYC if ranked. If preferred cities are not offered, choose any offered US city over non-US.
+- Current location / where are you based / city+state fields: answer from the profile location (Providence, RI, USA), formatted as the field demands (city; city+state; full address only when explicitly required).
 - If a select's options are provided, your answer MUST be copied verbatim from the options list (character for character). Pick the option most consistent with the profile.
 - How did you hear about us: "Company website" or closest option.
 - Signature blocks: "Name"/"Signature" = the candidate's full legal name; "Date" = today's date {today} (use the format the field implies, default MM/DD/YYYY).
