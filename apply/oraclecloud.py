@@ -608,10 +608,11 @@ def _fill_phone_if_visible(page, labels: tuple[str, ...], value: str) -> None:
 
 
 def _profile_street() -> str:
-    address = PROFILE.get("address") or {}
-    for key in ("street", "address_line_1", "address1", "line1"):
-        if str(address.get(key) or "").strip():
-            return str(address.get(key)).strip()
+    for source_name in ("location", "address"):
+        source = PROFILE.get(source_name) or {}
+        for key in ("street", "address_line_1", "address1", "line1"):
+            if str(source.get(key) or "").strip():
+                return str(source.get(key)).strip()
     return ""
 
 

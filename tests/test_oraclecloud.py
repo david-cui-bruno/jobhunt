@@ -1512,6 +1512,43 @@ def test_oracle_address_types_street_selects_unique_matching_visible_suggestion(
     assert page.address.input_value() == "123 Example Ave"
 
 
+def test_oracle_address_types_location_street_and_selects_exact_suggestion(monkeypatch):
+    page = _OracleControlsPage(street="123 Example Ave")
+    page.suggestions = [_OracleControlLocator(page, "suggestion-1", text="123 Example Ave, Example City, ST")]
+    monkeypatch.setattr(
+        oraclecloud,
+        "PROFILE",
+        {
+            "location": {"city": "Example City", "country": "US", "state": "ST", "street": "123 Example Ave", "zip": "12345"},
+            "address": {"street": "999 Legacy Rd"},
+        },
+    )
+
+    assert oraclecloud._fill_oracle_address_line1(page) is True
+
+    assert page.events[:2] == ["press:address:123 Example Ave", "wait:600"]
+    assert page.events[-1] == "click:suggestion-1"
+    assert page.address.input_value() == "123 Example Ave"
+
+
+def test_oracle_address_absent_location_street_fails_closed_without_typing(monkeypatch):
+    page = _OracleControlsPage(street="123 Example Ave")
+    page.suggestions = [_OracleControlLocator(page, "suggestion-1", text="123 Example Ave, Example City, ST")]
+    monkeypatch.setattr(
+        oraclecloud,
+        "PROFILE",
+        {
+            "location": {"city": "Example City", "country": "US", "state": "ST", "zip": "12345"},
+            "address": {},
+        },
+    )
+
+    assert oraclecloud._fill_oracle_address_line1(page) is False
+
+    assert page.address.input_value() == ""
+    assert page.events == []
+
+
 def test_oracle_address_clears_partial_typing_when_keypress_raises(monkeypatch):
     class PartialTypingAddress(_OracleControlLocator):
         def press_sequentially(self, value, delay=None):
