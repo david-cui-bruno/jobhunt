@@ -72,34 +72,47 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   source-page hash, and sanitized row-local error in `posting_url_resolutions`.
   Cached results are reused only when both `posting_id` and `source_url` match.
   Resolution and canonical checks do not perform network I/O inside identity,
-  dedupe, or submission claim transactions. Canonical collisions are fail-closed:
-  applied aliases, active submitting or sprinting claims, and terminal aliases are
-  not rewritten or requeued. Unsupported, unsafe, missing-link, click-uncertain,
-  stale, skipped, submitted, finished-attempt, CAPTCHA, spam, and user-skipped
-  rows remain manual or terminal until a human reviews them. Use a temporary or
-  backed-up database for dry runs:
+  dedupe, or submission claim transactions. Resolver fetches do not follow
+  redirects, and accepted targets must be strict public HTTP(S) DNS names or
+  global IP literals. Numeric loopback/private spellings, private IPs,
+  credentials, localhost, and internal-only hostnames fail closed. Canonical
+  collisions are fail-closed: applied aliases, active queued, tailoring, ready,
+  manual, submitting, or sprinting aliases, terminal aliases, and conservative
+  same-company/title Dreamwork applied siblings are not rewritten or requeued.
+  Failed wrapper resolutions are negative-cached with backoff, and each watcher
+  run has count and wall-time budgets so dead wrappers cannot starve drip.
+  Unsupported, unsafe, missing-link, click-uncertain, stale, skipped, submitted,
+  finished-attempt, CAPTCHA, spam, and user-skipped rows remain manual or
+  terminal until a human reviews them. Use an existing database or a SQLite
+  backup copy for dry runs. The CLI refuses nonexistent or unmigrated databases
+  with JSON errors and never creates a mistyped path:
 
   ```bash
-  python3 scripts/retriage_resolved_postings.py --db "$JCODE_SCRATCH_DIR/resolution-acceptance.db" --preview --json
+  scratch="${TMPDIR:-/tmp}/jobhunt-resolution-acceptance.db"
+  sqlite3 out/tracker.db ".backup '$scratch'"
+  python3 scripts/retriage_resolved_postings.py --db "$scratch" --preview --json
   ```
 
   For live rollout, first create a SQLite `.backup`, set the backup mode to
   `0600`, run `PRAGMA integrity_check` on both files, inspect the preview counts
-  and samples by ATS and conflict reason, then run exactly one reviewed apply:
+  and samples by ATS and conflict reason, then run a reviewed bounded apply. The
+  default apply cap is 25 rows; choose a smaller canary with `--limit N` when
+  appropriate:
 
   ```bash
   python3 scripts/retriage_resolved_postings.py --db out/tracker.db --preview --json
-  python3 scripts/retriage_resolved_postings.py --db out/tracker.db --apply --json
+  python3 scripts/retriage_resolved_postings.py --db out/tracker.db --apply --json --limit 25
   ```
 
-  Safe reruns are allowed because preview is read-only, apply recomputes the
-  candidate set under `BEGIN IMMEDIATE`, and updates use posting ID, manual
-  status, and original `last_error` compare-and-set guards. After apply, verify
-  zero active canonical duplicate groups, zero active aliases of application
-  ledger rows, zero offseason active rows, zero finished-attempt rows requeued,
-  and that unresolved or unsafe rows remain manual. Live Dreamwork backup,
-  preview, apply, resident-pipeline observation, and Sheet readback remain pending
-  broad review and coordinator execution.
+  Safe reruns are allowed because preview opens read-only and preserves the
+  database byte hash, apply recomputes only the selected bounded IDs under
+  `BEGIN IMMEDIATE`, and updates use posting ID, manual status, and original
+  `last_error` compare-and-set guards. After apply, verify zero active canonical
+  duplicate groups, zero active aliases of application ledger rows, zero
+  offseason active rows, zero finished-attempt rows requeued, and that unresolved
+  or unsafe rows remain manual. Live Dreamwork backup, preview, apply,
+  resident-pipeline observation, and Sheet readback remain pending broad review
+  and coordinator execution.
 - **Ashby canary** is disabled by default and controlled only by SQLite state in
   `out/tracker.db`, not by files such as legacy cooldown markers. Operators use
   `python3 manage_lanes.py status ashby`, `preview ashby`, `enable-canary ashby`,

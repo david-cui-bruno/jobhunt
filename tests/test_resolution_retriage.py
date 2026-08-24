@@ -13,7 +13,7 @@ import watcher.bigco
 import watcher.startups
 from submission.identity import canonical_conflict_reason
 from submission.database import connect_tracker
-from submission.resolutions import cached_resolution, ensure_resolution_schema, record_resolution
+from submission.resolutions import cached_resolution, cached_resolution_backoff_active, ensure_resolution_schema, record_resolution
 from submission.lanes import classify_url
 from submission.identity import canonical_posting_key, posting_already_applied
 from watcher import watch
@@ -46,6 +46,31 @@ def conn() -> sqlite3.Connection:
     return db
 
 
+def dreamwork_conn() -> sqlite3.Connection:
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    watch.init_db(db)
+    return db
+
+
+def seed_dreamwork_posting(
+    db: sqlite3.Connection,
+    posting_id: str,
+    url: str,
+    status: str = "manual",
+    outcome: str | None = "manual",
+    company: str = "Acme",
+    title: str = "Software Engineer Intern",
+) -> None:
+    db.execute(
+        "INSERT INTO postings "
+        "(posting_id, source, company, title, locations, url, sponsorship, citizenship_required, closed, "
+        "first_seen, status, outcome, last_error) "
+        "VALUES (?, 'dreamwork-2027', ?, ?, '', ?, '', 0, 0, 1, ?, ?, 'no adapter for other')",
+        (posting_id, company, title, url, status, outcome),
+    )
+
+
 def seed_posting(db: sqlite3.Connection, posting_id: str, url: str, status: str, outcome: str | None = None) -> None:
     db.execute(
         "INSERT INTO postings (posting_id, company, url, status, outcome) VALUES (?,?,?,?,?)",
@@ -71,6 +96,7 @@ def test_resolution_schema_is_idempotent() -> None:
         "resolved_at",
         "last_error",
         "source_hash",
+        "retry_after",
     }
 
 
@@ -145,10 +171,12 @@ def test_cached_resolution_ignores_empty_target_and_record_sanitizes_errors() ->
 
     assert cached_resolution(db, "dw-1", SOURCE_URL) is None
     row = db.execute(
-        "SELECT last_error FROM posting_url_resolutions WHERE posting_id='dw-1'"
+        "SELECT last_error, retry_after FROM posting_url_resolutions WHERE posting_id='dw-1'"
     ).fetchone()
+    assert cached_resolution_backoff_active(db, "dw-1", SOURCE_URL, now=0) == row[0]
     assert "\n" not in row[0]
     assert len(row[0]) == 500
+    assert row[1] > 0
 
 
 def test_record_resolution_updates_existing_posting_id() -> None:
@@ -192,6 +220,21 @@ def test_canonical_conflict_detects_active_sprinting_claim() -> None:
     assert canonical_conflict_reason(db, "wrapper", GREENHOUSE_ALIAS) == "canonical posting already claimed"
 
 
+def test_canonical_conflict_detects_active_working_aliases() -> None:
+    for status in ("queued", "tailoring", "ready", "manual"):
+        db = conn()
+        seed_posting(db, "active", GREENHOUSE_URL, status)
+        assert canonical_conflict_reason(db, "wrapper", GREENHOUSE_ALIAS) == "canonical posting already active"
+
+
+def test_canonical_conflict_uses_resolution_targets_for_active_aliases() -> None:
+    db = retriage_conn()
+    seed_retriage_row(db, "active", GREENHOUSE_URL, status="manual")
+    seed_retriage_row(db, "wrapper", GREENHOUSE_ALIAS, status="manual")
+
+    assert canonical_conflict_reason(db, "wrapper", GREENHOUSE_ALIAS) == "canonical posting already active"
+
+
 def test_canonical_conflict_detects_terminal_stale_alias() -> None:
     db = conn()
     seed_posting(db, "stale", GREENHOUSE_URL, "manual", "stale")
@@ -225,7 +268,7 @@ def test_dreamwork_watcher_reapplies_cached_resolution_before_filter() -> None:
 
     result = watch.resolve_dreamwork_postings(db, fetch_page=fail_fetch)
 
-    assert result == {"cached": 1, "resolved": 0, "failed": 0, "conflicts": 0}
+    assert result == {"cached": 1, "resolved": 0, "failed": 0, "conflicts": 0, "backoff": 0, "budget_exhausted": 0}
     assert db.execute("SELECT url FROM postings WHERE posting_id='dw-1'").fetchone()[0] == GREENHOUSE_URL
     assert db.execute("SELECT status FROM postings WHERE posting_id='dw-1'").fetchone()[0] == "manual"
 
@@ -241,6 +284,89 @@ def test_dreamwork_watcher_resolution_conflict_never_rewrites_or_requeues() -> N
     assert result["conflicts"] == 1
     assert db.execute("SELECT url FROM postings WHERE posting_id='dw-1'").fetchone()[0] == SOURCE_URL
     assert db.execute("SELECT status FROM postings WHERE posting_id='dw-1'").fetchone()[0] == "manual"
+
+
+def test_dreamwork_watcher_blocks_preexisting_active_resolved_alias() -> None:
+    db = dreamwork_conn()
+    seed_dreamwork_posting(db, "active", GREENHOUSE_URL, status="queued", outcome=None)
+    seed_dreamwork_posting(db, "dw-1", SOURCE_URL)
+
+    result = watch.resolve_dreamwork_postings(db, fetch_page=lambda _: GREENHOUSE_HTML)
+
+    assert result["conflicts"] == 1
+    assert db.execute("SELECT url FROM postings WHERE posting_id='dw-1'").fetchone()[0] == SOURCE_URL
+
+
+def test_dreamwork_watcher_blocks_intra_pass_active_canonical_duplicates() -> None:
+    db = dreamwork_conn()
+    first_source = SOURCE_URL.replace("11111111", "22222222")
+    seed_dreamwork_posting(db, "dw-a", first_source)
+    seed_dreamwork_posting(db, "dw-b", SOURCE_URL)
+
+    result = watch.resolve_dreamwork_postings(db, fetch_page=lambda _: GREENHOUSE_HTML)
+
+    urls = dict(db.execute("SELECT posting_id, url FROM postings WHERE posting_id IN ('dw-a','dw-b')"))
+    assert result["resolved"] == 1
+    assert result["conflicts"] == 1
+    assert sorted(urls.values()) == sorted([GREENHOUSE_URL, SOURCE_URL])
+
+
+def test_dreamwork_watcher_blocks_applied_sibling_alias_even_when_applied_wrapper_cannot_resolve() -> None:
+    db = dreamwork_conn()
+    applied_source = SOURCE_URL.replace("11111111", "33333333")
+    seed_dreamwork_posting(db, "applied-a", applied_source, status="submitted", outcome="submitted")
+    db.execute("INSERT INTO applications (posting_id) VALUES ('applied-a')")
+    record_resolution(
+        db,
+        ResolutionResult(applied_source, None, "dreamwork-original-v1", "f" * 64, "original posting link not found"),
+        posting_id="applied-a",
+    )
+    seed_dreamwork_posting(db, "dw-b", SOURCE_URL)
+
+    result = watch.resolve_dreamwork_postings(db, fetch_page=lambda _: GREENHOUSE_HTML)
+
+    assert result["conflicts"] == 1
+    assert db.execute("SELECT url FROM postings WHERE posting_id='dw-b'").fetchone()[0] == SOURCE_URL
+    assert posting_already_applied(db, "dw-b", GREENHOUSE_URL) is True
+
+
+def test_dreamwork_watcher_applied_sibling_conflict_is_row_order_independent() -> None:
+    for posting_ids in (("applied-a", "dw-b"), ("dw-b", "applied-a")):
+        db = dreamwork_conn()
+        urls = {
+            "applied-a": SOURCE_URL.replace("11111111", "44444444"),
+            "dw-b": SOURCE_URL.replace("11111111", "55555555"),
+        }
+        for posting_id in posting_ids:
+            if posting_id == "applied-a":
+                seed_dreamwork_posting(db, posting_id, urls[posting_id], status="submitted", outcome="submitted")
+                db.execute("INSERT INTO applications (posting_id) VALUES (?)", (posting_id,))
+            else:
+                seed_dreamwork_posting(db, posting_id, urls[posting_id])
+
+        result = watch.resolve_dreamwork_postings(db, fetch_page=lambda _: GREENHOUSE_HTML)
+
+        assert result["conflicts"] >= 1
+        assert db.execute("SELECT url FROM postings WHERE posting_id='dw-b'").fetchone()[0] == urls["dw-b"]
+
+
+def test_dreamwork_resolution_reuses_negative_cache_and_per_run_count_budget() -> None:
+    db = dreamwork_conn()
+    for index in range(3):
+        seed_dreamwork_posting(db, f"dw-{index}", SOURCE_URL.replace("11111111", str(index + 10) * 8))
+    fetches: list[str] = []
+
+    def missing(url: str) -> str:
+        fetches.append(url)
+        return "<html><body>No original posting</body></html>"
+
+    first = watch.resolve_dreamwork_postings(db, fetch_page=missing, max_fetches=2)
+    second = watch.resolve_dreamwork_postings(db, fetch_page=missing, max_fetches=2)
+
+    assert first["failed"] == 2
+    assert first["budget_exhausted"] == 1
+    assert second["backoff"] == 2
+    assert len(fetches) == 3
 
 
 def test_classify_identity_and_duplicate_hot_paths_never_fetch(monkeypatch) -> None:
@@ -400,6 +526,7 @@ def test_retriage_cli_preview_json_does_not_mutate_database_hash(tmp_path: Path)
     assert payload == {
         "mode": "preview",
         "count": 2,
+        "limit": 25,
         "candidates": [
             {
                 "posting_id": "greenhouse",
@@ -456,3 +583,83 @@ def test_retriage_cli_apply_scope_and_idempotence(tmp_path: Path) -> None:
         "prepared for manual completion: smartrecruiters",
     )
     assert {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded} == before
+
+
+def test_retriage_cli_missing_database_does_not_create_file_or_traceback(tmp_path: Path) -> None:
+    db_path = tmp_path / "typo.db"
+
+    completed = subprocess.run(
+        [sys.executable, "scripts/retriage_resolved_postings.py", "--db", str(db_path), "--preview", "--json"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert not db_path.exists()
+    assert "Traceback" not in completed.stderr
+    assert json.loads(completed.stdout)["error"] == "database file does not exist"
+
+
+def test_retriage_cli_missing_resolution_schema_is_explicit_and_read_only(tmp_path: Path) -> None:
+    db_path = tmp_path / "tracker.db"
+    db = sqlite3.connect(db_path)
+    db.execute("CREATE TABLE postings (posting_id TEXT PRIMARY KEY, company TEXT, title TEXT, url TEXT, status TEXT)")
+    db.commit()
+    db.close()
+    before = db_hash(db_path)
+
+    completed = subprocess.run(
+        [sys.executable, "scripts/retriage_resolved_postings.py", "--db", str(db_path), "--preview", "--json"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert db_hash(db_path) == before
+    assert "Traceback" not in completed.stderr
+    assert json.loads(completed.stdout)["error"] == "database is missing posting_url_resolutions schema"
+
+
+def test_retriage_cli_apply_uses_default_safe_limit(tmp_path: Path) -> None:
+    db = retriage_conn(tmp_path)
+    for index in range(30):
+        seed_retriage_row(db, f"gh-{index:02d}", f"https://job-boards.greenhouse.io/acme/jobs/{8000 + index}")
+    db.commit()
+    db.close()
+    db_path = tmp_path / "tracker.db"
+
+    completed = subprocess.run(
+        [sys.executable, "scripts/retriage_resolved_postings.py", "--db", str(db_path), "--apply", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["limit"] == 25
+    assert payload["result"] == {"requested": 25, "updated": 25, "skipped": 0}
+    db = sqlite3.connect(db_path)
+    assert db.execute("SELECT COUNT(*) FROM postings WHERE status='queued'").fetchone() == (25,)
+
+
+def test_apply_retriage_recomputes_only_selected_ids_under_lock(monkeypatch) -> None:
+    import submission.identity
+    from submission.resolutions import apply_retriage
+
+    db = retriage_conn()
+    for index in range(20):
+        seed_retriage_row(db, f"gh-{index:02d}", f"https://job-boards.greenhouse.io/acme/jobs/{9000 + index}")
+    db.commit()
+    calls: list[str] = []
+    original = submission.identity.canonical_conflict_reason
+
+    def counting_conflict(conn: sqlite3.Connection, posting_id: str, url: str) -> str | None:
+        calls.append(posting_id)
+        return original(conn, posting_id, url)
+
+    monkeypatch.setattr(submission.identity, "canonical_conflict_reason", counting_conflict)
+
+    result = apply_retriage(db, ["gh-07"])
+
+    assert result == {"requested": 1, "updated": 1, "skipped": 0}
+    assert calls == ["gh-07"]

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from watcher.url_resolver import resolve_dreamwork_html, validate_public_target
+from watcher import watch
 
 
 DREAMWORK_URL = "https://jobs.dreamwork.com/acme/software-engineer"
@@ -71,11 +72,44 @@ def test_dreamwork_parser_reports_missing_original_posting_link():
         "http://192.168.1.5/jobs/1",
         "http://[::1]/jobs/1",
         "http://[fd00::1]/jobs/1",
+        "http://2130706433/admin",
+        "http://0x7f000001/admin",
+        "http://127.1/admin",
+        "http://2852039166/latest/meta-data/",
+        "http://0xa9fea9fe/latest/meta-data/",
+        "https://metadata.google.internal/x",
+        "https://internal.corp/x",
+        "https://example/jobs/1",
+        "https://@example.com/jobs/1",
     ],
 )
 def test_validate_public_target_rejects_unsafe_targets(target):
     with pytest.raises(ValueError, match=re.escape(PUBLIC_ERROR)):
         validate_public_target(target)
+
+
+def test_validate_public_target_normalizes_public_dns_without_fragment():
+    assert (
+        validate_public_target("http://EXAMPLE.COM./jobs/1;session=9?x=1#frag")
+        == "http://example.com/jobs/1;session=9?x=1"
+    )
+
+
+def test_dreamwork_wrapper_host_matching_is_strict():
+    assert watch._is_dreamwork_wrapper("https://www.dreamworkhq.com/job/11111111-1111-1111-1111-111111111111")
+    assert not watch._is_dreamwork_wrapper("https://evildreamworkhq.com/job/11111111-1111-1111-1111-111111111111")
+
+
+def test_fetch_redirect_handler_refuses_to_follow_to_unsafe_target_without_requesting_it():
+    request = watch._NoRedirects().redirect_request(
+        None,
+        None,
+        302,
+        "Found",
+        {"Location": "http://127.0.0.1/admin"},
+        "http://127.0.0.1/admin",
+    )
+    assert request is None
 
 
 def test_dreamwork_parser_rejects_wrong_anchor_text():

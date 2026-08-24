@@ -64,6 +64,7 @@ def validate_public_target(url: str) -> str:
         or not parsed.hostname
         or parsed.username
         or parsed.password
+        or "@" in parsed.netloc
     ):
         raise ValueError(PUBLIC_TARGET_ERROR)
 
@@ -71,14 +72,61 @@ def validate_public_target(url: str) -> str:
     if host == "localhost" or host.endswith(".localhost"):
         raise ValueError(PUBLIC_TARGET_ERROR)
 
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        address = None
-    if address and not address.is_global:
+    address = _ip_address_from_host_literal(host)
+    if address is not None:
+        if not address.is_global:
+            raise ValueError(PUBLIC_TARGET_ERROR)
+    elif not _is_public_dns_name(host):
         raise ValueError(PUBLIC_TARGET_ERROR)
 
-    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", parsed.query, ""))
+    netloc = host
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    return urllib.parse.urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, ""))
+
+
+def _ip_address_from_host_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+
+    if re.fullmatch(r"0x[0-9a-f]+", host, re.I):
+        return ipaddress.ip_address(int(host, 16))
+    if re.fullmatch(r"\d+", host):
+        return ipaddress.ip_address(int(host, 10))
+    parts = host.split(".")
+    if 1 < len(parts) < 4 and all(part.isdigit() for part in parts):
+        value = 0
+        for index, part in enumerate(parts):
+            number = int(part, 10)
+            if number > 255:
+                raise ValueError(PUBLIC_TARGET_ERROR)
+            if index < len(parts) - 1:
+                value = (value << 8) + number
+            else:
+                remaining_octets = 4 - len(parts) + 1
+                if number >= 256 ** remaining_octets:
+                    raise ValueError(PUBLIC_TARGET_ERROR)
+                value = (value << (8 * remaining_octets)) + number
+        return ipaddress.ip_address(value)
+    if any(part.isdigit() for part in parts) and len(parts) != 4:
+        raise ValueError(PUBLIC_TARGET_ERROR)
+    return None
+
+
+def _is_public_dns_name(host: str) -> bool:
+    labels = host.split(".")
+    if len(labels) < 2:
+        return False
+    if labels[-1] in {"corp", "home", "internal", "lan", "local"}:
+        return False
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,62}", labels[-1]):
+        return False
+    return all(
+        re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+        for label in labels
+    )
 
 
 def resolve_dreamwork_html(source_url: str, html: str) -> ResolutionResult:

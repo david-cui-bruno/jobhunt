@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 import sqlite3
 import time
-from typing import Protocol
+from typing import Iterable, Protocol
+
+
+NEGATIVE_CACHE_BACKOFF_SECONDS = 6 * 60 * 60
 
 
 class ResolutionLike(Protocol):
@@ -22,7 +25,8 @@ CREATE TABLE IF NOT EXISTS posting_url_resolutions (
     resolver TEXT NOT NULL,
     resolved_at INTEGER,
     last_error TEXT NOT NULL DEFAULT '',
-    source_hash TEXT NOT NULL
+    source_hash TEXT NOT NULL,
+    retry_after INTEGER
 );
 CREATE INDEX IF NOT EXISTS posting_url_resolutions_target_idx
 ON posting_url_resolutions(resolved_url);
@@ -33,6 +37,9 @@ def ensure_resolution_schema(conn: sqlite3.Connection) -> None:
     should_commit = not conn.in_transaction
     for statement in [part.strip() for part in SCHEMA.split(";") if part.strip()]:
         conn.execute(statement)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(posting_url_resolutions)")}
+    if "retry_after" not in columns:
+        conn.execute("ALTER TABLE posting_url_resolutions ADD COLUMN retry_after INTEGER")
     if should_commit:
         conn.commit()
 
@@ -46,6 +53,21 @@ def cached_resolution(conn: sqlite3.Connection, posting_id: str, source_url: str
     return row[0] if row else None
 
 
+def cached_resolution_backoff_active(
+    conn: sqlite3.Connection,
+    posting_id: str,
+    source_url: str,
+    now: int | None = None,
+) -> str | None:
+    row = conn.execute(
+        "SELECT last_error FROM posting_url_resolutions "
+        "WHERE posting_id=? AND source_url=? AND COALESCE(resolved_url, '')='' "
+        "AND COALESCE(retry_after, 0)>?",
+        (posting_id, source_url, int(time.time()) if now is None else now),
+    ).fetchone()
+    return row[0] if row else None
+
+
 def record_resolution(conn: sqlite3.Connection, result: ResolutionLike, posting_id: str | None = None) -> None:
     resolved_posting_id = posting_id or getattr(result, "posting_id", None)
     if not resolved_posting_id:
@@ -53,15 +75,16 @@ def record_resolution(conn: sqlite3.Connection, result: ResolutionLike, posting_
     conn.execute(
         """
         INSERT INTO posting_url_resolutions
-        (posting_id, source_url, resolved_url, resolver, resolved_at, last_error, source_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (posting_id, source_url, resolved_url, resolver, resolved_at, last_error, source_hash, retry_after)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(posting_id) DO UPDATE SET
             source_url=excluded.source_url,
             resolved_url=excluded.resolved_url,
             resolver=excluded.resolver,
             resolved_at=excluded.resolved_at,
             last_error=excluded.last_error,
-            source_hash=excluded.source_hash
+            source_hash=excluded.source_hash,
+            retry_after=excluded.retry_after
         """,
         (
             resolved_posting_id,
@@ -71,6 +94,7 @@ def record_resolution(conn: sqlite3.Connection, result: ResolutionLike, posting_
             int(time.time()) if result.resolved_url else None,
             _sanitize_error(result.error),
             result.source_hash,
+            None if result.resolved_url else int(time.time()) + NEGATIVE_CACHE_BACKOFF_SECONDS,
         ),
     )
 
@@ -87,12 +111,14 @@ TERMINAL_OUTCOMES = frozenset({"stale", "submitted", "deduplicated"})
 TERMINAL_STATUSES = frozenset({"submitted", "skipped"})
 
 
-def retriage_candidates(conn: sqlite3.Connection) -> list[dict]:
+def retriage_candidates(conn: sqlite3.Connection, posting_ids: Iterable[str] | None = None) -> list[dict]:
     from submission.identity import canonical_conflict_reason
     from submission.lanes import classify_url, preparation_destination
 
     candidates: list[dict] = []
-    for row in conn.execute(_candidate_query()):
+    requested_ids = list(dict.fromkeys(posting_ids or []))
+    query, params = _candidate_query(requested_ids if posting_ids is not None else None)
+    for row in conn.execute(query, params):
         posting_id = row["posting_id"] if isinstance(row, sqlite3.Row) else row[0]
         company = row["company"] if isinstance(row, sqlite3.Row) else row[1]
         title = row["title"] if isinstance(row, sqlite3.Row) else row[2]
@@ -136,8 +162,7 @@ def apply_retriage(conn: sqlite3.Connection, posting_ids: list[str]) -> dict:
         conn.execute("BEGIN IMMEDIATE")
         current = {
             candidate["posting_id"]: candidate
-            for candidate in retriage_candidates(conn)
-            if candidate["posting_id"] in requested_ids
+            for candidate in retriage_candidates(conn, requested_ids)
         }
         updated = 0
         for posting_id in requested_ids:
@@ -164,7 +189,15 @@ def apply_retriage(conn: sqlite3.Connection, posting_ids: list[str]) -> dict:
         raise
 
 
-def _candidate_query() -> str:
+def _candidate_query(posting_ids: list[str] | None = None) -> tuple[str, tuple]:
+    id_clause = ""
+    params: tuple = ()
+    if posting_ids is not None:
+        if not posting_ids:
+            return "SELECT NULL WHERE 0", ()
+        placeholders = ",".join("?" for _ in posting_ids)
+        id_clause = f" AND p.posting_id IN ({placeholders})"
+        params = tuple(posting_ids)
     return """
         SELECT p.posting_id,
                COALESCE(p.company, '') AS company,
@@ -178,8 +211,9 @@ def _candidate_query() -> str:
           AND COALESCE(r.resolved_url, '')<>''
           AND COALESCE(p.outcome, '') NOT IN ('stale', 'submitted', 'deduplicated')
           AND COALESCE(p.status, '') NOT IN ('submitted', 'skipped')
+          {id_clause}
         ORDER BY p.posting_id
-    """
+    """.format(id_clause=id_clause), params
 
 
 def _technical_reason(reason: str) -> bool:

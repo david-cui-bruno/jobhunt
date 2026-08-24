@@ -17,11 +17,12 @@ import sqlite3
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
 from submission.identity import canonical_conflict_reason
-from submission.resolutions import cached_resolution, ensure_resolution_schema, record_resolution
+from submission.resolutions import cached_resolution, cached_resolution_backoff_active, ensure_resolution_schema, record_resolution
 from watcher.url_resolver import resolve_dreamwork_html
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,9 +54,21 @@ class Posting:
     closed: bool = False
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _fetch(url: str) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "jobhunt-watcher"})
-    with urllib.request.urlopen(req, timeout=30) as r:
+    opener = urllib.request.build_opener(_NoRedirects)
+    try:
+        response = opener.open(req, timeout=30)
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise ValueError("redirects are not followed while resolving Dreamwork pages") from exc
+        raise
+    with response as r:
         return r.read().decode()
 
 
@@ -288,15 +301,25 @@ def upsert(conn: sqlite3.Connection, postings: list[Posting]) -> list[Posting]:
 
 def _is_dreamwork_wrapper(url: str) -> bool:
     parsed = urllib.parse.urlparse(url)
-    return parsed.netloc.lower().endswith("dreamworkhq.com") and "/job/" in parsed.path
+    host = parsed.netloc.lower()
+    return (host == "dreamworkhq.com" or host.endswith(".dreamworkhq.com")) and "/job/" in parsed.path
 
 
 def _has_postings_column(conn: sqlite3.Connection, name: str) -> bool:
     return any(row[1] == name for row in conn.execute("PRAGMA table_info(postings)").fetchall())
 
 
-def resolve_dreamwork_postings(conn: sqlite3.Connection, fetch_page=_fetch) -> dict[str, int]:
-    summary = {"cached": 0, "resolved": 0, "failed": 0, "conflicts": 0}
+def resolve_dreamwork_postings(
+    conn: sqlite3.Connection,
+    fetch_page=None,
+    max_fetches: int = 25,
+    max_seconds: float = 60.0,
+) -> dict[str, int]:
+    if fetch_page is None:
+        fetch_page = _fetch
+    summary = {"cached": 0, "resolved": 0, "failed": 0, "conflicts": 0, "backoff": 0, "budget_exhausted": 0}
+    fetch_count = 0
+    started = time.monotonic()
     source_filter = "WHERE source='dreamwork-2027'" if _has_postings_column(conn, "source") else ""
     rows = conn.execute(
         f"SELECT posting_id,url FROM postings {source_filter} ORDER BY rowid"
@@ -310,6 +333,13 @@ def resolve_dreamwork_postings(conn: sqlite3.Connection, fetch_page=_fetch) -> d
             target_url = cached_resolution(conn, posting_id, source_url)
             used_cache = target_url is not None
             if target_url is None:
+                if cached_resolution_backoff_active(conn, posting_id, source_url) is not None:
+                    summary["backoff"] += 1
+                    continue
+                if fetch_count >= max_fetches or time.monotonic() - started >= max_seconds:
+                    summary["budget_exhausted"] += 1
+                    continue
+                fetch_count += 1
                 result = resolve_dreamwork_html(source_url, fetch_page(source_url))
                 record_resolution(conn, result, posting_id=posting_id)
                 target_url = result.resolved_url

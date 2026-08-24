@@ -82,32 +82,124 @@ def canonical_posting_key(posting_id: str, url: str) -> str:
 def canonical_conflict_reason(conn: sqlite3.Connection, posting_id: str, url: str) -> str | None:
     wanted = canonical_posting_key(posting_id, url)
 
-    rows = conn.execute(
-        "SELECT p.posting_id,p.url FROM applications a JOIN postings p USING(posting_id)"
-    ).fetchall()
-    if any(canonical_posting_key(row[0], row[1]) == wanted for row in rows):
+    if _any_candidate_url_matches(conn, "1=1", (), wanted, applications=True):
+        return "canonical posting already applied"
+    if _dreamwork_applied_sibling_matches(conn, posting_id, url):
         return "canonical posting already applied"
 
-    rows = conn.execute(
-        "SELECT posting_id,url FROM postings "
-        "WHERE posting_id<>? AND status IN ('submitting','sprinting')",
+    if _any_candidate_url_matches(
+        conn,
+        "p.posting_id<>? AND p.status IN ('submitting','sprinting')",
         (posting_id,),
-    ).fetchall()
-    if any(canonical_posting_key(row[0], row[1]) == wanted for row in rows):
+        wanted,
+    ):
         return "canonical posting already claimed"
+
+    active_clause = "posting_id<>? AND status IN ('queued','tailoring','ready','manual')"
+    if _has_postings_column(conn, "outcome"):
+        active_clause += " AND COALESCE(outcome, '') NOT IN ('stale','submitted','deduplicated')"
+    if _any_candidate_url_matches(
+        conn,
+        active_clause,
+        (posting_id,),
+        wanted,
+    ):
+        return "canonical posting already active"
 
     terminal_clause = "status IN ('submitted','skipped')"
     if _has_postings_column(conn, "outcome"):
         terminal_clause = "(outcome IN ('stale','submitted','deduplicated') OR " + terminal_clause + ")"
-    rows = conn.execute(
-        "SELECT posting_id,url FROM postings "
-        f"WHERE posting_id<>? AND {terminal_clause}",
+    if _any_candidate_url_matches(
+        conn,
+        f"p.posting_id<>? AND {terminal_clause}",
         (posting_id,),
-    ).fetchall()
-    if any(canonical_posting_key(row[0], row[1]) == wanted for row in rows):
+        wanted,
+    ):
         return "canonical posting already terminal"
 
     return None
+
+
+def _any_candidate_url_matches(
+    conn: sqlite3.Connection,
+    where: str,
+    params: tuple,
+    wanted: str,
+    applications: bool = False,
+) -> bool:
+    for row in _candidate_rows(conn, where, params, applications=applications):
+        row_id = row[0]
+        for candidate_url in row[1:]:
+            if candidate_url and canonical_posting_key(row_id, candidate_url) == wanted:
+                return True
+    return False
+
+
+def _candidate_rows(
+    conn: sqlite3.Connection,
+    where: str,
+    params: tuple,
+    applications: bool = False,
+) -> list[tuple]:
+    app_join = "JOIN applications a USING(posting_id)" if applications else ""
+    resolution_join = ""
+    resolved_expr = "NULL AS resolved_url"
+    source_expr = "NULL AS source_url"
+    if _has_table(conn, "posting_url_resolutions"):
+        resolution_join = "LEFT JOIN posting_url_resolutions r USING(posting_id)"
+        resolved_expr = "r.resolved_url AS resolved_url"
+        source_expr = "r.source_url AS source_url"
+    query = (
+        f"SELECT p.posting_id,p.url,{resolved_expr},{source_expr} "
+        f"FROM postings p {app_join} {resolution_join} WHERE {where}"
+    )
+    return conn.execute(query, params).fetchall()
+
+
+def _dreamwork_applied_sibling_matches(conn: sqlite3.Connection, posting_id: str, url: str) -> bool:
+    required_columns = {"company", "title", "source"}
+    if not required_columns.issubset(_postings_columns(conn)):
+        return False
+    current = conn.execute(
+        "SELECT company,title,source,url FROM postings WHERE posting_id=?",
+        (posting_id,),
+    ).fetchone()
+    if current is None:
+        return False
+    if not _is_dreamwork_source(current[2], current[3]):
+        return False
+    if _is_dreamwork_url(url):
+        return False
+    company = _normalize_match_text(current[0])
+    title = _normalize_match_text(current[1])
+    if not company or not title:
+        return False
+    rows = conn.execute(
+        "SELECT p.posting_id,p.company,p.title,p.source,p.url "
+        "FROM applications a JOIN postings p USING(posting_id) "
+        "WHERE p.posting_id<>?",
+        (posting_id,),
+    ).fetchall()
+    for row in rows:
+        if not _is_dreamwork_source(row[3], row[4]):
+            continue
+        if _normalize_match_text(row[1]) == company and _normalize_match_text(row[2]) == title:
+            return True
+    return False
+
+
+def _is_dreamwork_source(source: str | None, url: str | None) -> bool:
+    return source == "dreamwork-2027" or _is_dreamwork_url(url or "")
+
+
+def _is_dreamwork_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower()
+    return (host == "dreamworkhq.com" or host.endswith(".dreamworkhq.com")) and "/job/" in parsed.path
+
+
+def _normalize_match_text(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
 def posting_already_applied(conn: sqlite3.Connection, posting_id: str, url: str) -> bool:
@@ -120,6 +212,19 @@ def _active_posting_claimed(conn: sqlite3.Connection, posting_id: str, url: str)
 
 def _has_postings_column(conn: sqlite3.Connection, name: str) -> bool:
     return any(row[1] == name for row in conn.execute("PRAGMA table_info(postings)").fetchall())
+
+
+def _postings_columns(conn: sqlite3.Connection) -> set[str]:
+    return {row[1] for row in conn.execute("PRAGMA table_info(postings)").fetchall()}
+
+
+def _has_table(conn: sqlite3.Connection | None, name: str) -> bool:
+    if conn is None:
+        return False
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (name,),
+    ).fetchone() is not None
 
 
 def claim_submission(
