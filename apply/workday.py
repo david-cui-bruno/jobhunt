@@ -1359,6 +1359,16 @@ def workday_closed_marker(body_text: str) -> str | None:
     return next((marker for marker in CLOSED_MARKERS if marker in text), None)
 
 
+ALREADY_APPLIED_REASON = (
+    "Workday reports already applied; needs verification before any further action"
+)
+
+
+def _workday_already_applied(body_text: str) -> bool:
+    text = re.sub(r"\s+", " ", body_text.lower())
+    return "you've already applied for this job" in text
+
+
 def _safe_https_workday_location(parsed: urllib.parse.ParseResult) -> tuple[str, ...] | None:
     if parsed.scheme != "https" or parsed.username or parsed.password:
         return None
@@ -1438,6 +1448,8 @@ def enter_application_form(
     closed_marker = workday_closed_marker(body)
     if closed_marker:
         return WorkdayEntryResult("closed", "posting closed", closed_marker)
+    if _workday_already_applied(body):
+        return WorkdayEntryResult("already_applied", ALREADY_APPLIED_REASON)
 
     try:
         cb = page.locator(
@@ -1506,8 +1518,17 @@ def enter_application_form(
         af.click(timeout=8000)
         page.wait_for_timeout(3000)
 
-    maybe_create_account(page, urllib.parse.urlparse(apply_url).netloc.split(".")[0])
-    maybe_sign_in(page, urllib.parse.urlparse(apply_url).netloc.split(".")[0])
+    try:
+        body = page.inner_text("body")[:5000]
+    except Exception:
+        body = ""
+    if _workday_already_applied(body):
+        return WorkdayEntryResult("already_applied", ALREADY_APPLIED_REASON)
+    if _verification_required(page) or _workday_auth_gate_visible(page):
+        detail = _workday_auth_error(page)
+        return WorkdayEntryResult(
+            "auth_required", detail or "workday account access required"
+        )
 
     if saved_draft_wizard_is_active(page):
         return WorkdayEntryResult("upload_ready", marker="saved_draft")
@@ -1557,6 +1578,17 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                 browser.close()
                 return result
             entry = enter_application_form(page, url)
+
+        if entry.state == "already_applied":
+            result.update(
+                outcome="manual",
+                retryable=False,
+                click_attempted=False,
+                submission_uncertain=False,
+                reason=entry.reason or ALREADY_APPLIED_REASON,
+            )
+            browser.close()
+            return result
 
         if entry.state == "closed":
             reason = entry.reason or "posting closed"

@@ -630,6 +630,25 @@ class RecoveryThenApplicationPage:
         return _EntryLocator(self, selector, 0, False)
 
 
+class PostApplyAuthGatePage(RecoveryThenApplicationPage):
+    @property
+    def body_text(self):
+        return "Software Engineer Apply Autofill with Resume Sign In Create Account"
+
+    def locator(self, selector):
+        if "adventureButton" in selector:
+            return _EntryLocator(self, selector, 1, True)
+        if "autofillWithResume" in selector:
+            return _EntryLocator(self, selector, 1, True)
+        if "file-upload-input-ref" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        if "SignInWithEmailButton" in selector:
+            return _EntryLocator(self, selector, 1, True)
+        if "createAccountSubmitButton" in selector or "signInSubmitButton" in selector:
+            return _EntryLocator(self, selector, 1, True)
+        return super().locator(selector)
+
+
 class MissingApplyPage:
     def __init__(
         self,
@@ -866,6 +885,61 @@ def test_workday_retryable_entry_maps_to_retryable_adapter_result(monkeypatch, t
     assert result["retryable"] is True
     assert result["click_attempted"] is False
     assert result["reason"] == "apply button not found"
+
+
+def test_post_apply_auth_gate_delegates_to_outer_reentry(monkeypatch):
+    page = PostApplyAuthGatePage()
+    create_account = mock.Mock()
+    sign_in = mock.Mock()
+    monkeypatch.setattr(workday, "maybe_create_account", create_account)
+    monkeypatch.setattr(workday, "maybe_sign_in", sign_in)
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result.state == "auth_required"
+    assert page.apply_clicks == 1
+    assert page.autofill_clicks == 1
+    create_account.assert_not_called()
+    sign_in.assert_not_called()
+
+
+def test_workday_already_applied_entry_maps_to_manual_safe_result(monkeypatch, tmp_path):
+    page = mock.Mock()
+    monkeypatch.setattr(workday, "sync_playwright", lambda: _FakePlaywrightContext(page))
+    monkeypatch.setattr(workday, "configure_page", lambda page: page)
+    monkeypatch.setattr(
+        workday,
+        "enter_application_form",
+        lambda page, apply_url: workday.WorkdayEntryResult(
+            "already_applied",
+            "Workday reports already applied; needs verification before any further action",
+        ),
+    )
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"pdf")
+
+    result = workday.apply_workday(APPLY_URL, resume, "slug", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert result["retryable"] is False
+    assert result["click_attempted"] is False
+    assert result["submission_uncertain"] is False
+    assert result["submitted"] is False
+    assert result["reason"] == (
+        "Workday reports already applied; needs verification before any further action"
+    )
+
+
+def test_already_applied_evidence_stops_before_apply_click():
+    page = MissingApplyPage("You've already applied for this job. Apply")
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult(
+        "already_applied",
+        "Workday reports already applied; needs verification before any further action",
+    )
+    assert page.apply_clicks == 0
 
 
 def test_successful_recovery_reenters_apply_and_autofill():
