@@ -107,11 +107,16 @@ TECHNICAL_MANUAL_PREFIXES = (
     "no adapter for other",
     "no adapter for icims",
 )
+TECHNICAL_CURRENT_URL_REASONS = frozenset({"no adapter for other", "no adapter for oraclecloud"})
 TERMINAL_OUTCOMES = frozenset({"stale", "submitted", "deduplicated"})
 TERMINAL_STATUSES = frozenset({"submitted", "skipped"})
 
 
-def retriage_candidates(conn: sqlite3.Connection, posting_ids: Iterable[str] | None = None) -> list[dict]:
+def retriage_candidates(
+    conn: sqlite3.Connection,
+    posting_ids: Iterable[str] | None = None,
+    ats: str | None = None,
+) -> list[dict]:
     from submission.identity import canonical_conflict_reason
     from submission.lanes import classify_url, preparation_destination
     from watcher.filter import title_ok
@@ -127,7 +132,8 @@ def retriage_candidates(conn: sqlite3.Connection, posting_ids: Iterable[str] | N
         source_url = row["source_url"] if isinstance(row, sqlite3.Row) else row[4]
         resolved_url = row["resolved_url"] if isinstance(row, sqlite3.Row) else row[5]
         reason = row["last_error"] if isinstance(row, sqlite3.Row) else row[6]
-        if not resolved_url or not _technical_reason(reason):
+        has_resolution = bool(row["has_resolution"] if isinstance(row, sqlite3.Row) else row[7])
+        if not resolved_url or not _technical_reason(reason, allow_current_url=not has_resolution):
             continue
         if source and not title_ok(title, source=source):
             continue
@@ -137,17 +143,25 @@ def retriage_candidates(conn: sqlite3.Connection, posting_ids: Iterable[str] | N
             continue
         if canonical_conflict_reason(conn, posting_id, resolved_url):
             continue
-        destination, destination_reason = preparation_destination(conn, resolved_url)
-        ats, lane = classify_url(resolved_url)
+        ats_name, lane = classify_url(resolved_url)
+        if ats is not None and ats_name != ats:
+            continue
         if lane.name == "unsupported":
             continue
+        if not has_resolution and not lane.automatic:
+            continue
+        if not has_resolution and reason not in TECHNICAL_CURRENT_URL_REASONS:
+            continue
+        if not has_resolution and ats_name != "oraclecloud":
+            continue
+        destination, destination_reason = preparation_destination(conn, resolved_url)
         candidates.append({
             "posting_id": posting_id,
             "company": company or "",
             "title": title or "",
             "source_url": source_url or "",
             "resolved_url": resolved_url,
-            "ats": ats,
+            "ats": ats_name,
             "destination": destination,
             "reason": reason,
             "last_error": reason,
@@ -157,7 +171,7 @@ def retriage_candidates(conn: sqlite3.Connection, posting_ids: Iterable[str] | N
     return candidates
 
 
-def apply_retriage(conn: sqlite3.Connection, posting_ids: list[str]) -> dict:
+def apply_retriage(conn: sqlite3.Connection, posting_ids: list[str], ats: str | None = None) -> dict:
     requested_ids = list(dict.fromkeys(posting_ids))
     requested = len(requested_ids)
     if not requested_ids:
@@ -166,7 +180,7 @@ def apply_retriage(conn: sqlite3.Connection, posting_ids: list[str]) -> dict:
         conn.execute("BEGIN IMMEDIATE")
         current = {
             candidate["posting_id"]: candidate
-            for candidate in retriage_candidates(conn, requested_ids)
+            for candidate in retriage_candidates(conn, requested_ids, ats=ats)
         }
         updated = 0
         for posting_id in requested_ids:
@@ -208,13 +222,14 @@ def _candidate_query(conn: sqlite3.Connection, posting_ids: list[str] | None = N
                COALESCE(p.company, '') AS company,
                COALESCE(p.title, '') AS title,
                {source_expr} AS source,
-               r.source_url,
-               r.resolved_url,
-               COALESCE(p.last_error, '') AS last_error
+               COALESCE(r.source_url, p.url, '') AS source_url,
+               COALESCE(NULLIF(r.resolved_url, ''), p.url, '') AS resolved_url,
+               COALESCE(p.last_error, '') AS last_error,
+               r.posting_id IS NOT NULL AS has_resolution
         FROM postings p
-        JOIN posting_url_resolutions r USING(posting_id)
+        LEFT JOIN posting_url_resolutions r USING(posting_id)
         WHERE p.status='manual'
-          AND COALESCE(r.resolved_url, '')<>''
+          AND COALESCE(COALESCE(NULLIF(r.resolved_url, ''), p.url), '')<>''
           AND COALESCE(p.outcome, '') NOT IN ('stale', 'submitted', 'deduplicated')
           AND COALESCE(p.status, '') NOT IN ('submitted', 'skipped')
           {id_clause}
@@ -226,7 +241,9 @@ def _has_postings_column(conn: sqlite3.Connection, name: str) -> bool:
     return any(row[1] == name for row in conn.execute("PRAGMA table_info(postings)").fetchall())
 
 
-def _technical_reason(reason: str) -> bool:
+def _technical_reason(reason: str, allow_current_url: bool = False) -> bool:
+    if allow_current_url:
+        return reason in TECHNICAL_CURRENT_URL_REASONS
     return any(reason.startswith(prefix) for prefix in TECHNICAL_MANUAL_PREFIXES)
 
 

@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--apply", action="store_true")
     parser.add_argument("--json", action="store_true", required=True)
     parser.add_argument("--limit", type=int, default=DEFAULT_APPLY_LIMIT, help="maximum rows to apply, default 25")
+    parser.add_argument("--ats", help="restrict candidates to one detected ATS")
     args = parser.parse_args(argv)
     if args.limit < 1:
         return emit_error("limit must be at least 1")
@@ -62,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
             return emit_error("database is missing postings schema")
         if not table_exists(conn, "posting_url_resolutions"):
             return emit_error("database is missing posting_url_resolutions schema")
-        candidates = retriage_candidates(conn)
+        candidates = retriage_candidates(conn, ats=args.ats)
         selected = candidates[:args.limit] if args.apply else candidates
         payload = {
             "mode": "apply" if args.apply else "preview",
@@ -70,8 +71,10 @@ def main(argv: list[str] | None = None) -> int:
             "limit": args.limit,
             "candidates": [safe_candidate(candidate) for candidate in selected],
         }
+        if args.ats:
+            payload["ats"] = args.ats
         if args.apply:
-            payload["result"] = apply_retriage(conn, [candidate["posting_id"] for candidate in selected])
+            payload["result"] = apply_retriage(conn, [candidate["posting_id"] for candidate in selected], ats=args.ats)
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
         return 0
     except RuntimeError as exc:

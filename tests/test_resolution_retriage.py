@@ -33,6 +33,7 @@ GREENHOUSE_URL = "https://job-boards.greenhouse.io/acme/jobs/1234567"
 GREENHOUSE_ALIAS = "https://boards.greenhouse.io/acme/jobs/1234567"
 DISTINCT_GREENHOUSE_URL = "https://job-boards.greenhouse.io/acme/jobs/7654321"
 SOURCE_URL = "https://www.dreamworkhq.com/job/11111111-1111-1111-1111-111111111111"
+ORACLE_JOB_URL = "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992"
 
 
 def conn() -> sqlite3.Connection:
@@ -465,6 +466,23 @@ def retriage_conn(tmp_path: Path | None = None) -> sqlite3.Connection:
     return db
 
 
+def seed_retriage_current_url_row(
+    db: sqlite3.Connection,
+    posting_id: str,
+    url: str,
+    *,
+    last_error: str = "no adapter for other",
+    status: str = "manual",
+    outcome: str | None = "manual",
+    title: str | None = None,
+) -> None:
+    db.execute(
+        "INSERT INTO postings "
+        "(posting_id, company, title, url, status, outcome, last_error, last_attempt_at, first_seen) "
+        "VALUES (?, 'Acme', ?, ?, ?, ?, ?, 100, 50)",
+        (posting_id, title or f"Role {posting_id}", url, status, outcome, last_error),
+    )
+
 def seed_retriage_row(
     db: sqlite3.Connection,
     posting_id: str,
@@ -603,6 +621,100 @@ def test_apply_retriage_updates_only_selected_safe_rows_and_preserves_manual_sma
     )
     assert {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded} == before
 
+
+def test_oracle_current_url_technical_debt_retriage_without_resolution_mapping() -> None:
+    from submission.resolutions import apply_retriage, retriage_candidates
+
+    db = retriage_conn()
+    seed_retriage_current_url_row(db, "oracle", ORACLE_JOB_URL)
+    db.commit()
+
+    candidates = retriage_candidates(db, ats="oraclecloud")
+    result = apply_retriage(db, ["oracle"], ats="oraclecloud")
+
+    assert [candidate["posting_id"] for candidate in candidates] == ["oracle"]
+    assert candidates[0]["ats"] == "oraclecloud"
+    assert candidates[0]["resolved_url"] == ORACLE_JOB_URL
+    assert result == {"requested": 1, "updated": 1, "skipped": 0}
+    assert posting_snapshot(db, "oracle")[4:7] == ("queued", None, "")
+
+
+def test_oracle_current_url_retriage_preserves_excluded_rows_without_resolution_mapping() -> None:
+    from submission.resolutions import apply_retriage, retriage_candidates
+
+    db = retriage_conn()
+    seed_retriage_current_url_row(db, "eligible", ORACLE_JOB_URL)
+    seed_retriage_current_url_row(db, "oraclecloud-reason", ORACLE_JOB_URL.replace("26011992", "26011993"), last_error="no adapter for oraclecloud")
+    seed_retriage_current_url_row(db, "click", ORACLE_JOB_URL.replace("26011992", "26011994"), last_error="click uncertainty after submit")
+    seed_retriage_current_url_row(db, "stale", ORACLE_JOB_URL.replace("26011992", "26011995"), outcome="stale")
+    seed_retriage_current_url_row(db, "finished", ORACLE_JOB_URL.replace("26011992", "26011996"))
+    db.execute(
+        "INSERT INTO submission_attempts "
+        "(attempt_id, posting_id, ats, lane, worker_id, browser_mode, policy_revision, started_at, finished_at) "
+        "VALUES ('attempt-oracle', 'finished', 'oraclecloud', 'oracle', 'worker', 'browser', 'v1', 1, 2)"
+    )
+    seed_retriage_current_url_row(db, "alias", ORACLE_JOB_URL.replace("26011992", "26011997"))
+    seed_applied(db, "done", ORACLE_JOB_URL.replace("26011992", "26011997"))
+    seed_retriage_current_url_row(db, "submitted", ORACLE_JOB_URL.replace("26011992", "26011998"), status="submitted", outcome="submitted")
+    excluded = ["click", "stale", "finished", "alias", "submitted", "done"]
+    before = {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded}
+    db.commit()
+
+    candidates = retriage_candidates(db, ats="oraclecloud")
+    result = apply_retriage(db, ["eligible", "oraclecloud-reason", *excluded], ats="oraclecloud")
+
+    assert [candidate["posting_id"] for candidate in candidates] == ["eligible", "oraclecloud-reason"]
+    assert result == {"requested": 8, "updated": 2, "skipped": 6}
+    assert posting_snapshot(db, "eligible")[4:7] == ("queued", None, "")
+    assert posting_snapshot(db, "oraclecloud-reason")[4:7] == ("queued", None, "")
+    assert {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded} == before
+
+
+def test_retriage_cli_ats_filter_limits_safe_json_to_oracle(tmp_path: Path) -> None:
+    db = retriage_conn(tmp_path)
+    seed_retriage_current_url_row(db, "oracle", ORACLE_JOB_URL)
+    seed_retriage_row(db, "greenhouse", GREENHOUSE_URL)
+    db.commit()
+    db.close()
+    db_path = tmp_path / "tracker.db"
+    before = db_hash(db_path)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/retriage_resolved_postings.py",
+            "--db",
+            str(db_path),
+            "--preview",
+            "--ats",
+            "oraclecloud",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert db_hash(db_path) == before
+    payload = json.loads(completed.stdout)
+    assert payload == {
+        "mode": "preview",
+        "count": 1,
+        "limit": 25,
+        "ats": "oraclecloud",
+        "candidates": [
+            {
+                "posting_id": "oracle",
+                "company": "Acme",
+                "title": "Role oracle",
+                "source_url": ORACLE_JOB_URL,
+                "resolved_url": ORACLE_JOB_URL,
+                "ats": "oraclecloud",
+                "destination": "ready",
+                "reason": "no adapter for other",
+            }
+        ],
+    }
 
 def db_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
