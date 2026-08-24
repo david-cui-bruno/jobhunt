@@ -1346,6 +1346,7 @@ class WorkdayEntryResult:
 
 CLOSED_MARKERS = (
     "job is no longer available",
+    "posting is no longer available",
     "position is no longer available",
     "no longer accepting applications",
     "job posting has been removed",
@@ -1358,18 +1359,47 @@ def workday_closed_marker(body_text: str) -> str | None:
     return next((marker for marker in CLOSED_MARKERS if marker in text), None)
 
 
+def _workday_posting_identity(path: str) -> str | None:
+    parts = [urllib.parse.unquote(part) for part in path.split("/") if part]
+    for index, part in enumerate(parts[:-1]):
+        if part == "job" and parts[index + 1]:
+            return parts[index + 1]
+    return parts[-1] if parts else None
+
+
+def _same_workday_posting_url(current_url: str, fallback_url: str) -> bool:
+    current = urllib.parse.urlparse(current_url)
+    fallback = urllib.parse.urlparse(fallback_url)
+    if fallback.scheme not in {"http", "https"} or current.netloc != fallback.netloc:
+        return False
+    return (
+        _workday_posting_identity(current.path)
+        == _workday_posting_identity(fallback.path)
+    )
+
+
 def _explicit_application_href(page) -> str | None:
-    locator = page.locator(
-        "a[href]:has-text('Apply'), "
-        "a[href]:has-text('Start Your Application'), "
-        "a[href][data-automation-id='adventureButton']"
-    ).first
     try:
-        if locator.count() and locator.is_visible():
-            return locator.get_attribute("href")
+        return page.evaluate(
+            r"""
+            () => {
+              const exactLabels = new Set(['Apply', 'Start Your Application']);
+              const links = [...document.querySelectorAll('a[href]')];
+              const match = links.find((link) => {
+                const style = window.getComputedStyle(link);
+                const visible = style.visibility !== 'hidden'
+                  && style.display !== 'none'
+                  && link.getClientRects().length > 0;
+                const text = (link.innerText || link.textContent || '').replace(/\s+/g, ' ').trim();
+                return visible && (link.getAttribute('data-automation-id') === 'adventureButton'
+                  || exactLabels.has(text));
+              });
+              return match ? match.getAttribute('href') : null;
+            }
+            """
+        )
     except Exception:
         return None
-    return None
 
 
 def enter_application_form(
@@ -1419,6 +1449,8 @@ def enter_application_form(
             href = _explicit_application_href(page)
             if href:
                 fallback_url = urllib.parse.urljoin(page.url or apply_url, href)
+                if not _same_workday_posting_url(apply_url, fallback_url):
+                    return WorkdayEntryResult("retryable", "apply button not found")
                 fallback = enter_application_form(
                     page,
                     fallback_url,

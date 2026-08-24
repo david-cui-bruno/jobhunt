@@ -631,9 +631,16 @@ class RecoveryThenApplicationPage:
 
 
 class MissingApplyPage:
-    def __init__(self, body_text: str, explicit_href: str | None = None):
+    def __init__(
+        self,
+        body_text: str,
+        explicit_href: str | None = None,
+        *,
+        broad_apply_href: str | None = None,
+    ):
         self._body_text = body_text
         self.explicit_href = explicit_href
+        self.broad_apply_href = broad_apply_href
         self.goto_calls = []
         self.generation = 0
         self.apply_clicks = 0
@@ -665,7 +672,7 @@ class MissingApplyPage:
         if selector == "body":
             return _EntryLocator(self, selector, 1, True)
         if "href" in selector and "Apply" in selector:
-            return _HrefLocator(self, selector, self.explicit_href)
+            return _HrefLocator(self, selector, self.explicit_href or self.broad_apply_href)
         if "adventureButton" in selector:
             return _EntryLocator(self, selector, 0, False)
         if "legalNoticeAcceptButton" in selector or "onetrust" in selector:
@@ -685,6 +692,11 @@ class MissingApplyPage:
         if "pageFooterNextButton" in selector or "formField-" in selector:
             return _EntryLocator(self, selector, 0, False)
         return _EntryLocator(self, selector, 0, False)
+
+    def evaluate(self, script):
+        if self.explicit_href:
+            return self.explicit_href
+        return None
 
 
 class _HrefLocator(_EntryLocator):
@@ -707,6 +719,13 @@ def test_missing_apply_with_closed_marker_is_stale():
     assert result == workday.WorkdayEntryResult("closed", "posting closed", "job is no longer available")
 
 
+def test_missing_apply_with_real_unavailable_posting_phrase_is_stale():
+    result = entry_result_for_body("This job posting is no longer available")
+    assert result == workday.WorkdayEntryResult(
+        "closed", "posting closed", "posting is no longer available"
+    )
+
+
 def test_missing_apply_without_closed_marker_is_retryable():
     result = entry_result_for_body("Welcome to careers")
     assert result.state == "retryable"
@@ -725,6 +744,42 @@ def test_missing_apply_uses_one_explicit_application_href_without_looping():
         APPLY_URL,
         "https://example.wd1.myworkdayjobs.com/jobs/job/example/apply",
     ]
+
+
+def test_missing_apply_ignores_apply_filters_text_fallback_and_remains_retryable():
+    page = MissingApplyPage(
+        "Welcome to careers Apply filters",
+        broad_apply_href="/jobs/job/example/apply?filter=true",
+    )
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.goto_calls == [APPLY_URL]
+
+
+def test_missing_apply_rejects_cross_host_application_href_and_remains_retryable():
+    page = MissingApplyPage(
+        "Welcome to careers Start Your Application",
+        explicit_href="https://other.wd1.myworkdayjobs.com/jobs/job/example/apply",
+    )
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.goto_calls == [APPLY_URL]
+
+
+def test_missing_apply_rejects_cross_posting_application_href_and_remains_retryable():
+    page = MissingApplyPage(
+        "Welcome to careers Start Your Application",
+        explicit_href="/jobs/job/different/apply",
+    )
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.goto_calls == [APPLY_URL]
 
 
 def test_workday_closed_entry_maps_to_stale_adapter_result(monkeypatch, tmp_path):
