@@ -488,27 +488,65 @@ def compile_pdf(tex: str, out_pdf: Path) -> bool:
 LAST_PAGE_COUNT = 0
 
 
+def _fill_from_ascii_ppm(data: bytes) -> float | None:
+    """Measure the last ink row in the P3 pixmap emitted by macOS sips."""
+    clean = b"\n".join(line.split(b"#", 1)[0] for line in data.splitlines())
+    tokens = clean.split()
+    if len(tokens) < 4 or tokens[0] != b"P3":
+        return None
+    width, height, max_value = (int(value) for value in tokens[1:4])
+    values = [int(value) for value in tokens[4:]]
+    if width < 1 or height < 1 or max_value < 1 or len(values) != width * height * 3:
+        return None
+    row_width = width * 3
+    last_ink = 0
+    for row in range(height):
+        pixels = values[row * row_width:(row + 1) * row_width]
+        if any(value < max_value / 2 for value in pixels):
+            last_ink = row
+    return last_ink / height
+
+
 def measure_fill(pdf: Path) -> float | None:
     """Fraction of the page height actually used (0..1): renders page 1 and
-    finds the lowest row with ink. Pure stdlib: pdftoppm -> PGM bytes."""
+    finds the lowest row with ink. Uses pdftoppm when installed, with the
+    built-in macOS sips command as a dependency-free fallback."""
     try:
         with tempfile.TemporaryDirectory() as td:
-            subprocess.run(["pdftoppm", "-gray", "-r", "50", "-f", "1", "-l", "1",
-                            str(pdf), f"{td}/pg"], capture_output=True, timeout=60)
-            pgms = sorted(Path(td).glob("pg*.pgm"))
-            if not pgms:
+            pdftoppm = shutil.which("pdftoppm")
+            if pdftoppm:
+                result = subprocess.run(
+                    [pdftoppm, "-gray", "-r", "50", "-f", "1", "-l", "1",
+                     str(pdf), f"{td}/pg"],
+                    capture_output=True,
+                    timeout=60,
+                )
+                pgms = sorted(Path(td).glob("pg*.pgm"))
+                if result.returncode == 0 and pgms:
+                    data = pgms[0].read_bytes()
+                    # P5 header: magic, width height, maxval, then raw bytes
+                    parts = data.split(b"\n", 3)
+                    w, h = (int(x) for x in parts[1].split())
+                    raw = parts[3][-(w * h):]
+                    last_ink = 0
+                    for row in range(h):
+                        seg = raw[row * w:(row + 1) * w]
+                        if any(b < 128 for b in seg):
+                            last_ink = row
+                    return last_ink / h
+
+            sips = shutil.which("sips")
+            if not sips:
                 return None
-            data = pgms[0].read_bytes()
-            # P5 header: magic, width height, maxval, then raw bytes
-            parts = data.split(b"\n", 3)
-            w, h = (int(x) for x in parts[1].split())
-            raw = parts[3][-(w * h):]
-            last_ink = 0
-            for row in range(h):
-                seg = raw[row * w:(row + 1) * w]
-                if any(b < 128 for b in seg):
-                    last_ink = row
-            return last_ink / h
+            pixmap = Path(td) / "page.pbm"
+            result = subprocess.run(
+                [sips, "-s", "format", "pbm", str(pdf), "--out", str(pixmap)],
+                capture_output=True,
+                timeout=60,
+            )
+            if result.returncode != 0 or not pixmap.is_file():
+                return None
+            return _fill_from_ascii_ppm(pixmap.read_bytes())
     except Exception:
         return None
 

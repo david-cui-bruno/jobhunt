@@ -36,6 +36,18 @@ class ResumeQualityTests(unittest.TestCase):
         ):
             self.assertIsNone(tailor.measure_fill(Path(tmp) / "resume.pdf"))
 
+    def test_ascii_ppm_fill_measurement_ignores_white_background(self) -> None:
+        ppm = b"""P3
+# sips RGB output
+2 4
+255
+255 255 255 255 255 255
+0 0 0 255 255 255
+255 255 255 0 0 0
+255 255 255 255 255 255
+"""
+        self.assertEqual(tailor._fill_from_ascii_ppm(ppm), 0.5)
+
     def test_grounded_resume_keeps_identity_and_project_facts_immutable(self) -> None:
         result = tailor.build_grounded_resume(
             "AI Engineer Intern - Innovation Team",
