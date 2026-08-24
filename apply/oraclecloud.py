@@ -1,0 +1,331 @@
+"""Oracle Recruiting Cloud pre-submit application adapter.
+
+Task 3 intentionally stops at the submit boundary. It may click the visible
+Apply entry point, fill the anonymous pre-submit form, and capture a local
+filled-form screenshot, but it never clicks Submit.
+"""
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+import yaml
+from playwright.sync_api import sync_playwright
+
+try:
+    from artifacts import safe_screenshot
+    import qa
+    import stealth
+    from timeouts import configure_page
+except ModuleNotFoundError:  # package import from tests
+    from apply.artifacts import safe_screenshot
+    from apply import qa, stealth
+    from apply.timeouts import configure_page
+
+ROOT = Path(__file__).resolve().parent.parent
+PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
+SHOTS = ROOT / "out" / "screenshots"
+
+APPLY_SELECTORS = (
+    "button:has-text('Apply Now')",
+    "a:has-text('Apply Now')",
+    "button:has-text('Apply')",
+    "[data-bind*='apply'][role='button']",
+)
+
+CLOSED_PATTERNS = (
+    "job is no longer available",
+    "posting is no longer available",
+    "job posting is no longer available",
+    "this job is no longer accepting applications",
+)
+
+ACCOUNT_PATTERNS = (
+    "sign in to apply",
+    "signin to apply",
+    "create an account to continue",
+    "must create an account",
+    "account required",
+    "login to apply",
+    "log in to apply",
+)
+
+CAPTCHA_PATTERNS = (
+    "recaptcha",
+    "reCAPTCHA".lower(),
+    "hcaptcha",
+    "datadome",
+    "verify you are human",
+    "captcha-delivery.com",
+)
+
+REQUIRED_EMPTY_JS = r"""
+() => {
+  const labelFor = (el) => {
+    let label = el.labels?.[0]?.innerText || el.getAttribute('aria-label') || '';
+    if (!label) {
+      const ref = el.getAttribute('aria-labelledby');
+      if (ref) label = ref.split(/\s+/).map(id => document.getElementById(id)?.innerText || '').join(' ');
+    }
+    if (!label) {
+      const wrap = el.closest('fieldset, [role=group], div[class*=question], div[class*=field], label');
+      label = wrap?.querySelector('legend, label, [class*=label], [class*=question]')?.innerText || '';
+      if (!label && wrap) label = (wrap.innerText || '').split('\n')[0] || '';
+    }
+    return (label || el.name || el.id || 'unknown').replace(/\s+/g, ' ').trim().slice(0, 80);
+  };
+  const bad = [];
+  document.querySelectorAll('[aria-required="true"], [required]').forEach(el => {
+    if (el.getAttribute('aria-hidden') === 'true' || el.type === 'hidden' || el.type === 'file') return;
+    if (el.offsetParent === null) return;
+    if (el.type === 'checkbox' || el.type === 'radio') {
+      const group = [...document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)];
+      if (group.some(x => x.checked)) return;
+    } else if (String(el.value || '').trim()) {
+      return;
+    }
+    bad.push(labelFor(el));
+  });
+  return [...new Set(bad)].slice(0, 6);
+}
+"""
+
+
+def _manual(reason: str, unanswered: list[str] | None = None, *, retryable: bool = False) -> dict:
+    return {
+        "ok": True,
+        "submitted": False,
+        "outcome": "manual",
+        "reason": reason,
+        "unanswered": unanswered or [],
+        "retryable": retryable,
+        "click_attempted": False,
+        "submission_uncertain": False,
+    }
+
+
+def _record_filled_screenshot(result: dict, page, slug: str) -> None:
+    shot = safe_screenshot(page, slug, "filled", root=SHOTS)
+    if shot:
+        result.setdefault("artifact_refs", {})["filled_form_screenshot"] = shot
+
+
+def _body_text(page) -> str:
+    try:
+        return page.inner_text("body")
+    except Exception:
+        return ""
+
+
+def _closed_reason(body: str) -> str | None:
+    lower = body.lower()
+    for marker in CLOSED_PATTERNS:
+        if marker in lower:
+            return marker
+    return None
+
+
+def _has_account_gate(body: str) -> bool:
+    lower = body.lower()
+    return any(marker in lower for marker in ACCOUNT_PATTERNS)
+
+
+def _has_captcha_gate(page, body: str) -> bool:
+    lower = body.lower()
+    if any(marker in lower for marker in CAPTCHA_PATTERNS):
+        return True
+    selectors = (
+        "iframe[src*='recaptcha' i]",
+        "iframe[title*='recaptcha' i]",
+        "iframe[src*='hcaptcha' i]",
+        "iframe[title*='hcaptcha' i]",
+        "iframe[src*='captcha-delivery.com' i]",
+        "iframe[title*='DataDome' i]",
+    )
+    for selector in selectors:
+        try:
+            loc = page.locator(selector)
+            if loc.count() and loc.first.is_visible():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _find_visible_apply(page):
+    for selector in APPLY_SELECTORS:
+        try:
+            loc = page.locator(selector).first
+            if loc.count() and loc.is_visible():
+                return loc
+        except Exception:
+            continue
+    return None
+
+
+def _find_resume_input(page):
+    best = None
+    try:
+        files = page.locator("input[type=file]")
+        for index in range(files.count()):
+            cand = files.nth(index)
+            accept = (cand.get_attribute("accept") or "").lower()
+            near = ""
+            try:
+                near = cand.evaluate(
+                    "el => (el.labels?.[0]?.innerText || el.closest('section, div, form')?.innerText || '').slice(0, 300)"
+                ) or ""
+            except Exception:
+                near = ""
+            context = f"{accept} {near}".lower()
+            if re.search(r"\b(resume|cv|curriculum vitae)\b", context) or "pdf" in accept or "msword" in accept or "document" in accept:
+                best = cand
+                break
+    except Exception:
+        best = None
+    if best is not None:
+        return best
+    for label in ("Resume", "CV", "Curriculum Vitae"):
+        try:
+            cand = page.get_by_label(label, exact=False).first
+            if cand.count() and cand.is_visible():
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+def _fill_if_visible(page, labels: tuple[str, ...], value: str) -> None:
+    if value is None:
+        return
+    for label in labels:
+        try:
+            loc = page.get_by_label(label, exact=False).first
+            if loc.count() and loc.is_visible():
+                try:
+                    loc.fill("")
+                except Exception:
+                    pass
+                loc.fill(str(value))
+                return
+        except Exception:
+            continue
+
+
+def _fill_basics(page) -> None:
+    p = PROFILE
+    name = p.get("name") or {}
+    links = p.get("links") or {}
+    _fill_if_visible(page, ("First name", "First Name", "Given name"), name.get("first", ""))
+    _fill_if_visible(page, ("Last name", "Last Name", "Family name", "Surname"), name.get("last", ""))
+    _fill_if_visible(page, ("Email", "Email address"), p.get("email", ""))
+    _fill_if_visible(page, ("Phone", "Phone number", "Mobile"), re.sub(r"[^0-9+]", "", str(p.get("phone", ""))))
+    _fill_if_visible(page, ("LinkedIn", "LinkedIn profile"), links.get("linkedin", ""))
+    _fill_if_visible(page, ("GitHub", "Portfolio", "Website"), links.get("github") or links.get("website") or "")
+
+
+def _run_shared_qa_passes(page, slug: str, url: str) -> tuple[list[str], list[str]]:
+    filled: list[str] = []
+    failed: list[str] = []
+    answers = None
+    for qa_pass in range(3):
+        controls = page.evaluate(qa.EXTRACT_JS)
+        if answers is None:
+            answers = qa.get_answers(controls, context={"slug": slug, "url": url})
+        live = {c.get("id") or c.get("name") for c in controls if not c.get("value") and not c.get("chosen")}
+        todo = answers if qa_pass == 0 else [a for a in answers if a.get("id_or_name") in live]
+        newly_filled, failed = qa.fill_answers(page, controls, todo)
+        filled.extend(newly_filled)
+        try:
+            page.wait_for_timeout(600)
+        except Exception:
+            pass
+    return sorted(set(filled)), failed
+
+
+def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
+    result = {"ok": False, "submitted": False, "reason": "", "unanswered": []}
+    with sync_playwright() as pw:
+        browser, ctx = stealth.launch_stealth_context(pw)
+        page = configure_page(ctx.new_page())
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            try:
+                page.wait_for_timeout(1500)
+            except Exception:
+                pass
+
+            body = _body_text(page)
+            closed = _closed_reason(body)
+            if closed:
+                result.update(ok=True, outcome="stale", reason=closed, unanswered=[])
+                return result
+            if _has_account_gate(body):
+                return _manual("Oracle account required for application", ["Oracle account required"])
+            if _has_captcha_gate(page, body):
+                return _manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"])
+
+            apply_button = _find_visible_apply(page)
+            if apply_button is None:
+                return _manual("unsupported Oracle tenant variant: apply control not found")
+            apply_button.scroll_into_view_if_needed()
+            apply_button.click(timeout=5000)
+            try:
+                page.wait_for_timeout(2500)
+            except Exception:
+                pass
+
+            body = _body_text(page)
+            if _has_account_gate(body):
+                return _manual("Oracle account required for application", ["Oracle account required"])
+            if _has_captcha_gate(page, body):
+                return _manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"])
+
+            resume_input = _find_resume_input(page)
+            if resume_input is None:
+                result.update(_manual("resume upload not found", ["Resume"]))
+                _record_filled_screenshot(result, page, slug)
+                return result
+            resume_input.set_input_files(str(resume_pdf))
+            try:
+                page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
+            _fill_basics(page)
+            qa_filled, qa_failed = _run_shared_qa_passes(page, slug, url)
+            result["qa_filled"] = qa_filled
+            result["qa_failed"] = qa_failed
+
+            body = _body_text(page)
+            if _has_account_gate(body):
+                result.update(_manual("Oracle account required for application", ["Oracle account required"]))
+                _record_filled_screenshot(result, page, slug)
+                return result
+            if _has_captcha_gate(page, body):
+                result.update(_manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"]))
+                _record_filled_screenshot(result, page, slug)
+                return result
+
+            required_empty = page.evaluate(REQUIRED_EMPTY_JS)
+            result["unanswered"] = required_empty
+            _record_filled_screenshot(result, page, slug)
+            if required_empty:
+                result.update(_manual(f"needs answers: {required_empty[:6]}", required_empty[:6]))
+                _record_filled_screenshot(result, page, slug)
+                return result
+
+            # Task 3 stops here for both dry-run and non-dry-run callers. The submit
+            # click and confirmation handling belong to Task 4.
+            result.update(ok=True, submitted=False, reason="dry run - did not submit", unanswered=[])
+            return result
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+
+if __name__ == "__main__":
+    print(apply_oraclecloud(sys.argv[1], Path(sys.argv[2]), "oracle_test", dry_run=True))
