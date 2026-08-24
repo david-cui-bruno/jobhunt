@@ -23,6 +23,8 @@ def parse_oracle_posting_url(url: str) -> OraclePostingUrl | None:
     parsed = urllib.parse.urlparse(url)
     host = parsed.netloc.lower()
     match = _ORACLE_PATH_RE.fullmatch(parsed.path)
+    if parsed.username is not None or parsed.password is not None:
+        return None
     if parsed.scheme != "https" or not host.endswith(".oraclecloud.com") or not match:
         return None
     return OraclePostingUrl(host, match["locale"], match["site"], match["job_id"])

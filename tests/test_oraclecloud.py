@@ -9,7 +9,7 @@ import apply.oraclecloud as oraclecloud
 from apply.oraclecloud import apply_oraclecloud
 from apply.oraclecloud_url import parse_oracle_posting_url
 from submission.lanes import classify_url
-from submission.identity import canonical_posting_key
+from submission.identity import canonical_posting_key, _canonical_identity_material
 
 
 ORACLE_JOB_URL = "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992"
@@ -39,6 +39,34 @@ def test_oracle_parser_rejects_unverified_and_non_candidate_experience_urls():
     assert parse_oracle_posting_url("https://www.oracle.com/careers") is None
     assert parse_oracle_posting_url("https://example.oraclecloud.com/not-a-job") is None
     assert parse_oracle_posting_url("https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/notnumeric") is None
+    assert parse_oracle_posting_url("https://egug.fa.us2.oraclecloud.com:443/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992") is None
+
+
+def test_oracle_parser_rejects_username_or_password_userinfo():
+    userinfo_urls = [
+        "https://candidate@egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992",
+        "https://:secret@egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992",
+        "https://candidate:secret@egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992",
+    ]
+    for url in userinfo_urls:
+        assert parse_oracle_posting_url(url) is None
+
+
+def test_oracle_userinfo_cannot_split_canonical_identity():
+    userinfo_url = "https://candidate@egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992"
+    assert not _canonical_identity_material("userinfo", userinfo_url).startswith("oraclecloud:")
+
+    clean_key = canonical_posting_key("clean", ORACLE_JOB_URL)
+    userinfo_key = canonical_posting_key("userinfo", userinfo_url)
+    assert userinfo_key != clean_key
+
+
+def test_oracle_userinfo_cannot_route_to_oracle_adapter():
+    ats, lane = classify_url(
+        "https://candidate:secret@egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992"
+    )
+    assert ats == "other"
+    assert lane.name == "unsupported"
 
 
 def test_oracle_detection_is_narrow():
