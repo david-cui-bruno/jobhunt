@@ -113,6 +113,49 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   or unsafe rows remain manual. Live Dreamwork backup, preview, apply,
   resident-pipeline observation, and Sheet readback remain pending broad review
   and coordinator execution.
+- **Workday recoverable-row requeue** is preview-first and limited to the two
+  repaired Workday entry failure prefixes: `resume upload zone never appeared`
+  and `apply button not found (posting closed?)`. Preview is the default and
+  opens the database read-only, returning only safe fields: posting ID, company,
+  title, tenant, reason, attempt count, and URL. It excludes application ledger
+  rows, any finished click-attempted or confirmed attempt, stale or submitted
+  rows, active or applied canonical aliases, non-Workday URLs, and unrelated
+  failures. It supports legacy databases without `submission_attempts`, while
+  retaining all attempt exclusions when the ledger exists:
+
+  ```bash
+  python3 scripts/requeue_workday_recoverable.py --db out/tracker.db --preview --json
+  ```
+
+  Live steps remain pending coordinator approval. Before any live apply, create a
+  SQLite backup with mode `0600`, verify integrity on both files, and inspect the
+  preview JSON:
+
+  ```bash
+  backup="${TMPDIR:-/tmp}/tracker-workday-requeue-$(date +%Y%m%d%H%M%S).db"
+  sqlite3 out/tracker.db ".backup '$backup'"
+  chmod 0600 "$backup"
+  sqlite3 out/tracker.db 'PRAGMA integrity_check;'
+  sqlite3 "$backup" 'PRAGMA integrity_check;'
+  python3 scripts/requeue_workday_recoverable.py --db out/tracker.db --preview --json
+  ```
+
+  Apply uses `BEGIN IMMEDIATE`, recomputes eligibility inside the transaction,
+  and compare-and-sets only requested rows that are still `failed` or `manual`.
+  It preserves `attempt_count` and all ledgers, clears `outcome`, and writes
+  `last_error='requeued after Workday entry repair'`. Use explicit posting IDs
+  or a small bounded canary, then verify with a fresh preview and ledger checks:
+
+  ```bash
+  python3 scripts/requeue_workday_recoverable.py --db out/tracker.db --apply --json --posting-id POSTING_ID
+  python3 scripts/requeue_workday_recoverable.py --db out/tracker.db --apply --json --limit 5
+  python3 scripts/requeue_workday_recoverable.py --db out/tracker.db --preview --json
+  ```
+
+  Rollback is file-level only before the resident dispatcher consumes requeued
+  rows. Stop the dispatcher, copy the reviewed backup over `out/tracker.db`, run
+  `PRAGMA integrity_check`, and restart only after inspection. Do not run live
+  apply without coordinator approval.
 - **Ashby canary** is disabled by default and controlled only by SQLite state in
   `out/tracker.db`, not by files such as legacy cooldown markers. Operators use
   `python3 manage_lanes.py status ashby`, `preview ashby`, `enable-canary ashby`,
