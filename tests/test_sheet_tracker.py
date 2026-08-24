@@ -76,6 +76,54 @@ def _manual_actions_db(tmp_path):
                 "",
             ),
             (
+                "ashby-spam",
+                "Spam Co",
+                "ML Engineer",
+                "ashby",
+                "https://spam.example/job",
+                "manual",
+                "Ashby rejected the submission as possible spam: use normal Chrome",
+                135,
+                197,
+                "",
+            ),
+            (
+                "ashby-disabled",
+                "Disabled Ashby Co",
+                "Backend",
+                "ashby",
+                "https://disabled.example/job",
+                "manual",
+                "ashby automation disabled after spam rejection; finish in trusted browser",
+                136,
+                198,
+                "",
+            ),
+            (
+                "needs-answers",
+                "Answers Co",
+                "Product Engineer",
+                "greenhouse",
+                "https://answers.example/job",
+                "manual",
+                "needs answers: sponsorship and start date",
+                137,
+                199,
+                "",
+            ),
+            (
+                "lever-location",
+                "Location Co",
+                "SWE",
+                "lever",
+                "https://location.example/job",
+                "manual",
+                "needs manual Lever location selection behind hCaptcha",
+                138,
+                200,
+                "",
+            ),
+            (
                 "submitted",
                 "Submitted Co",
                 "SWE",
@@ -156,9 +204,17 @@ def test_collect_manual_actions_exposes_safe_fields_only(tmp_path, monkeypatch):
         "Prepared resume", "Prepared screenshot", "Latest reason",
     ]
     body = rows[1:]
-    assert [row[0] for row in body] == ["Uncertain Co", "Captcha Co"]
+    assert [row[0] for row in body] == [
+        "Location Co", "Answers Co", "Disabled Ashby Co", "Spam Co",
+        "Uncertain Co", "Captcha Co",
+    ]
     assert all("Debt Co" not in row and "Submitted Co" not in row for row in body)
     assert any(row[7] is True and row[8] is True for row in body)
+    by_company = {row[0]: row for row in body}
+    assert by_company["Location Co"][3] == "Finish manually"
+    assert by_company["Answers Co"][3] == "Answer questions"
+    assert by_company["Disabled Ashby Co"][3] == "Finish manually"
+    assert by_company["Spam Co"][3] == "Finish manually"
     rendered = json.dumps(rows)
     assert "/Users/" not in rendered
     assert "raw answer" not in rendered

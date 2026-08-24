@@ -27,6 +27,7 @@ import urllib.request
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from digest import AGENT_DEBT_PREFIXES, MANUAL_FINISH_PREFIXES
 from notify import mailer
 
 ROOT = Path(__file__).resolve().parent
@@ -132,14 +133,21 @@ def _safe_reason(reason: str) -> str:
 
 
 def _manual_action(reason: str, click_attempted: int | None, confirmed: int | None) -> str | None:
-    lower = (reason or "").lower()
+    text = reason or ""
+    lower = text.lower()
     if click_attempted and not confirmed:
         return "Verify before retrying"
+    if any(text.startswith(prefix) for prefix in AGENT_DEBT_PREFIXES):
+        return None
+    if any(text.startswith(prefix) for prefix in MANUAL_FINISH_PREFIXES):
+        return "Finish manually"
+    if lower.startswith("needs answers") or lower.startswith("needs answer"):
+        return "Answer questions"
     if "captcha" in lower or "datadome" in lower:
         return "Complete CAPTCHA"
     if "manual" in lower and ("completion" in lower or "field" in lower or "location" in lower or "trusted-browser" in lower):
         return "Finish manually"
-    return None
+    return "Answer questions"
 
 
 def _collect_manual_actions(conn: sqlite3.Connection) -> list[list]:
