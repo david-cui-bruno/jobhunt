@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import sys
 import time
+from email.utils import getaddresses
 from pathlib import Path
 
 import yaml
@@ -40,9 +41,8 @@ APPLY_SELECTORS = (
 APPLY_WAIT_TIMEOUT_MS = 10000
 APPLY_POLL_INTERVAL_MS = 500
 ORACLE_IDENTITY_SUBJECT = "Please confirm your identity"
-ORACLE_IDENTITY_FROM = "Amex Careers <careers@recruitment.americanexpress.com>"
 ORACLE_IDENTITY_BODY_PHRASE = "confirm your identity using the one-time passcode below:"
-ORACLE_IDENTITY_CLOCK_TOLERANCE_MS = 30000
+ORACLE_IDENTITY_CLOCK_TOLERANCE_MS = 2000
 
 SUBMIT_SELECTORS = (
     "button:text-is('Submit')",
@@ -239,7 +239,11 @@ def _message_headers(full: dict) -> dict[str, str]:
 
 def _message_matches_profile_address(headers: dict[str, str]) -> bool:
     profile_email = str(PROFILE.get("email", "")).strip().lower()
-    return bool(profile_email and profile_email in headers.get("to", "").lower())
+    if not profile_email:
+        return False
+    raw_recipients = [headers.get(name, "") for name in ("to", "cc", "delivered-to")]
+    addresses = [addr.lower() for _name, addr in getaddresses(raw_recipients)]
+    return profile_email in addresses
 
 
 def _extract_oracle_identity_code(text: str) -> str | None:
@@ -278,8 +282,6 @@ def _fetch_oracle_identity_code(requested_at_ms: int, timeout_s: int = 60) -> st
                     continue
                 headers = _message_headers(full)
                 if headers.get("subject") != ORACLE_IDENTITY_SUBJECT:
-                    continue
-                if headers.get("from") != ORACLE_IDENTITY_FROM:
                     continue
                 if not _message_matches_profile_address(headers):
                     continue
@@ -333,9 +335,15 @@ def _handle_oracle_identity_gate(page, requested_at_ms: int) -> dict | None:
     verify = _single_visible_exact_button(page, "VERIFY")
     if verify is None:
         return _manual("Oracle identity verification Verify control was missing or ambiguous")
-    for loc, digit in zip(pins, code):
-        loc.fill(digit)
-    verify.click(timeout=5000)
+    try:
+        for loc, digit in zip(pins, code):
+            loc.fill(digit)
+    except Exception as exc:
+        return _manual(f"Oracle identity verification pin fill failed: {type(exc).__name__}: {exc}")
+    try:
+        verify.click(timeout=5000)
+    except Exception as exc:
+        return _manual(f"Oracle identity verification Verify click failed: {type(exc).__name__}: {exc}")
     for _ in range(10):
         try:
             page.wait_for_timeout(500)
@@ -346,10 +354,10 @@ def _handle_oracle_identity_gate(page, requested_at_ms: int) -> dict | None:
             return _manual("Oracle account required for application", ["Oracle account required"])
         if _has_captcha_gate(page, body):
             return _manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"])
-        if _is_oracle_identity_gate(page):
-            return _manual("Oracle identity verification was rejected or unchanged")
         if _find_resume_input(page) is not None:
             return None
+    if _is_oracle_identity_gate(page):
+        return _manual("Oracle identity verification was unchanged and did not advance to resume upload")
     return _manual("Oracle identity verification did not advance to resume upload")
 
 

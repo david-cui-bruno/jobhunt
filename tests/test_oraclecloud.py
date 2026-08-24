@@ -151,6 +151,8 @@ class _FakeLocator:
 
     def click(self, timeout=None, force=False):
         self.page.events.append(f"click:{self.name}")
+        if self.page.variant == "email_gate_identity_verify_click_raises" and self.name == "verify":
+            raise Exception("verify click failed")
         if self.on_click:
             self.on_click()
 
@@ -181,6 +183,8 @@ class _FakeLocator:
         self.page.uploaded_file = str(file_path)
 
     def fill(self, value):
+        if self.page.variant == "email_gate_identity_pin_fill_raises" and self.name == "#pin-code-3":
+            raise Exception("pin fill failed")
         self._value = value
         self.page.filled[self.name] = value
 
@@ -250,6 +254,11 @@ class _FakePage:
                 "Confirm Your Identity The verification code was sent to this email address: "
                 "Send New Code VERIFY"
             )
+        if self.variant == "email_gate_identity_delayed_resume" and self.verify_clicks and len(self.waits) < 7:
+            return (
+                "Confirm Your Identity The verification code was sent to this email address: "
+                "Send New Code VERIFY"
+            )
         if self.variant == "email_gate_identity_unchanged" and self.verify_clicks:
             return (
                 "Confirm Your Identity The verification code was sent to this email address: "
@@ -259,7 +268,14 @@ class _FakePage:
 
     def locator(self, selector):
         if selector == "input[type=file]":
-            return _FakeLocator(self, "files", count=0 if self.variant.startswith("email_gate") and not self.next_clicks else len(self.file_inputs))
+            identity_waiting = self.variant.startswith("email_gate_identity") and self.verify_clicks
+            delayed_ready = self.variant == "email_gate_identity_delayed_resume" and len(self.waits) >= 7
+            count = len(self.file_inputs)
+            if self.variant.startswith("email_gate") and not self.next_clicks:
+                count = 0
+            elif identity_waiting and not delayed_ready and self.variant != "email_gate_identity":
+                count = 0
+            return _FakeLocator(self, "files", count=count)
         if selector == "input[type=email][name='primary-email']":
             present = self.variant in {
                 "email_gate",
@@ -281,6 +297,9 @@ class _FakePage:
                 "email_gate_identity_ambiguous_pin",
                 "email_gate_identity_ambiguous_verify",
                 "email_gate_identity_unchanged",
+                "email_gate_identity_delayed_resume",
+                "email_gate_identity_pin_fill_raises",
+                "email_gate_identity_verify_click_raises",
             } and not self.next_clicks
             return _FakeLocator(self, "primary-email", visible=present, count=1 if present else 0)
         if selector == "#legal-disclaimer-checkbox":
@@ -304,10 +323,15 @@ class _FakePage:
                 "email_gate_identity_ambiguous_pin",
                 "email_gate_identity_ambiguous_verify",
                 "email_gate_identity_unchanged",
+                "email_gate_identity_delayed_resume",
+                "email_gate_identity_pin_fill_raises",
+                "email_gate_identity_verify_click_raises",
             } and not self.next_clicks
             return _FakeLocator(self, "legal-disclaimer-checkbox", visible=False, count=1 if present else 0)
         if selector.startswith("#pin-code-"):
-            if not self.variant.startswith("email_gate_identity") or not self.next_clicks or self.verify_clicks:
+            if not self.variant.startswith("email_gate_identity") or not self.next_clicks:
+                return _FakeLocator(self, selector, visible=False, count=0)
+            if self.verify_clicks and self.variant != "email_gate_identity_delayed_resume":
                 return _FakeLocator(self, selector, visible=False, count=0)
             digit = selector.rsplit("-", 1)[-1]
             if self.variant == "email_gate_identity_missing_pin" and digit == "6":
@@ -399,6 +423,10 @@ class _FakePage:
 
     def get_by_label(self, label, exact=False):
         normalized = label.lower()
+        if "resume" in normalized and self.variant.startswith("email_gate_identity") and self.verify_clicks:
+            delayed_ready = self.variant == "email_gate_identity_delayed_resume" and len(self.waits) >= 7
+            if self.variant != "email_gate_identity" and not delayed_ready:
+                return _FakeLocator(self, label, count=0, visible=False)
         names = {
             "first name": "first_name",
             "last name": "last_name",
@@ -561,6 +589,47 @@ def test_oracle_identity_code_gate_fills_six_digits_and_advances_to_resume(fake_
     assert page.submit_clicks == 0
 
 
+def test_oracle_identity_code_gate_polls_full_window_before_classifying_unchanged(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("email_gate_identity_delayed_resume")
+    monkeypatch.setattr(oraclecloud, "_fetch_oracle_identity_code", lambda requested_at_ms, timeout_s=60: "123456")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-identity-delayed", dry_run=True)
+
+    assert page.verify_clicks == 1
+    assert page.waits.count(500) >= 4
+    assert page.uploaded_to == "resume"
+    assert result["reason"] == "dry run - did not submit"
+    assert page.submit_clicks == 0
+
+
+def test_oracle_identity_code_gate_pin_fill_exception_fails_closed_without_uncertain_submit(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("email_gate_identity_pin_fill_raises")
+    monkeypatch.setattr(oraclecloud, "_fetch_oracle_identity_code", lambda requested_at_ms, timeout_s=60: "123456")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-pin-fill-raises", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert result["click_attempted"] is False
+    assert result["submission_uncertain"] is False
+    assert page.verify_clicks == 0
+    assert page.uploaded_to is None
+    assert page.submit_clicks == 0
+
+
+def test_oracle_identity_code_gate_verify_click_exception_fails_closed_without_uncertain_submit(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("email_gate_identity_verify_click_raises")
+    monkeypatch.setattr(oraclecloud, "_fetch_oracle_identity_code", lambda requested_at_ms, timeout_s=60: "123456")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-verify-click-raises", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert result["click_attempted"] is False
+    assert result["submission_uncertain"] is False
+    assert page.verify_clicks == 0
+    assert page.uploaded_to is None
+    assert page.submit_clicks == 0
+
+
 def test_oracle_identity_code_gate_rejects_absent_stale_or_malformed_code(fake_oracle, pdf, monkeypatch):
     for code in (None, "12345", "123456 654321"):
         page = fake_oracle("email_gate_identity")
@@ -622,6 +691,85 @@ def test_oracle_identity_code_fetch_rejects_stale_ambiguous_malformed_and_gmail_
 
     install_mailer({"boom": RuntimeError("gmail failed")})
     assert oraclecloud._fetch_oracle_identity_code(1900, timeout_s=0) is None
+
+
+def test_oracle_identity_code_fetch_accepts_other_oracle_tenant_sender(monkeypatch):
+    class FakeMailer:
+        def _call(self, path):
+            if path.startswith("/messages?"):
+                return {"messages": [{"id": "good"}]}
+            return {
+                "internalDate": "2000",
+                "payload": {"headers": [
+                    {"name": "Subject", "value": "Please confirm your identity"},
+                    {"name": "From", "value": "Example Careers <careers@example.oraclecloud.invalid>"},
+                    {"name": "To", "value": oraclecloud.PROFILE["email"]},
+                ]},
+                "body": "confirm your identity using the one-time passcode below: 123456",
+            }
+
+        def extract_plain(self, full):
+            return full.get("body", "")
+
+    monkeypatch.setitem(sys.modules, "mailer", FakeMailer())
+
+    assert oraclecloud._fetch_oracle_identity_code(1900, timeout_s=0) == "123456"
+
+
+def test_oracle_identity_code_fetch_rejects_near_match_recipient(monkeypatch):
+    class FakeMailer:
+        def _call(self, path):
+            if path.startswith("/messages?"):
+                return {"messages": [{"id": "near"}]}
+            return {
+                "internalDate": "2000",
+                "payload": {"headers": [
+                    {"name": "Subject", "value": "Please confirm your identity"},
+                    {"name": "From", "value": "Example Careers <careers@example.oraclecloud.invalid>"},
+                    {"name": "To", "value": f"prefix-{oraclecloud.PROFILE['email']}"},
+                    {"name": "Cc", "value": "other@example.invalid"},
+                    {"name": "Delivered-To", "value": "different@example.invalid"},
+                ]},
+                "body": "confirm your identity using the one-time passcode below: 123456",
+            }
+
+        def extract_plain(self, full):
+            return full.get("body", "")
+
+    monkeypatch.setitem(sys.modules, "mailer", FakeMailer())
+
+    assert oraclecloud._fetch_oracle_identity_code(1900, timeout_s=0) is None
+
+
+def test_oracle_identity_code_fetch_rejects_three_second_prior_code_but_accepts_current(monkeypatch):
+    class FakeMailer:
+        def _call(self, path):
+            if path.startswith("/messages?"):
+                return {"messages": [{"id": "stale"}, {"id": "current"}]}
+            key = path.split("/messages/", 1)[1].split("?", 1)[0]
+            return messages[key]
+
+        def extract_plain(self, full):
+            return full.get("body", "")
+
+    def message(internal_date, code):
+        return {
+            "internalDate": str(internal_date),
+            "payload": {"headers": [
+                {"name": "Subject", "value": "Please confirm your identity"},
+                {"name": "From", "value": "Example Careers <careers@example.oraclecloud.invalid>"},
+                {"name": "To", "value": oraclecloud.PROFILE["email"]},
+            ]},
+            "body": f"confirm your identity using the one-time passcode below: {code}",
+        }
+
+    requested_at = 10_000
+    messages = {"stale": message(requested_at - 3000, "111111")}
+    monkeypatch.setitem(sys.modules, "mailer", FakeMailer())
+    assert oraclecloud._fetch_oracle_identity_code(requested_at, timeout_s=0) is None
+
+    messages["current"] = message(requested_at, "222222")
+    assert oraclecloud._fetch_oracle_identity_code(requested_at, timeout_s=0) == "222222"
 
 
 def test_oracle_identity_code_gate_rejects_missing_or_ambiguous_pin_controls(fake_oracle, pdf, monkeypatch):
