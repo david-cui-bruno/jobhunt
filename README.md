@@ -34,8 +34,10 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   only (no fall/spring/co-op); full-time allowed for YC/startup sources;
   never P26-batch YC companies; US/remote; canonical posting dedupe before
   any external form or email is touched.
-- **Tailoring** (≤100/day): Claude rewords the base LaTeX resume against the
-  JD using only the approved `resume/bullet_bank.md` (numbers pre-verified).
+- **Tailoring**: each hourly drip invocation drains every currently claimable
+  supported posting, one at a time with CAS claims. There is no per-run or
+  daily tailoring cap. Claude rewords the base LaTeX resume against the JD
+  using only the approved `resume/bullet_bank.md` (numbers pre-verified).
   Graduation date is **track-based** (David 2026-08-19, `track.py`): intern
   applications say May 2028, full-time applications say May 2027 (his real
   early-graduation plan). A structural quality gate blocks broken PDFs from
@@ -117,7 +119,8 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   auto-answered question (`out/qa_answers.log`).
 - Never fabricates: a required field the profile can't truthfully answer
   stops that one application.
-- Caps: 8 submissions/run and 100 tailors/day.
+- Volume is not artificially capped. Lane concurrency, per-posting timeouts,
+  canonical dedupe, and fail-closed uncertainty quarantine bound risk instead.
 - Gmail token failover: if jobhunt's OAuth token is revoked, `notify/mailer`
   falls back to kith's healthy token for the same account instead of going
   silent.

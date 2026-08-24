@@ -28,7 +28,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT /
 DB = ROOT / "out" / "tracker.db"
 LOCK = ROOT / "out" / "sprint.lock"
 PER_RUN_CAP = 5          # batch repo updates: don't churn for an hour
-SPRINT_DAILY_CAP = 15    # sprint submissions per day (drip backlog is capped separately)
+SPRINT_DAILY_CAP = 15    # fast-path budget only; uncapped drip still drains any remainder
 
 
 def _sprint_submitted_today(conn) -> int:

@@ -1,4 +1,4 @@
-"""Drip scheduler: discover postings and prepare a small resume batch each hour.
+"""Drip scheduler: discover postings and drain the claimable tailoring queue.
 
 Tailoring is not user-facing and runs around the clock.  It prioritizes ATSs the
 system can actually submit before spending model calls on unsupported forms.
@@ -262,9 +262,9 @@ def run():
     except Exception as e:
         print(f"[drip] email apps failed: {e}")
 
-    # 3) Tailor a bounded batch and queue it directly, with no approval email.
-    # This used to prepare one resume per hour only between 9am and 9pm, leaving
-    # a nine-day backlog despite ample submission capacity.
+    # 3) Tailor every currently claimable posting and queue it directly, with no
+    # approval email. CAS claims and the in-run exclusion set keep this serial
+    # drain safe without an artificial per-run or daily volume cap.
     quarantined = quarantine_unsupported(conn)
     if quarantined:
         print(f"[drip] quarantined unsupported ATS rows: {quarantined}")

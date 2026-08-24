@@ -211,7 +211,8 @@ of mechanical-engineering co-ops and fall-term roles.</p>
 
 <h2 id="tailor"><span class="num">3</span>Tailor - one resume per job description</h2>
 <p class="lede"><code>drip.py</code> (hourly) pulls queued rows, fetches the JD, and has Claude
-reword the LaTeX resume against it. Capped at 100/day.</p>
+  reword the LaTeX resume against it. Each invocation drains every currently claimable supported
+  row, one at a time with CAS claims and no per-run or daily tailoring cap.</p>
 <div class="grid">
   <div class="card"><h4>Reword-only law</h4><p>Claude may reorder and rephrase bullets from the
   approved <code>resume/bullet_bank.md</code> (every number pre-verified). It may never invent
@@ -373,9 +374,9 @@ no way to notice its own death. Three layers, each catching what the previous ca
   <div class="card"><h4>Never double-apply</h4><p>Ledger UNIQUE constraint + company-level
   freeze + "unconfirmed submission" quarantine. A maybe-submitted application is never
   retried.</p></div>
-  <div class="card"><h4>Bounded blast radius</h4><p>Per-posting subprocess kill · run budgets ·
-  caps (8/run, 100 tailors/day) · one-recovery-per-tenant-per-day. No component can spend more
-  than its budget of time or actions.</p></div>
+  <div class="card"><h4>Bounded blast radius</h4><p>Per-posting subprocess kill · lane concurrency ·
+  canonical dedupe · fail-closed uncertainty quarantine · one-recovery-per-tenant-per-day.
+  Throughput is not limited by an artificial daily application or tailoring cap.</p></div>
   <div class="card"><h4>Everything auditable</h4><p>Every status change carries a reason in
   <code>last_error</code>. Every auto-answer logs to <code>qa_answers.log</code>. Every filled
   form is screenshotted (14-day rotation). "Why did X happen" is always answerable.</p></div>
