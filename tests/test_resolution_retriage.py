@@ -71,6 +71,17 @@ def seed_dreamwork_posting(
     )
 
 
+def dreamwork_snapshot(db: sqlite3.Connection, posting_id: str) -> tuple:
+    return tuple(
+        db.execute(
+            "SELECT posting_id, source, company, title, locations, url, sponsorship, citizenship_required, "
+            "closed, first_seen, status, outcome, last_error, last_attempt_at, attempt_count "
+            "FROM postings WHERE posting_id=?",
+            (posting_id,),
+        ).fetchone()
+    )
+
+
 def seed_posting(db: sqlite3.Connection, posting_id: str, url: str, status: str, outcome: str | None = None) -> None:
     db.execute(
         "INSERT INTO postings (posting_id, company, url, status, outcome) VALUES (?,?,?,?,?)",
@@ -367,6 +378,46 @@ def test_dreamwork_resolution_reuses_negative_cache_and_per_run_count_budget() -
     assert first["budget_exhausted"] == 1
     assert second["backoff"] == 2
     assert len(fetches) == 3
+
+
+def test_dreamwork_watcher_fetches_only_actionable_wrapper_rows_and_preserves_excluded_rows() -> None:
+    db = dreamwork_conn()
+    rows = [
+        ("new-row", "new", None, ""),
+        ("manual-other", "manual", "manual", "no adapter for other"),
+        ("manual-icims", "manual", "manual", "no adapter for icims"),
+        ("filtered-dedupe", "filtered_out", "deduplicated", "replaced malformed Dreamwork URL"),
+        ("filtered-other", "filtered_out", None, "no adapter for other"),
+        ("stale-row", "manual", "stale", "no adapter for other"),
+        ("manual-nontechnical", "manual", "manual", "needs resume revision"),
+        ("applied-manual-nontechnical", "manual", "manual", "needs resume revision"),
+        ("queued-row", "queued", None, "no adapter for other"),
+        ("ready-row", "ready", None, "no adapter for other"),
+        ("submitting-row", "submitting", None, "no adapter for other"),
+        ("tailoring-row", "tailoring", None, "no adapter for other"),
+    ]
+    source_urls = {}
+    for index, (posting_id, status, outcome, last_error) in enumerate(rows):
+        source_url = f"https://www.dreamworkhq.com/job/{index:08x}-1111-1111-1111-111111111111"
+        source_urls[posting_id] = source_url
+        company = "OtherCo" if posting_id == "applied-manual-nontechnical" else "Acme"
+        seed_dreamwork_posting(db, posting_id, source_url, status=status, outcome=outcome, company=company)
+        db.execute("UPDATE postings SET last_error=? WHERE posting_id=?", (last_error, posting_id))
+    db.execute("INSERT INTO applications (posting_id) VALUES ('applied-manual-nontechnical')")
+    excluded = {posting_id for posting_id, _, _, _ in rows} - {"new-row", "manual-other", "manual-icims"}
+    before = {posting_id: dreamwork_snapshot(db, posting_id) for posting_id in excluded}
+    fetches: list[str] = []
+
+    def html_for(url: str) -> str:
+        fetches.append(url)
+        suffix = len(fetches)
+        return GREENHOUSE_HTML.replace("1234567", f"770000{suffix}")
+
+    result = watch.resolve_dreamwork_postings(db, fetch_page=html_for, max_fetches=25)
+
+    assert fetches == [source_urls["new-row"], source_urls["manual-other"], source_urls["manual-icims"]]
+    assert result["resolved"] == 3
+    assert {posting_id: dreamwork_snapshot(db, posting_id) for posting_id in excluded} == before
 
 
 def test_classify_identity_and_duplicate_hot_paths_never_fetch(monkeypatch) -> None:

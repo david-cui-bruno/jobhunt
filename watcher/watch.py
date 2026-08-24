@@ -22,7 +22,13 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 
 from submission.identity import canonical_conflict_reason
-from submission.resolutions import cached_resolution, cached_resolution_backoff_active, ensure_resolution_schema, record_resolution
+from submission.resolutions import (
+    TECHNICAL_MANUAL_PREFIXES,
+    cached_resolution,
+    cached_resolution_backoff_active,
+    ensure_resolution_schema,
+    record_resolution,
+)
 from watcher.url_resolver import resolve_dreamwork_html
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -305,8 +311,26 @@ def _is_dreamwork_wrapper(url: str) -> bool:
     return (host == "dreamworkhq.com" or host.endswith(".dreamworkhq.com")) and "/job/" in parsed.path
 
 
-def _has_postings_column(conn: sqlite3.Connection, name: str) -> bool:
-    return any(row[1] == name for row in conn.execute("PRAGMA table_info(postings)").fetchall())
+def _postings_columns(conn: sqlite3.Connection) -> set[str]:
+    return {row[1] for row in conn.execute("PRAGMA table_info(postings)").fetchall()}
+
+
+def _dreamwork_resolution_rows(conn: sqlite3.Connection) -> list:
+    columns = _postings_columns(conn)
+    clauses = []
+    params: list[str] = []
+    if "source" in columns:
+        clauses.append("source='dreamwork-2027'")
+    if "status" in columns and "last_error" in columns:
+        prefix_clause = " OR ".join("COALESCE(last_error, '') LIKE ?" for _ in TECHNICAL_MANUAL_PREFIXES)
+        clauses.append(f"(status='new' OR (status='manual' AND ({prefix_clause})))")
+        params.extend(prefix + "%" for prefix in TECHNICAL_MANUAL_PREFIXES)
+    elif "status" in columns:
+        clauses.append("status IN ('new','manual')")
+    if "outcome" in columns:
+        clauses.append("COALESCE(outcome, '') NOT IN ('stale','submitted','deduplicated')")
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    return conn.execute(f"SELECT posting_id,url FROM postings {where} ORDER BY rowid", tuple(params)).fetchall()
 
 
 def resolve_dreamwork_postings(
@@ -320,10 +344,7 @@ def resolve_dreamwork_postings(
     summary = {"cached": 0, "resolved": 0, "failed": 0, "conflicts": 0, "backoff": 0, "budget_exhausted": 0}
     fetch_count = 0
     started = time.monotonic()
-    source_filter = "WHERE source='dreamwork-2027'" if _has_postings_column(conn, "source") else ""
-    rows = conn.execute(
-        f"SELECT posting_id,url FROM postings {source_filter} ORDER BY rowid"
-    ).fetchall()
+    rows = _dreamwork_resolution_rows(conn)
     for row in rows:
         posting_id = row["posting_id"] if isinstance(row, sqlite3.Row) else row[0]
         source_url = row["url"] if isinstance(row, sqlite3.Row) else row[1]
