@@ -232,6 +232,18 @@ def _single_visible_exact_button(page, text: str):
     return None
 
 
+def _visible_exact_button_count(page, text: str) -> int:
+    try:
+        loc = page.get_by_role("button", name=text, exact=True)
+        visible = 0
+        for index in range(loc.count()):
+            if loc.nth(index).is_visible():
+                visible += 1
+        return visible
+    except Exception:
+        return 0
+
+
 def _message_headers(full: dict) -> dict[str, str]:
     headers = ((full.get("payload") or {}).get("headers") or []) if isinstance(full, dict) else []
     return {str(h.get("name", "")).lower(): str(h.get("value", "")) for h in headers if isinstance(h, dict)}
@@ -524,6 +536,18 @@ def _run_shared_qa_passes(page, slug: str, url: str) -> tuple[list[str], list[st
     return sorted(set(filled)), failed
 
 
+def _page_signature(page) -> tuple[str, str]:
+    return (str(getattr(page, "url", "")), _body_text(page))
+
+
+def _merge_unique(existing: list[str], new: list[str]) -> list[str]:
+    merged = list(existing)
+    for item in new:
+        if item not in merged:
+            merged.append(item)
+    return merged
+
+
 def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
     result = {"ok": False, "submitted": False, "reason": "", "unanswered": []}
     with sync_playwright() as pw:
@@ -566,47 +590,100 @@ def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = Tru
             if gate_result is not None:
                 return gate_result
 
-            resume_input = _find_resume_input(page)
-            if resume_input is None:
+            resume_uploaded = False
+            result["qa_filled"] = []
+            result["qa_failed"] = []
+            for page_index in range(1, 5):
+                if page_index == 1:
+                    resume_input = _find_resume_input(page)
+                    if resume_input is None:
+                        result.update(_manual("resume upload not found", ["Resume"]))
+                        _record_filled_screenshot(result, page, slug)
+                        return result
+                    resume_input.set_input_files(str(resume_pdf))
+                    resume_uploaded = True
+                    try:
+                        page.wait_for_timeout(1000)
+                    except Exception:
+                        pass
+
+                _fill_basics(page)
+                qa_filled, qa_failed = _run_shared_qa_passes(page, slug, url)
+                result["qa_filled"] = _merge_unique(result["qa_filled"], qa_filled)
+                result["qa_failed"] = _merge_unique(result["qa_failed"], qa_failed)
+
+                body = _body_text(page)
+                closed = _closed_reason(body)
+                if closed:
+                    result.update(ok=True, outcome="stale", reason=closed, unanswered=[])
+                    _record_filled_screenshot(result, page, slug)
+                    return result
+                if _has_account_gate(body):
+                    result.update(_manual("Oracle account required for application", ["Oracle account required"]))
+                    _record_filled_screenshot(result, page, slug)
+                    return result
+                if _has_captcha_gate(page, body):
+                    result.update(_manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"]))
+                    _record_filled_screenshot(result, page, slug)
+                    return result
+
+                required_empty = page.evaluate(REQUIRED_EMPTY_JS)
+                unanswered = _merge_unique(list(required_empty or []), qa_failed)
+                result["unanswered"] = unanswered
+                _record_filled_screenshot(result, page, slug)
+                if unanswered:
+                    result.update(_manual(f"needs answers: {unanswered[:6]}", unanswered[:6]))
+                    _record_filled_screenshot(result, page, slug)
+                    return result
+
+                submit_button = _find_exact_visible_submit(page)
+                if submit_button is not None:
+                    if dry_run:
+                        result.update(ok=True, submitted=False, reason="dry run - did not submit", unanswered=[])
+                        return result
+                    break
+
+                if page_index == 4:
+                    result.update(_manual("unsupported Oracle tenant variant: more than four application pages required"))
+                    return result
+
+                next_button = _single_visible_exact_button(page, "Next")
+                if next_button is None:
+                    if _visible_exact_button_count(page, "Next") == 0:
+                        result.update(_manual("unsupported Oracle tenant variant: exact visible Submit control not found"))
+                    else:
+                        result.update(_manual("unsupported Oracle tenant variant: exact visible Next control ambiguous"))
+                    return result
+                before = _page_signature(page)
+                next_button.click(timeout=5000)
+                try:
+                    page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+                body = _body_text(page)
+                closed = _closed_reason(body)
+                if closed:
+                    result.update(ok=True, outcome="stale", reason=closed, unanswered=[])
+                    _record_filled_screenshot(result, page, slug)
+                    return result
+                if _has_account_gate(body):
+                    result.update(_manual("Oracle account required for application", ["Oracle account required"]))
+                    _record_filled_screenshot(result, page, slug)
+                    return result
+                if _has_captcha_gate(page, body):
+                    result.update(_manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"]))
+                    _record_filled_screenshot(result, page, slug)
+                    return result
+                if _page_signature(page) == before:
+                    result.update(_manual("Oracle Next transition did not advance the application page"))
+                    return result
+
+            else:
+                result.update(_manual("unsupported Oracle tenant variant: more than four application pages required"))
+                return result
+
+            if not resume_uploaded:
                 result.update(_manual("resume upload not found", ["Resume"]))
-                _record_filled_screenshot(result, page, slug)
-                return result
-            resume_input.set_input_files(str(resume_pdf))
-            try:
-                page.wait_for_timeout(1000)
-            except Exception:
-                pass
-
-            _fill_basics(page)
-            qa_filled, qa_failed = _run_shared_qa_passes(page, slug, url)
-            result["qa_filled"] = qa_filled
-            result["qa_failed"] = qa_failed
-
-            body = _body_text(page)
-            if _has_account_gate(body):
-                result.update(_manual("Oracle account required for application", ["Oracle account required"]))
-                _record_filled_screenshot(result, page, slug)
-                return result
-            if _has_captcha_gate(page, body):
-                result.update(_manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"]))
-                _record_filled_screenshot(result, page, slug)
-                return result
-
-            required_empty = page.evaluate(REQUIRED_EMPTY_JS)
-            result["unanswered"] = required_empty
-            _record_filled_screenshot(result, page, slug)
-            if required_empty:
-                result.update(_manual(f"needs answers: {required_empty[:6]}", required_empty[:6]))
-                _record_filled_screenshot(result, page, slug)
-                return result
-
-            submit_button = _find_exact_visible_submit(page)
-            if submit_button is None:
-                result.update(_manual("unsupported Oracle tenant variant: exact visible Submit control not found"))
-                return result
-
-            if dry_run:
-                result.update(ok=True, submitted=False, reason="dry run - did not submit", unanswered=[])
                 return result
 
             try:

@@ -217,6 +217,8 @@ class _FakePage:
         self.qa_evaluations = 0
         self.events = []
         self.url = ORACLE_JOB_URL
+        self.app_page_index = 1
+        self.filled_pages = []
         self.confirmation_body = "Your application has been submitted successfully."
         self.raise_on_submit = variant == "submit_timeout"
         self.file_inputs = [
@@ -239,6 +241,12 @@ class _FakePage:
             raise TimeoutError("confirmation wait timed out")
 
     def inner_text(self, selector):
+        if self.variant == "multipage_closed_after_transition" and self.app_page_index == 2:
+            return "This job is no longer accepting applications."
+        if self.variant == "multipage_account_after_transition" and self.app_page_index == 2:
+            return "Create an account to continue."
+        if self.variant == "multipage_captcha_after_transition" and self.app_page_index == 2:
+            return "Please verify you are human. reCAPTCHA"
         if self.variant == "closed":
             return "This job is no longer available."
         if self.variant == "account":
@@ -269,6 +277,8 @@ class _FakePage:
                 "Too Many Attempts. Try Again Later. "
                 "You reached the maximum number of attempts. Try again in 30 minutes. CONTINUE"
             )
+        if self.variant.startswith("multipage"):
+            return f"Example application form page {self.app_page_index}"
         return "Example application form"
 
     def locator(self, selector):
@@ -399,7 +409,10 @@ class _FakePage:
             )
             return _FakeLocator(self, selector, visible=visible, count=1 if visible else 0, on_click=self._click_apply)
         if selector in oraclecloud.SUBMIT_SELECTORS:
-            visible = self.variant not in {"missing_submit"} and selector == oraclecloud.SUBMIT_SELECTORS[0]
+            if self.variant.startswith("multipage"):
+                visible = selector == oraclecloud.SUBMIT_SELECTORS[0] and self.app_page_index == self._multipage_total_pages()
+            else:
+                visible = self.variant not in {"missing_submit"} and selector == oraclecloud.SUBMIT_SELECTORS[0]
             count = 2 if self.variant == "ambiguous_submit" and visible else (1 if visible else 0)
             return _FakeLocator(self, "submit", visible=visible, count=count, on_click=self._click_submit)
         if "Submit" in selector or "submit" in selector:
@@ -411,6 +424,15 @@ class _FakePage:
 
     def get_by_role(self, role, name=None, exact=False):
         self.role_queries.append({"role": role, "name": name, "exact": exact})
+        if role == "button" and name == "Next" and exact is True and self.variant.startswith("multipage"):
+            if self.app_page_index >= self._multipage_total_pages():
+                count = 0
+            elif self.variant == "multipage_ambiguous_next" and self.app_page_index == 1:
+                count = 2
+            else:
+                count = 1
+            self.next_buttons = [_FakeLocator(self, "next", visible=True, on_click=self._click_next) for _ in range(count)]
+            return _FakeLocator(self, "next_buttons", visible=count > 0, count=count)
         if role == "button" and name == "Next" and exact is True and self.variant.startswith("email_gate") and not self.next_clicks:
             if self.variant == "email_gate_missing_next":
                 count = 0
@@ -430,6 +452,8 @@ class _FakePage:
 
     def get_by_label(self, label, exact=False):
         normalized = label.lower()
+        if self.variant.startswith("multipage") and normalized.startswith("page "):
+            return _FakeLocator(self, f"page_{self.app_page_index}_field")
         if "resume" in normalized and self.variant.startswith("email_gate_identity") and self.verify_clicks:
             delayed_ready = self.variant == "email_gate_identity_delayed_resume" and len(self.waits) >= 7
             if self.variant != "email_gate_identity" and not delayed_ready:
@@ -454,8 +478,12 @@ class _FakePage:
         text = str(script)
         if text == oraclecloud.qa.EXTRACT_JS:
             self.qa_evaluations += 1
+            if self.variant.startswith("multipage"):
+                return [{"id": f"page{self.app_page_index}", "name": f"page{self.app_page_index}", "label": f"Page {self.app_page_index} field", "value": ""}]
             return [{"id": "workAuth", "name": "workAuth", "label": "Example eligibility question", "value": ""}]
         if "required" in text:
+            if self.variant == "multipage_required_page_2" and self.app_page_index == 2:
+                return ["Page 2 required"]
             return ["Example eligibility question"] if self.variant == "required" else []
         return []
 
@@ -468,8 +496,17 @@ class _FakePage:
         self.next_clicks += 1
         if self.variant.startswith("email_gate_identity"):
             self.url = f"{ORACLE_JOB_URL}/apply/email"
+        elif self.variant.startswith("multipage"):
+            if self.variant != "multipage_unchanged_after_next":
+                self.app_page_index += 1
+                self.url = f"{ORACLE_JOB_URL}/apply/page/{self.app_page_index}"
         else:
             self.url = f"{ORACLE_JOB_URL}/apply/resume"
+
+    def _multipage_total_pages(self):
+        if self.variant == "multipage_five_pages":
+            return 5
+        return 4
 
     def _click_verify(self):
         self.verify_clicks += 1
@@ -533,7 +570,11 @@ def fake_oracle(monkeypatch):
         monkeypatch.setattr(oraclecloud, "sync_playwright", lambda: _FakePlaywright())
         monkeypatch.setattr(oraclecloud.stealth, "launch_stealth_context", lambda _pw: (_FakeBrowser(), _FakeContext(page)))
         monkeypatch.setattr(oraclecloud, "safe_screenshot", lambda page, slug, stage, root: str(root / f"{slug}-{stage}.png"))
-        monkeypatch.setattr(oraclecloud.qa, "get_answers", lambda controls, context=None: [{"id_or_name": "workAuth", "answer": "Synthetic option"}])
+        monkeypatch.setattr(
+            oraclecloud.qa,
+            "get_answers",
+            lambda controls, context=None: [{"id_or_name": controls[0].get("id") or "workAuth", "answer": "Synthetic option"}],
+        )
         monkeypatch.setattr(oraclecloud.qa, "fill_answers", lambda page, controls, answers: ([a["id_or_name"] for a in answers], []))
         return page
 
@@ -560,6 +601,103 @@ def test_oracle_dry_run_reaches_submit_boundary_without_click(fake_oracle, pdf):
     assert result["reason"] == "dry run - did not submit"
     assert result["unanswered"] == []
     assert result["artifact_refs"] == {"filled_form_screenshot": str(oraclecloud.SHOTS / "oracle-dry-filled.png")}
+    assert page.submit_clicks == 0
+
+
+def test_oracle_four_page_dry_run_clicks_next_three_times_uploads_once_and_aggregates_qa(fake_oracle, pdf):
+    page = fake_oracle("multipage_four")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-multipage", dry_run=True)
+
+    assert page.next_clicks == 3
+    assert page.uploaded_file == str(pdf)
+    assert page.qa_evaluations == 12
+    assert result["reason"] == "dry run - did not submit"
+    assert result["qa_filled"] == ["page1", "page2", "page3", "page4"]
+    assert page.submit_clicks == 0
+    assert "mark_submit_attempted" not in page.events
+
+
+def test_oracle_required_field_on_page_two_stops_before_next(fake_oracle, pdf):
+    page = fake_oracle("multipage_required_page_2")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-required-page-two", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert result["unanswered"] == ["Page 2 required"]
+    assert page.next_clicks == 1
+    assert page.submit_clicks == 0
+
+
+def test_oracle_qa_failure_on_middle_page_stops_before_next_and_surfaces_label(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("multipage_four")
+
+    def fail_page_two(page, controls, answers):
+        if page.app_page_index == 2:
+            return ([], ["Page 2 QA"])
+        return ([a["id_or_name"] for a in answers], [])
+
+    monkeypatch.setattr(oraclecloud.qa, "fill_answers", fail_page_two)
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-qa-page-two", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert result["unanswered"] == ["Page 2 QA"]
+    assert result["qa_failed"] == ["Page 2 QA"]
+    assert page.next_clicks == 1
+    assert page.submit_clicks == 0
+
+
+def test_oracle_ambiguous_next_fails_closed_without_transition(fake_oracle, pdf):
+    page = fake_oracle("multipage_ambiguous_next")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-ambiguous-next", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert "Next" in result["reason"]
+    assert page.next_clicks == 0
+    assert page.submit_clicks == 0
+
+
+def test_oracle_unchanged_page_after_next_fails_closed(fake_oracle, pdf):
+    page = fake_oracle("multipage_unchanged_after_next")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-unchanged-next", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert "did not advance" in result["reason"]
+    assert page.next_clicks == 1
+    assert page.submit_clicks == 0
+
+
+def test_oracle_more_than_four_pages_fails_closed_before_fourth_next(fake_oracle, pdf):
+    page = fake_oracle("multipage_five_pages")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-five-pages", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert "four" in result["reason"].lower()
+    assert page.next_clicks == 3
+    assert page.submit_clicks == 0
+
+
+@pytest.mark.parametrize(
+    ("variant", "reason"),
+    [
+        ("multipage_closed_after_transition", "no longer accepting applications"),
+        ("multipage_account_after_transition", "account"),
+        ("multipage_captcha_after_transition", "CAPTCHA"),
+    ],
+)
+def test_oracle_gates_after_transition_stop_before_further_filling_or_clicking(fake_oracle, pdf, variant, reason):
+    page = fake_oracle(variant)
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, variant, dry_run=True)
+
+    assert result["outcome"] == ("stale" if "closed" in variant else "manual")
+    assert reason.lower() in result["reason"].lower()
+    assert page.next_clicks == 1
+    assert page.qa_evaluations == 3
     assert page.submit_clicks == 0
 
 
