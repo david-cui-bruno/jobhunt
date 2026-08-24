@@ -1344,15 +1344,37 @@ class WorkdayEntryResult:
     marker: str = ""
 
 
-_WORKDAY_CLOSED_MARKERS = (
-    "job posting is no longer available",
+CLOSED_MARKERS = (
     "job is no longer available",
-    "this job is no longer accepting applications",
-    "this position is no longer accepting applications",
+    "position is no longer available",
+    "no longer accepting applications",
+    "job posting has been removed",
+    "job not found",
 )
 
 
-def enter_application_form(page, apply_url: str) -> WorkdayEntryResult:
+def workday_closed_marker(body_text: str) -> str | None:
+    text = re.sub(r"\s+", " ", body_text.lower())
+    return next((marker for marker in CLOSED_MARKERS if marker in text), None)
+
+
+def _explicit_application_href(page) -> str | None:
+    locator = page.locator(
+        "a[href]:has-text('Apply'), "
+        "a[href]:has-text('Start Your Application'), "
+        "a[href][data-automation-id='adventureButton']"
+    ).first
+    try:
+        if locator.count() and locator.is_visible():
+            return locator.get_attribute("href")
+    except Exception:
+        return None
+    return None
+
+
+def enter_application_form(
+    page, apply_url: str, *, allow_explicit_href_fallback: bool = True
+) -> WorkdayEntryResult:
     """Navigate into Workday's resume entry screen using only fresh locators."""
     page.goto(apply_url, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(3500)
@@ -1364,9 +1386,9 @@ def enter_application_form(page, apply_url: str) -> WorkdayEntryResult:
         return WorkdayEntryResult(
             "retryable", "workday service interruption; retry later", "outage"
         )
-    for marker in _WORKDAY_CLOSED_MARKERS:
-        if marker in body:
-            return WorkdayEntryResult("closed", "posting closed", marker)
+    closed_marker = workday_closed_marker(body)
+    if closed_marker:
+        return WorkdayEntryResult("closed", "posting closed", closed_marker)
 
     try:
         cb = page.locator(
@@ -1388,6 +1410,27 @@ def enter_application_form(page, apply_url: str) -> WorkdayEntryResult:
             return WorkdayEntryResult("auth_required", "workday account access required")
         if saved_draft_wizard_is_active(page):
             return WorkdayEntryResult("upload_ready", marker="saved_draft")
+        existing_af = page.locator("[data-automation-id='autofillWithResume']").first
+        existing_upload = page.locator("[data-automation-id='file-upload-input-ref']").first
+        if ((existing_af.count() and existing_af.is_visible())
+                or existing_upload.count()):
+            return WorkdayEntryResult("upload_ready")
+        if allow_explicit_href_fallback:
+            href = _explicit_application_href(page)
+            if href:
+                fallback_url = urllib.parse.urljoin(page.url or apply_url, href)
+                fallback = enter_application_form(
+                    page,
+                    fallback_url,
+                    allow_explicit_href_fallback=False,
+                )
+                if fallback.state == "upload_ready":
+                    return WorkdayEntryResult(
+                        "upload_ready",
+                        "used explicit application href fallback",
+                        "explicit_application_href",
+                    )
+                return fallback
         return WorkdayEntryResult("retryable", "apply button not found")
 
     for _ in range(3):
@@ -1407,13 +1450,7 @@ def enter_application_form(page, apply_url: str) -> WorkdayEntryResult:
         except Exception:
             page.wait_for_timeout(1000)
 
-    autofill_url = apply_url.rstrip("/") + "/apply/autofillWithResume"
     af = page.locator("[data-automation-id='autofillWithResume']").first
-    if not (af.count() and af.is_visible()) and _account_scope(page) is page:
-        page.goto(autofill_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(3500)
-        af = page.locator("[data-automation-id='autofillWithResume']").first
-
     if af.count() and af.is_visible():
         af.click(timeout=8000)
         page.wait_for_timeout(3000)
@@ -1457,11 +1494,10 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
         browser = pw.chromium.launch(headless=True)
         ctx = browser.new_context(viewport={"width": 1280, "height": 1400})
         page = configure_page(ctx.new_page())
-        account_apply_url = url.rstrip("/") + "/apply/autofillWithResume"
         entry = enter_application_form(page, url)
         if entry.state == "auth_required":
             account_ok, account_reason = ensure_workday_account_access(
-                page, company_key, account_apply_url
+                page, company_key, url
             )
             if not account_ok:
                 result.update(ok=True, reason=account_reason,
@@ -1472,11 +1508,24 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
             entry = enter_application_form(page, url)
 
         if entry.state == "closed":
-            result["reason"] = entry.reason or "posting closed"
+            reason = entry.reason or "posting closed"
+            if entry.marker:
+                reason = f"{reason}: {entry.marker}"
+            result.update(
+                outcome="stale",
+                retryable=False,
+                click_attempted=False,
+                reason=reason,
+            )
             browser.close()
             return result
         if entry.state == "retryable":
-            result.update(retryable=True, reason=entry.reason)
+            result.update(
+                outcome="retryable_failure",
+                retryable=True,
+                click_attempted=False,
+                reason=entry.reason,
+            )
             _shot(page, slug, "wd_outage" if entry.marker == "outage" else "fail_upload")
             browser.close()
             return result
