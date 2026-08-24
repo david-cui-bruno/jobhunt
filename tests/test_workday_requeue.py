@@ -84,7 +84,7 @@ def make_db(path: Path, *, attempts: bool = True, applications: bool = True) -> 
     return conn
 
 
-def seed(conn, posting_id, *, url=WORKDAY_URL, status="failed", outcome=None, last_error=None, attempt_count=2, company=None, title=None):
+def seed(conn, posting_id, *, url=WORKDAY_URL, status="failed", outcome=None, last_error=None, attempt_count=2, company=None, title=None, source="test"):
     row_url = url
     if row_url == WORKDAY_URL:
         row_url = WORKDAY_URL + f"-{posting_id}"
@@ -94,12 +94,13 @@ def seed(conn, posting_id, *, url=WORKDAY_URL, status="failed", outcome=None, la
             posting_id, source, company, title, locations, url, sponsorship,
             citizenship_required, closed, first_seen, status, outcome,
             last_attempt_at, attempt_count, last_error
-        ) VALUES (?, 'test', ?, ?, 'NYC', ?, NULL, 0, 0, 1, ?, ?, 10, ?, ?)
+        ) VALUES (?, ?, ?, ?, 'NYC', ?, NULL, 0, 0, 1, ?, ?, 10, ?, ?)
         """,
         (
             posting_id,
+            source,
             company or f"Company {posting_id}",
-            title or f"Role {posting_id}",
+            title or f"Software Engineer Intern {posting_id}",
             row_url,
             status,
             outcome,
@@ -145,7 +146,7 @@ def test_preview_works_against_authoritative_watch_schema(tmp_path):
     assert rows[0] == {
         "posting_id": "safe-upload",
         "company": "Company safe-upload",
-        "title": "Role safe-upload",
+        "title": "Software Engineer Intern safe-upload",
         "tenant": "acme.wd5.myworkdayjobs.com/external",
         "reason": COVERED_REASONS[0] + ": missing",
         "attempt_count": 2,
@@ -206,6 +207,187 @@ def test_submitted_url_alias_blocks_requeue(tmp_path):
     seed(conn, "alias-submitted", url=shared, status="submitted")
 
     assert [row["posting_id"] for row in recoverable_workday_rows(conn)] == ["safe"]
+
+
+def test_real_schema_preview_applies_authoritative_target_season_gate(tmp_path):
+    db_path = tmp_path / "tracker.db"
+    conn = make_db(db_path)
+    seed(conn, "fall-2026", title="Software Engineer Intern, Fall 2026")
+    seed(conn, "plain-2026", title="Software Engineer Intern 2026")
+    seed(conn, "spring-offseason", title="Software Engineer Intern, Spring")
+    seed(conn, "fall-offseason", title="Software Engineer Intern, Fall")
+    seed(conn, "summer-2027", title="Software Engineer Intern, Summer 2027")
+    seed(conn, "unseasoned", title="Software Engineer Intern")
+
+    rows = recoverable_workday_rows(conn)
+
+    assert [row["posting_id"] for row in rows] == ["summer-2027", "unseasoned"]
+
+
+def test_real_schema_preview_rejects_generic_title_with_explicit_non_2027_url(tmp_path):
+    db_path = tmp_path / "tracker.db"
+    conn = make_db(db_path)
+    seed(
+        conn,
+        "fall-2026-url",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Software-Engineer-Intern---Fall-2026_R926aad",
+    )
+    seed(
+        conn,
+        "summer-2027-url",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Software-Engineer-Intern---Summer-2027_Rtarget",
+    )
+    seed(
+        conn,
+        "neutral-url",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Software-Engineer-Intern_R123",
+    )
+
+    rows = recoverable_workday_rows(conn)
+
+    assert [row["posting_id"] for row in rows] == ["summer-2027-url", "neutral-url"]
+
+
+def test_real_schema_preview_and_apply_reject_offseason_sources_with_neutral_evidence(tmp_path):
+    db_path = tmp_path / "tracker.db"
+    conn = make_db(db_path)
+    seed(
+        conn,
+        "vansh-offseason-neutral",
+        source="vansh-offseason",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Software-Engineer-Intern_Roffseason",
+    )
+    seed(
+        conn,
+        "direct-off-season-neutral",
+        source="direct-off-season-feed",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Software-Engineer-Intern_Roffseason2",
+    )
+    seed(
+        conn,
+        "active-target-source",
+        source="workday",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Software-Engineer-Intern_Rtarget",
+    )
+
+    assert [row["posting_id"] for row in recoverable_workday_rows(conn)] == ["active-target-source"]
+
+    result = apply_requeue(conn, ["vansh-offseason-neutral", "direct-off-season-neutral", "active-target-source"])
+
+    assert result == {
+        "requested": 3,
+        "updated": 1,
+        "skipped": ["vansh-offseason-neutral", "direct-off-season-neutral"],
+        "updated_ids": ["active-target-source"],
+    }
+    assert conn.execute("SELECT status FROM postings WHERE posting_id='vansh-offseason-neutral'").fetchone()[0] == "failed"
+    assert conn.execute("SELECT status FROM postings WHERE posting_id='direct-off-season-neutral'").fetchone()[0] == "failed"
+    assert conn.execute("SELECT status FROM postings WHERE posting_id='active-target-source'").fetchone()[0] == "ready"
+
+
+def test_real_schema_preview_rejects_underscore_adjacent_non_2027_years(tmp_path):
+    db_path = tmp_path / "tracker.db"
+    conn = make_db(db_path)
+    seed(
+        conn,
+        "winter-2026-underscore",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Software-Engineer-Intern---Winter-2026_R123",
+    )
+    seed(
+        conn,
+        "plain-2026-underscore",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Software-Engineer-Intern-2026_R456",
+    )
+    seed(
+        conn,
+        "summer-2027-underscore",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Software-Engineer-Intern---Summer-2027_R789",
+    )
+    seed(conn, "season-neutral", title="Software Engineer Intern")
+
+    rows = recoverable_workday_rows(conn)
+
+    assert [row["posting_id"] for row in rows] == ["summer-2027-underscore", "season-neutral"]
+
+
+def test_real_schema_preview_checks_job_slug_not_location_path_for_season_words(tmp_path):
+    db_path = tmp_path / "tracker.db"
+    conn = make_db(db_path)
+    seed(
+        conn,
+        "falls-church-summer-2027",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/Falls-Church/Software-Engineer-Intern---Summer-2027_R123",
+    )
+    seed(
+        conn,
+        "spring-texas-summer-2027",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/Spring-Texas/Software-Engineer-Intern---Summer-2027_R456",
+    )
+    seed(
+        conn,
+        "spring-job-neutral-location",
+        title="Software Engineer Intern",
+        url="https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Software-Engineer-Intern---Spring_R789",
+    )
+
+    rows = recoverable_workday_rows(conn)
+
+    assert [row["posting_id"] for row in rows] == ["falls-church-summer-2027", "spring-texas-summer-2027"]
+
+
+def test_real_schema_apply_never_requeues_explicit_non_2027_rows(tmp_path):
+    db_path = tmp_path / "tracker.db"
+    conn = make_db(db_path)
+    seed(conn, "fall-2026", title="Software Engineer Intern, Fall 2026")
+    seed(conn, "summer-2027", title="Software Engineer Intern, Summer 2027")
+
+    result = apply_requeue(conn, ["fall-2026", "summer-2027"])
+
+    assert result == {
+        "requested": 2,
+        "updated": 1,
+        "skipped": ["fall-2026"],
+        "updated_ids": ["summer-2027"],
+    }
+    assert conn.execute("SELECT status FROM postings WHERE posting_id='fall-2026'").fetchone()[0] == "failed"
+    assert conn.execute("SELECT status FROM postings WHERE posting_id='summer-2027'").fetchone()[0] == "ready"
+
+
+def test_missing_title_or_source_columns_fail_closed_for_target_season_gate(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE postings (
+            posting_id TEXT PRIMARY KEY,
+            url TEXT,
+            status TEXT,
+            last_error TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute("CREATE TABLE applications (posting_id TEXT PRIMARY KEY)")
+    conn.execute(
+        "INSERT INTO postings (posting_id, url, status, last_error, attempt_count) VALUES (?, ?, 'failed', ?, 1)",
+        ("unsafe-if-title-unchecked", WORKDAY_URL, COVERED_REASONS[0]),
+    )
+    conn.commit()
+
+    with pytest.raises(sqlite3.OperationalError, match="source, title|title, source"):
+        recoverable_workday_rows(conn)
 
 
 def test_cli_preview_is_default_json_and_does_not_mutate_database(tmp_path):

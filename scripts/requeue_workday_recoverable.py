@@ -3,16 +3,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from submission.workday_tenant import workday_tenant_key
+from watcher.filter import title_ok
 
 COVERED_REASONS = (
     "resume upload zone never appeared",
@@ -39,7 +42,7 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def _require_postings(conn: sqlite3.Connection) -> None:
     cols = _columns(conn, "postings")
-    required = {"posting_id", "url", "status", "last_error", "attempt_count"}
+    required = {"posting_id", "url", "status", "last_error", "attempt_count", "source", "title"}
     missing = sorted(required - cols)
     if missing:
         raise sqlite3.OperationalError("postings table missing required columns: " + ", ".join(missing))
@@ -78,6 +81,32 @@ def _attempt_count(row: sqlite3.Row, columns: set[str]) -> int:
 
 def _covered_reason(reason: str) -> bool:
     return any(reason.startswith(prefix) for prefix in COVERED_REASONS)
+
+
+def _offseason_source(source: str) -> bool:
+    return re.search(r"off[-_\s]?season", source.lower()) is not None
+
+
+def _workday_job_slug(url: str) -> str:
+    parts = [unquote(part) for part in urlsplit(url).path.split("/") if part]
+    if "job" not in [part.lower() for part in parts]:
+        return ""
+    return parts[-1] if parts else ""
+
+
+def _has_explicit_non_target_year(text: str) -> bool:
+    years = re.findall(r"(?<!\d)(20\d{2})(?!\d)", text)
+    return any(year != "2027" for year in years)
+
+
+def _posting_evidence_ok(row: sqlite3.Row) -> bool:
+    source = str(row["source"] or "")
+    if _offseason_source(source):
+        return False
+    evidence = f"title: {row['title'] or ''}\njob: {_workday_job_slug(str(row['url'] or ''))}"
+    if _has_explicit_non_target_year(evidence):
+        return False
+    return title_ok(evidence, source=source)
 
 
 def _has_application(conn: sqlite3.Connection, posting_id: str) -> bool:
@@ -133,6 +162,8 @@ def _is_eligible(conn: sqlite3.Connection, row: sqlite3.Row, columns: set[str]) 
     if not workday_tenant_key(url):
         return False
     if not _covered_reason(_reason(row, columns)):
+        return False
+    if not _posting_evidence_ok(row):
         return False
     posting_id = str(row["posting_id"])
     if _has_application(conn, posting_id):
