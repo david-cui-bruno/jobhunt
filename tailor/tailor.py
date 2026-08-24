@@ -523,17 +523,20 @@ def measure_fill(pdf: Path) -> float | None:
                 )
                 pgms = sorted(Path(td).glob("pg*.pgm"))
                 if result.returncode == 0 and pgms:
-                    data = pgms[0].read_bytes()
-                    # P5 header: magic, width height, maxval, then raw bytes
-                    parts = data.split(b"\n", 3)
-                    w, h = (int(x) for x in parts[1].split())
-                    raw = parts[3][-(w * h):]
-                    last_ink = 0
-                    for row in range(h):
-                        seg = raw[row * w:(row + 1) * w]
-                        if any(b < 128 for b in seg):
-                            last_ink = row
-                    return last_ink / h
+                    try:
+                        data = pgms[0].read_bytes()
+                        # P5 header: magic, width height, maxval, then raw bytes
+                        parts = data.split(b"\n", 3)
+                        w, h = (int(x) for x in parts[1].split())
+                        raw = parts[3][-(w * h):]
+                        last_ink = 0
+                        for row in range(h):
+                            seg = raw[row * w:(row + 1) * w]
+                            if any(b < 128 for b in seg):
+                                last_ink = row
+                        return last_ink / h
+                    except (IndexError, OSError, ValueError, ZeroDivisionError):
+                        pass
 
             sips = shutil.which("sips")
             if not sips:

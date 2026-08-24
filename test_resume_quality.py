@@ -48,6 +48,35 @@ class ResumeQualityTests(unittest.TestCase):
 """
         self.assertEqual(tailor._fill_from_ascii_ppm(ppm), 0.5)
 
+    def test_malformed_pdftoppm_output_falls_back_to_sips(self) -> None:
+        ppm = b"""P3
+2 4
+255
+255 255 255 255 255 255
+0 0 0 255 255 255
+255 255 255 0 0 0
+255 255 255 255 255 255
+"""
+
+        def fake_run(command, **_kwargs):
+            if command[0] == "/mock/pdftoppm":
+                Path(f"{command[-1]}-1.pgm").write_bytes(b"malformed")
+            else:
+                Path(command[command.index("--out") + 1]).write_bytes(ppm)
+            return mock.Mock(returncode=0)
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(
+                    tailor.shutil,
+                    "which",
+                    side_effect=lambda name: f"/mock/{name}",
+                ), \
+                mock.patch.object(tailor.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(
+                tailor.measure_fill(Path(tmp) / "resume.pdf"),
+                0.5,
+            )
+
     def test_grounded_resume_keeps_identity_and_project_facts_immutable(self) -> None:
         result = tailor.build_grounded_resume(
             "AI Engineer Intern - Innovation Team",
