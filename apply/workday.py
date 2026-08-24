@@ -22,6 +22,7 @@ import sqlite3
 import sys
 import time
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -1336,6 +1337,119 @@ def _workday_outage(page) -> bool:
             or "experiencing a service interruption" in body)
 
 
+@dataclass(frozen=True)
+class WorkdayEntryResult:
+    state: str
+    reason: str = ""
+    marker: str = ""
+
+
+_WORKDAY_CLOSED_MARKERS = (
+    "job posting is no longer available",
+    "job is no longer available",
+    "this job is no longer accepting applications",
+    "this position is no longer accepting applications",
+)
+
+
+def enter_application_form(page, apply_url: str) -> WorkdayEntryResult:
+    """Navigate into Workday's resume entry screen using only fresh locators."""
+    page.goto(apply_url, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(3500)
+    try:
+        body = page.inner_text("body")[:5000].lower()
+    except Exception:
+        body = ""
+    if _workday_outage(page):
+        return WorkdayEntryResult(
+            "retryable", "workday service interruption; retry later", "outage"
+        )
+    for marker in _WORKDAY_CLOSED_MARKERS:
+        if marker in body:
+            return WorkdayEntryResult("closed", "posting closed", marker)
+
+    try:
+        cb = page.locator(
+            "[data-automation-id='legalNoticeAcceptButton'], "
+            "#onetrust-accept-btn-handler"
+        ).first
+        if cb.count() and cb.is_visible():
+            cb.click(timeout=3000)
+            page.wait_for_timeout(800)
+    except Exception:
+        pass
+
+    btn = page.locator(
+        "a[data-automation-id='adventureButton'], "
+        "button[data-automation-id='adventureButton']"
+    ).first
+    if not btn.count():
+        if _workday_auth_gate_visible(page):
+            return WorkdayEntryResult("auth_required", "workday account access required")
+        if saved_draft_wizard_is_active(page):
+            return WorkdayEntryResult("upload_ready", marker="saved_draft")
+        return WorkdayEntryResult("retryable", "apply button not found")
+
+    for _ in range(3):
+        try:
+            btn = page.locator(
+                "a[data-automation-id='adventureButton'], "
+                "button[data-automation-id='adventureButton']"
+            ).first
+            if btn.count() and btn.is_visible():
+                btn.click(timeout=5000)
+        except Exception:
+            pass
+        try:
+            af = page.locator("[data-automation-id='autofillWithResume']").first
+            af.wait_for(state="visible", timeout=6000)
+            break
+        except Exception:
+            page.wait_for_timeout(1000)
+
+    autofill_url = apply_url.rstrip("/") + "/apply/autofillWithResume"
+    af = page.locator("[data-automation-id='autofillWithResume']").first
+    if not (af.count() and af.is_visible()) and _account_scope(page) is page:
+        page.goto(autofill_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(3500)
+        af = page.locator("[data-automation-id='autofillWithResume']").first
+
+    if af.count() and af.is_visible():
+        af.click(timeout=8000)
+        page.wait_for_timeout(3000)
+
+    maybe_create_account(page, urllib.parse.urlparse(apply_url).netloc.split(".")[0])
+    maybe_sign_in(page, urllib.parse.urlparse(apply_url).netloc.split(".")[0])
+
+    if saved_draft_wizard_is_active(page):
+        return WorkdayEntryResult("upload_ready", marker="saved_draft")
+    upload = page.locator("[data-automation-id='file-upload-input-ref']").first
+    if upload.count():
+        return WorkdayEntryResult("upload_ready")
+    if _verification_required(page) or _workday_auth_gate_visible(page):
+        detail = _workday_auth_error(page)
+        return WorkdayEntryResult(
+            "auth_required", detail or "workday account access required"
+        )
+    if _workday_outage(page):
+        return WorkdayEntryResult(
+            "retryable", "workday service interruption; retry later", "outage"
+        )
+    return WorkdayEntryResult("retryable", "resume upload zone never appeared")
+
+
+def prepare_workday_resume_entry(page, resume_pdf: Path,
+                                 entry: WorkdayEntryResult) -> bool:
+    """Upload or refresh the resume for a Workday entry screen."""
+    if entry.marker == "saved_draft" or saved_draft_wizard_is_active(page):
+        return refresh_saved_resume(page, resume_pdf)
+    upload = page.locator("[data-automation-id='file-upload-input-ref']").first
+    upload.wait_for(state="attached", timeout=20000)
+    upload.set_input_files(str(resume_pdf))
+    page.wait_for_timeout(5000)
+    return True
+
+
 def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
     company_key = url.split("//")[1].split(".")[0]  # tenant subdomain
     result = {"ok": False, "submitted": False, "reason": "", "pages": [], "unanswered": []}
@@ -1343,143 +1457,82 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
         browser = pw.chromium.launch(headless=True)
         ctx = browser.new_context(viewport={"width": 1280, "height": 1400})
         page = configure_page(ctx.new_page())
-        page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(3500)
-        if _workday_outage(page):
-            result.update(retryable=True,
-                          reason="workday service interruption; retry later")
-            _shot(page, slug, "wd_outage")
+        account_apply_url = url.rstrip("/") + "/apply/autofillWithResume"
+        entry = enter_application_form(page, url)
+        if entry.state == "auth_required":
+            account_ok, account_reason = ensure_workday_account_access(
+                page, company_key, account_apply_url
+            )
+            if not account_ok:
+                result.update(ok=True, reason=account_reason,
+                              unanswered=["Workday account verification"])
+                _shot(page, slug, "account_gate")
+                browser.close()
+                return result
+            entry = enter_application_form(page, url)
+
+        if entry.state == "closed":
+            result["reason"] = entry.reason or "posting closed"
+            browser.close()
+            return result
+        if entry.state == "retryable":
+            result.update(retryable=True, reason=entry.reason)
+            _shot(page, slug, "wd_outage" if entry.marker == "outage" else "fail_upload")
+            browser.close()
+            return result
+        if entry.state == "auth_required":
+            result.update(ok=True, reason=entry.reason,
+                          unanswered=["Workday account verification"])
+            _shot(page, slug, "account_gate")
             browser.close()
             return result
 
-        # Apply -> autofill with resume
-        btn = page.locator("a[data-automation-id='adventureButton'], button[data-automation-id='adventureButton']").first
-        if not btn.count():
+        resume_current = False
+        try:
+            resume_current = prepare_workday_resume_entry(page, resume_pdf, entry)
+            if entry.marker == "saved_draft" and resume_current:
+                result["resume_refreshed"] = True
+        except Exception:
+            resume_current = False
+        if not resume_current:
+            if saved_draft_wizard_is_active(page):
+                result.update(
+                    ok=True,
+                    reason="needs correction: could not refresh saved resume attachment",
+                    unanswered=["Resume/CV attachment"],
+                )
+                _shot(page, slug, "resume_refresh_failed")
+                browser.close()
+                return result
+            if _verification_required(page):
+                result.update(
+                    ok=True,
+                    reason="workday account verification still pending at upload step",
+                    unanswered=["Workday account verification"],
+                )
+                _shot(page, slug, "account_gate")
+                browser.close()
+                return result
+            if _workday_auth_gate_visible(page):
+                detail = _workday_auth_error(page)
+                result.update(
+                    ok=True,
+                    reason=detail or "workday sign-in gate still blocking the application",
+                    unanswered=["Workday account sign-in"],
+                )
+                _shot(page, slug, "account_gate")
+                browser.close()
+                return result
             if _workday_outage(page):
                 result.update(retryable=True,
                               reason="workday service interruption; retry later")
                 _shot(page, slug, "wd_outage")
                 browser.close()
                 return result
-            result["reason"] = "apply button not found (posting closed?)"
+            result["reason"] = "resume upload zone never appeared"
+            _shot(page, slug, "fail_upload")
             browser.close()
             return result
-        # cookie banner steals the first click on some tenants
-        cb = page.locator("[data-automation-id='legalNoticeAcceptButton'], #onetrust-accept-btn-handler").first
-        try:
-            if cb.count() and cb.is_visible():
-                cb.click(timeout=3000)
-                page.wait_for_timeout(800)
-        except Exception:
-            pass
-        af = page.locator("[data-automation-id='autofillWithResume']").first
-        for attempt in range(3):
-            try:
-                btn.click(timeout=5000)
-            except Exception:
-                pass
-            try:
-                af.wait_for(state="visible", timeout=6000)
-                break
-            except Exception:
-                page.wait_for_timeout(1000)
-        # Some tenants (Medtronic) don't navigate on the Apply click: go directly
-        # to the canonical autofill route, which surfaces the account gate.
-        # NOTE: the account form may live in an IFRAME (Medtronic), so check frames.
-        apply_url = url.rstrip("/") + "/apply/autofillWithResume"
-        if not (af.count() and af.is_visible()) and \
-                _account_scope(page) is page:
-            page.goto(apply_url,
-                      wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(3500)
-        if not (af.count() and af.is_visible()) and not saved_draft_wizard_is_active(page):
-            account_ok, account_reason = ensure_workday_account_access(
-                page, company_key, apply_url
-            )
-            if not account_ok:
-                result.update(ok=True, reason=account_reason,
-                              unanswered=["Workday account verification"])
-                _shot(page, slug, "account_gate")
-                browser.close()
-                return result
-        maybe_create_account(page, company_key)
-        maybe_sign_in(page, company_key)
-        # after account creation/sign-in the autofill choice may render fresh
-        try:
-            af.wait_for(state="visible", timeout=8000)
-        except Exception:
-            pass
-        if af.count() and af.is_visible():
-            af.click(timeout=8000)
-            page.wait_for_timeout(3000)
-            # Medtronic ordering: the Create Account gate appears AFTER choosing
-            # autofill (debug trace 2026-08-09). Re-check it before expecting
-            # the upload zone.
-            maybe_create_account(page, company_key)
-            maybe_sign_in(page, company_key)
-        if not page.locator("[data-automation-id='file-upload-input-ref']").count() and \
-                not saved_draft_wizard_is_active(page):
-            account_ok, account_reason = ensure_workday_account_access(
-                page, company_key, apply_url
-            )
-            if not account_ok:
-                result.update(ok=True, reason=account_reason,
-                              unanswered=["Workday account verification"])
-                _shot(page, slug, "account_gate")
-                browser.close()
-                return result
-            try:
-                if af.count() and af.is_visible():
-                    af.click(timeout=8000)
-                    page.wait_for_timeout(3000)
-            except Exception:
-                pass
-        up = page.locator("[data-automation-id='file-upload-input-ref']").first
-        resume_current = False
-        try:
-            up.wait_for(state="attached", timeout=20000)
-            up.set_input_files(str(resume_pdf))
-            page.wait_for_timeout(5000)
-            resume_current = True
-        except Exception:
-            # Workday may resume an authenticated candidate directly into a
-            # saved wizard. In that state the initial upload choice no longer
-            # exists, but the normal per-page safety gates must still run.
-            if not saved_draft_wizard_is_active(page):
-                # Label a still-visible sign-in/verification gate honestly:
-                # the First American 2026-08-15 failure recorded "resume upload
-                # zone never appeared" while the screenshot showed the
-                # verification sign-in form. The wrong label buried the real,
-                # recoverable cause and settled the posting as failed.
-                if _verification_required(page):
-                    result.update(
-                        ok=True,
-                        reason="workday account verification still pending at upload step",
-                        unanswered=["Workday account verification"],
-                    )
-                    _shot(page, slug, "account_gate")
-                    browser.close()
-                    return result
-                if _workday_auth_gate_visible(page):
-                    detail = _workday_auth_error(page)
-                    result.update(
-                        ok=True,
-                        reason=detail or "workday sign-in gate still blocking the application",
-                        unanswered=["Workday account sign-in"],
-                    )
-                    _shot(page, slug, "account_gate")
-                    browser.close()
-                    return result
-                if _workday_outage(page):
-                    result.update(retryable=True,
-                                  reason="workday service interruption; retry later")
-                    _shot(page, slug, "wd_outage")
-                    browser.close()
-                    return result
-                result["reason"] = "resume upload zone never appeared"
-                _shot(page, slug, "fail_upload")
-                browser.close()
-                return result
 
         # wizard loop
         for page_no in range(MAX_PAGES):

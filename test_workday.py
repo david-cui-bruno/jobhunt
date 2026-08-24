@@ -405,14 +405,14 @@ class WorkdayAnswerTests(unittest.TestCase):
         page.inner_text.return_value = "Intern Program - Agentic AI Create Account"
         self.assertFalse(workday._workday_outage(page))
 
-        source = inspect.getsource(workday.apply_workday)
+        source = inspect.getsource(workday.enter_application_form)
         self.assertIn("_workday_outage", source)
         self.assertLess(
             source.index("_workday_outage"),
             source.index("apply button not found"),
         )
         self.assertIn("workday service interruption; retry later", source)
-        upload_failure = source[source.index("resume_current = False"):]
+        upload_failure = inspect.getsource(workday.apply_workday)
         self.assertLess(
             upload_failure.index("_workday_outage(page)"),
             upload_failure.index("resume upload zone never appeared"),
@@ -537,6 +537,136 @@ class WorkdayAnswerTests(unittest.TestCase):
             ["Brown University"],
             workday._multiselect_candidates(unrelated, "Brown University"),
         )
+
+
+APPLY_URL = "https://example.wd1.myworkdayjobs.com/jobs/job/example"
+
+
+class _EntryLocator:
+    def __init__(self, page, selector: str, count: int, visible: bool = True):
+        self.page = page
+        self.selector = selector
+        self.created_generation = page.generation
+        self._count = count
+        self._visible = visible
+        self.first = self
+        self.last = self
+
+    def count(self):
+        return self._count
+
+    def is_visible(self):
+        return self._visible and self._count > 0
+
+    def click(self, **kwargs):
+        if self.created_generation != self.page.generation:
+            self.page.stale_clicks.append(self.selector)
+        if "adventureButton" in self.selector:
+            self.page.apply_clicks += 1
+        if "autofillWithResume" in self.selector:
+            self.page.autofill_clicks += 1
+
+    def wait_for(self, **kwargs):
+        if not self.count():
+            raise TimeoutError(self.selector)
+
+    def set_input_files(self, value):
+        self.page.uploaded_files.append(value)
+
+    def inner_text(self):
+        return self.page.body_text
+
+
+class RecoveryThenApplicationPage:
+    def __init__(self):
+        self.goto_calls = []
+        self.generation = 0
+        self.apply_clicks = 0
+        self.autofill_clicks = 0
+        self.stale_clicks = []
+        self.uploaded_files = []
+        self.frames = [self]
+        self.url = "about:blank"
+
+    @property
+    def body_text(self):
+        if len(self.goto_calls) == 1:
+            return "Sign In Create Account"
+        return "Software Engineer Apply Autofill with Resume"
+
+    def goto(self, url, **kwargs):
+        self.goto_calls.append(url)
+        self.generation += 1
+        self.url = url
+
+    def wait_for_timeout(self, _ms):
+        return None
+
+    def inner_text(self, selector):
+        assert selector == "body"
+        return self.body_text
+
+    def locator(self, selector):
+        auth_stage = len(self.goto_calls) == 1
+        app_stage = len(self.goto_calls) >= 2
+        if selector == "body":
+            return _EntryLocator(self, selector, 1, True)
+        if "adventureButton" in selector:
+            return _EntryLocator(self, selector, 1 if app_stage else 0, app_stage)
+        if "legalNoticeAcceptButton" in selector or "onetrust" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        if "autofillWithResume" in selector:
+            return _EntryLocator(self, selector, 1 if app_stage else 0, app_stage)
+        if "file-upload-input-ref" in selector:
+            return _EntryLocator(self, selector, 1 if app_stage else 0, app_stage)
+        if "SignInWithEmailButton" in selector:
+            return _EntryLocator(self, selector, 1 if auth_stage else 0, auth_stage)
+        if "createAccountSubmitButton" in selector or "signInSubmitButton" in selector:
+            return _EntryLocator(self, selector, 1 if auth_stage else 0, auth_stage)
+        if "progressBarActiveStep" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        if "pageFooterNextButton" in selector or "formField-" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        return _EntryLocator(self, selector, 0, False)
+
+
+def test_successful_recovery_reenters_apply_and_autofill():
+    page = RecoveryThenApplicationPage()
+    first = workday.enter_application_form(page, APPLY_URL)
+    assert first.state == "auth_required"
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert page.goto_calls == [APPLY_URL, APPLY_URL]
+    assert page.apply_clicks == 1
+    assert page.autofill_clicks == 1
+    assert result.state == "upload_ready"
+
+
+def test_reentry_uses_only_fresh_locators_after_navigation():
+    page = RecoveryThenApplicationPage()
+    workday.enter_application_form(page, APPLY_URL)
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result.state == "upload_ready"
+    assert page.stale_clicks == []
+
+
+def test_saved_draft_entry_bypasses_initial_upload_and_refreshes_resume(monkeypatch, tmp_path):
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"pdf")
+    page = mock.Mock()
+    entry = workday.WorkdayEntryResult(state="upload_ready", marker="saved_draft")
+    monkeypatch.setattr(workday, "enter_application_form", lambda page, apply_url: entry)
+    monkeypatch.setattr(workday, "saved_draft_wizard_is_active", lambda page: True)
+    refresh = mock.Mock(return_value=True)
+    monkeypatch.setattr(workday, "refresh_saved_resume", refresh)
+
+    resume_current = workday.prepare_workday_resume_entry(page, resume, entry)
+
+    assert resume_current is True
+    refresh.assert_called_once_with(page, resume)
 
 
 if __name__ == "__main__":
