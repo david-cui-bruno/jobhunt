@@ -205,6 +205,7 @@ class SourceCoverageTests(unittest.TestCase):
     def test_advanced_degree_only_titles_are_filtered(self) -> None:
         for title in (
             "Machine Learning Engineer Intern - PhD",
+            "Generative AI Ph.D. Research Intern",
             "Doctoral Research Intern",
             "Software Engineer Intern - Master's Required",
             "Research Intern - Master’s Required",

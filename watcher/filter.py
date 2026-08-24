@@ -59,6 +59,7 @@ HARD_EXCLUDE_RES = [re.compile(p) for p in (
     r"\bchemical engineer", r"\bhardware engineer", r"\baccounting\b",
     r"\btax\b", r"\baudit", r"\bhr intern", r"\bmarketing\b", r"\bsales intern",
     r"\bsupply chain", r"\bfinance intern", r"\bactuar", r"\bphd\b",
+    r"(?<![a-z])ph\.?d\.?(?![a-z])",
     r"\bdoctoral\b", r"\bdoctorate\b", r"\bmaster'?s degree\b",
     r"\bmaster['\u2019]s\b", r"\bms/phd\b", r"\bmba intern",
     # non-software 'engineering intern' variants (2026-08-19 requeue audit:
