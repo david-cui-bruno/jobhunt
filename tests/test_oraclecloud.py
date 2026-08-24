@@ -1326,6 +1326,7 @@ class _OracleControlLocator:
             self.page.address._value = self.page.street
     def get_attribute(self, name): return self.attrs.get(name)
     def inner_text(self, timeout=None): return self.text
+    def evaluate(self, script): return self.attrs.get("tagName", "INPUT")
 
 
 class _OracleControlsPage:
@@ -1394,6 +1395,50 @@ def test_oracle_phone_ambiguous_candidates_fail_closed(monkeypatch):
     assert page.events == []
 
 
+def test_oracle_phone_aliases_returning_distinct_wrappers_for_same_input_fill_once(monkeypatch):
+    phone = _OracleControlLocator(None, "phone", attrs={"label": "Phone Number", "type": "tel"})
+
+    class AliasWrapperPage(_OracleControlsPage):
+        def get_by_label(self, label, exact=False):
+            normalized = label.lower()
+            if normalized in {"phone", "phone number", "mobile"}:
+                wrapper = _OracleControlLocator(self, f"{normalized}-wrapper", attrs={"type": "tel"})
+                wrapper.input_value = phone.input_value
+                wrapper.fill = phone.fill
+                return wrapper
+            return super().get_by_label(label, exact=exact)
+
+    page = AliasWrapperPage([phone]); phone.page = page
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"phone": "+1 (555) 010-2345", "name": {}, "links": {}})
+
+    oraclecloud._fill_basics(page)
+
+    assert phone.input_value() == "5550102345"
+    assert page.events == ["fill:phone:5550102345"]
+
+
+@pytest.mark.parametrize(
+    "attrs,expected",
+    [
+        ({"label": "Phone", "type": "tel", "aria-readonly": "false"}, "5550102345"),
+        ({"label": "Phone", "type": "tel", "aria-disabled": "false"}, "5550102345"),
+        ({"label": "Phone", "type": "tel", "readonly": ""}, ""),
+        ({"label": "Phone", "type": "tel", "disabled": ""}, ""),
+        ({"label": "Phone", "type": "tel", "aria-readonly": "true"}, ""),
+        ({"label": "Phone", "type": "tel", "aria-disabled": "true"}, ""),
+        ({"label": "Phone", "type": "tel", "tagName": "SELECT"}, ""),
+    ],
+)
+def test_oracle_phone_boolean_attrs_only_reject_true_or_present_native_attrs(monkeypatch, attrs, expected):
+    phone = _OracleControlLocator(None, "phone", attrs=attrs)
+    page = _OracleControlsPage([phone]); phone.page = page
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"phone": "5550102345", "name": {}, "links": {}})
+
+    oraclecloud._fill_basics(page)
+
+    assert phone.input_value() == expected
+
+
 def test_oracle_address_preserves_populated_line_without_keypress_or_click(monkeypatch):
     page = _OracleControlsPage(street="123 Example Ave")
     page.address._value = "Imported address"
@@ -1417,6 +1462,39 @@ def test_oracle_address_types_street_selects_unique_matching_visible_suggestion(
     assert page.address.input_value() == "123 Example Ave"
 
 
+def test_oracle_address_rejects_click_that_commits_different_value(monkeypatch):
+    page = _OracleControlsPage(street="123 Example Ave")
+
+    class WrongCommitSuggestion(_OracleControlLocator):
+        def click(self, timeout=None):
+            self.page.events.append(f"click:{self.name}")
+            self.page.address._value = "999 Wrong Rd"
+
+    page.suggestions = [WrongCommitSuggestion(page, "suggestion-1", text="123 Example Ave, Example City, ST")]
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"address": {"street": "123 Example Ave"}})
+
+    assert oraclecloud._fill_oracle_address_line1(page) is False
+
+    assert page.address.input_value() == ""
+
+
+def test_oracle_address_suggestions_query_uses_only_semantic_roles(monkeypatch):
+    page = _OracleControlsPage(street="123 Example Ave")
+    page.suggestions = [_OracleControlLocator(page, "suggestion-1", text="123 Example Ave, Example City, ST")]
+    selectors = []
+    original_locator = page.locator
+
+    def locator(selector):
+        selectors.append(selector)
+        return original_locator(selector)
+
+    page.locator = locator
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"address": {"street": "123 Example Ave"}})
+
+    assert oraclecloud._fill_oracle_address_line1(page) is True
+    assert selectors == ["[role='option'], [role=option], [role='menuitem']"]
+
+
 @pytest.mark.parametrize("suggestions", [[], ["456 Other Rd"], ["123 Example Ave", "123 Example Ave Apt 2"]])
 def test_oracle_address_suggestion_zero_nonmatching_or_ambiguous_fails_closed(monkeypatch, suggestions):
     page = _OracleControlsPage(street="123 Example Ave")
@@ -1425,8 +1503,32 @@ def test_oracle_address_suggestion_zero_nonmatching_or_ambiguous_fails_closed(mo
 
     assert oraclecloud._fill_oracle_address_line1(page) is False
 
-    assert page.address.input_value() == "123 Example Ave"
+    assert page.address.input_value() == ""
     assert not any(event.startswith("click:suggestion") for event in page.events)
+
+
+def test_oracle_address_failed_commit_blocks_adapter_before_next_and_surfaces_required_label(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("multipage_four")
+
+    def failed_address_attempt(page):
+        page.filled["Address Line 1"] = "123 Example Ave"
+        return False
+
+    original_evaluate = page.evaluate
+
+    def evaluate(script):
+        if script == oraclecloud.REQUIRED_EMPTY_JS and page.filled.get("Address Line 1"):
+            return ["Address Line 1"]
+        return original_evaluate(script)
+
+    monkeypatch.setattr(oraclecloud, "_fill_oracle_address_line1", failed_address_attempt)
+    monkeypatch.setattr(page, "evaluate", evaluate)
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-address-failed-commit", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert result["unanswered"] == ["Address Line 1"]
+    assert page.next_clicks == 0
 
 
 def test_oracle_owned_answer_filter_prevents_optional_phone_qa_failed(monkeypatch):

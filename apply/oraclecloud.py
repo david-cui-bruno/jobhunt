@@ -539,16 +539,33 @@ def _control_attr(loc, name: str) -> str:
         return ""
 
 
+def _has_control_attr(loc, name: str) -> bool:
+    try:
+        if hasattr(loc, "attrs") and name in getattr(loc, "attrs"):
+            return True
+        return loc.get_attribute(name) is not None
+    except Exception:
+        return False
+
+
 def _is_fillable_text_control(loc) -> bool:
     try:
         if not loc.is_visible():
             return False
     except Exception:
         return False
-    attrs = {name: _control_attr(loc, name).lower() for name in ("type", "role", "aria-readonly", "readonly", "disabled", "hidden")}
+    try:
+        tag_name = str(loc.evaluate("element => element.tagName") or "").lower()
+        if tag_name == "select":
+            return False
+    except Exception:
+        pass
+    attrs = {name: _control_attr(loc, name).lower() for name in ("type", "role", "aria-readonly", "aria-disabled", "hidden")}
     if attrs["role"] in {"combobox", "listbox", "button"}:
         return False
-    if any(attrs[name] for name in ("aria-readonly", "readonly", "disabled", "hidden")):
+    if attrs["aria-readonly"] == "true" or attrs["aria-disabled"] == "true" or attrs["hidden"]:
+        return False
+    if _has_control_attr(loc, "readonly") or _has_control_attr(loc, "disabled"):
         return False
     input_type = attrs["type"] or "text"
     return input_type in {"text", "tel", "", "search", "email", "number"}
@@ -559,19 +576,14 @@ def _fill_phone_if_visible(page, labels: tuple[str, ...], value: str) -> None:
     if not digits:
         return
     candidates = []
-    seen = set()
     for label in labels:
         try:
             locs = page.get_by_label(label, exact=False)
             for index in range(locs.count()):
                 loc = locs.first if locs.count() == 1 else locs.nth(index)
-                marker = getattr(loc, "name", None) or id(loc)
-                if marker in seen:
-                    continue
-                seen.add(marker)
                 if not _is_fillable_text_control(loc):
                     continue
-                if "country" in _control_attr(loc, "label").lower() or "country" in _control_attr(loc, "aria-label").lower():
+                if "country" in _control_attr(loc, "aria-label").lower():
                     continue
                 try:
                     if str(loc.input_value() or "").strip():
@@ -579,6 +591,8 @@ def _fill_phone_if_visible(page, labels: tuple[str, ...], value: str) -> None:
                 except Exception:
                     pass
                 candidates.append(loc)
+            if candidates:
+                break
         except Exception:
             continue
     if len(candidates) == 1:
@@ -608,37 +622,51 @@ def _fill_oracle_address_line1(page) -> bool:
             return False
     except Exception:
         return False
+    committed = False
+    attempted = False
     try:
-        field.press_sequentially(street, delay=20)
+        try:
+            field.press_sequentially(street, delay=20)
+            attempted = True
+        except Exception:
+            return False
+        try:
+            page.wait_for_timeout(600)
+        except Exception:
+            pass
+        matches = []
+        try:
+            options = page.locator("[role='option'], [role=option], [role='menuitem']")
+            target = _normal_control_text(street)
+            for index in range(options.count()):
+                option = options.nth(index)
+                if not option.is_visible():
+                    continue
+                text = option.inner_text(timeout=500)
+                if target and target in _normal_control_text(text):
+                    matches.append(option)
+        except Exception:
+            return False
+        if len(matches) != 1:
+            return False
+        try:
+            matches[0].click(timeout=1000)
+        except Exception:
+            return False
+        try:
+            committed_value = str(field.input_value() or "").strip()
+            committed = bool(committed_value) and _normal_control_text(street) in _normal_control_text(committed_value)
+        except Exception:
+            return False
+        return committed
     except Exception:
         return False
-    try:
-        page.wait_for_timeout(600)
-    except Exception:
-        pass
-    matches = []
-    try:
-        options = page.locator("[role='option'], [role=option], [role='menuitem'], li")
-        target = _normal_control_text(street)
-        for index in range(options.count()):
-            option = options.nth(index)
-            if not option.is_visible():
-                continue
-            text = option.inner_text(timeout=500)
-            if target and target in _normal_control_text(text):
-                matches.append(option)
-    except Exception:
-        return False
-    if len(matches) != 1:
-        return False
-    try:
-        matches[0].click(timeout=1000)
-    except Exception:
-        return False
-    try:
-        return bool(str(field.input_value() or "").strip())
-    except Exception:
-        return False
+    finally:
+        try:
+            if attempted and not committed:
+                field.fill("")
+        except Exception:
+            pass
 
 
 def _fill_basics(page) -> None:
