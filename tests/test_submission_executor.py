@@ -144,6 +144,33 @@ def test_executor_leaves_retryable_before_click_ready(tmp_path, monkeypatch) -> 
     assert rec["click_attempted"] == 0
 
 
+def test_executor_fails_retryable_before_click_at_retry_limit(tmp_path, monkeypatch) -> None:
+    conn, row = ready_row(tmp_path, ats="greenhouse")
+    conn.execute("UPDATE postings SET attempt_count=2 WHERE posting_id='one'")
+    conn.commit()
+    row = conn.execute(
+        "SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING(posting_id) WHERE p.posting_id='one'"
+    ).fetchone()
+    monkeypatch.setattr("submission.executor._posting_dead", lambda url: False)
+    monkeypatch.setattr("submission.executor.run_adapter", lambda payload: {
+        "outcome": "retryable_failure",
+        "ok": False,
+        "submitted": False,
+        "retryable": True,
+        "detected_ats": "greenhouse",
+        "reason": "network before click",
+        "click_attempted": False,
+    })
+
+    result = execute_claimed_posting(conn, row, lane=DIRECT, dry_run=False, worker_id="direct-1")
+
+    assert result["outcome"] == "retryable_failure"
+    assert tuple(conn.execute("SELECT status,outcome,attempt_count FROM postings WHERE posting_id='one'").fetchone()) == ("failed", "retryable_failure", 3)
+    rec = attempt(conn)
+    assert rec["outcome"] == "retryable_failure"
+    assert rec["click_attempted"] == 0
+
+
 def test_executor_adapter_exception_fails_closed_to_manual_uncertain(tmp_path, monkeypatch) -> None:
     conn, row = ready_row(tmp_path, ats="greenhouse")
     monkeypatch.setattr("submission.executor._posting_dead", lambda url: False)

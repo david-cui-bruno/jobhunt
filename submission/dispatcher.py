@@ -13,6 +13,7 @@ from submission.ashby_policy import can_attempt, ensure_lane_state, load_state, 
 from submission.database import DB, connect_tracker
 from submission.executor import execute_claimed_posting
 from submission.lanes import ASHBY, DIRECT, WORKDAY, LanePolicy, classify_url
+from submission.workday_tenant import workday_tenant_key
 
 LOG = logging.getLogger(__name__)
 AUTOMATIC_POLICIES = (DIRECT, WORKDAY)
@@ -102,12 +103,24 @@ def _is_pre_attempt_result(result: dict) -> bool:
     )
 
 
-def select_for_lane(db_path: Path = DB, policy: LanePolicy = DIRECT, limit: int | None = None) -> list[str]:
+def selection_key(policy: LanePolicy, url: str) -> str | None:
+    if policy.name == WORKDAY.name:
+        return workday_tenant_key(url)
+    return None
+
+
+def select_for_lane(
+    db_path: Path = DB,
+    policy: LanePolicy = DIRECT,
+    limit: int | None = None,
+    excluded_keys: set[str] | None = None,
+) -> list[str]:
     """Return ready posting IDs eligible for one automatic lane."""
     if not policy.automatic or policy.concurrency <= 0 or policy.attempts_per_cycle <= 0:
         return []
     remaining = policy.attempts_per_cycle if limit is None else min(limit, policy.attempts_per_cycle)
     selected: list[str] = []
+    selected_keys = set(excluded_keys or set())
     conn = connect_tracker(db_path)
     try:
         rows = conn.execute(
@@ -122,7 +135,12 @@ def select_for_lane(db_path: Path = DB, policy: LanePolicy = DIRECT, limit: int 
             _ats, lane = classify_url(row["url"])
             if lane.name != policy.name:
                 continue
+            key = selection_key(policy, row["url"])
+            if key and key in selected_keys:
+                continue
             selected.append(row["posting_id"])
+            if key:
+                selected_keys.add(key)
             if len(selected) >= remaining:
                 break
         return selected

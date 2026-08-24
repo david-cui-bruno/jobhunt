@@ -405,14 +405,14 @@ class WorkdayAnswerTests(unittest.TestCase):
         page.inner_text.return_value = "Intern Program - Agentic AI Create Account"
         self.assertFalse(workday._workday_outage(page))
 
-        source = inspect.getsource(workday.apply_workday)
+        source = inspect.getsource(workday.enter_application_form)
         self.assertIn("_workday_outage", source)
         self.assertLess(
             source.index("_workday_outage"),
             source.index("apply button not found"),
         )
         self.assertIn("workday service interruption; retry later", source)
-        upload_failure = source[source.index("resume_current = False"):]
+        upload_failure = inspect.getsource(workday.apply_workday)
         self.assertLess(
             upload_failure.index("_workday_outage(page)"),
             upload_failure.index("resume upload zone never appeared"),
@@ -537,6 +537,435 @@ class WorkdayAnswerTests(unittest.TestCase):
             ["Brown University"],
             workday._multiselect_candidates(unrelated, "Brown University"),
         )
+
+
+APPLY_URL = "https://example.wd1.myworkdayjobs.com/jobs/job/example"
+
+
+class _EntryLocator:
+    def __init__(self, page, selector: str, count: int, visible: bool = True):
+        self.page = page
+        self.selector = selector
+        self.created_generation = page.generation
+        self._count = count
+        self._visible = visible
+        self.first = self
+        self.last = self
+
+    def count(self):
+        return self._count
+
+    def is_visible(self):
+        return self._visible and self._count > 0
+
+    def click(self, **kwargs):
+        if self.created_generation != self.page.generation:
+            self.page.stale_clicks.append(self.selector)
+        if "adventureButton" in self.selector:
+            self.page.apply_clicks += 1
+        if "autofillWithResume" in self.selector:
+            self.page.autofill_clicks += 1
+
+    def wait_for(self, **kwargs):
+        if not self.count():
+            raise TimeoutError(self.selector)
+
+    def set_input_files(self, value):
+        self.page.uploaded_files.append(value)
+
+    def inner_text(self):
+        return self.page.body_text
+
+
+class RecoveryThenApplicationPage:
+    def __init__(self):
+        self.goto_calls = []
+        self.generation = 0
+        self.apply_clicks = 0
+        self.autofill_clicks = 0
+        self.stale_clicks = []
+        self.uploaded_files = []
+        self.frames = [self]
+        self.url = "about:blank"
+
+    @property
+    def body_text(self):
+        if len(self.goto_calls) == 1:
+            return "Sign In Create Account"
+        return "Software Engineer Apply Autofill with Resume"
+
+    def goto(self, url, **kwargs):
+        self.goto_calls.append(url)
+        self.generation += 1
+        self.url = url
+
+    def wait_for_timeout(self, _ms):
+        return None
+
+    def inner_text(self, selector):
+        assert selector == "body"
+        return self.body_text
+
+    def locator(self, selector):
+        auth_stage = len(self.goto_calls) == 1
+        app_stage = len(self.goto_calls) >= 2
+        if selector == "body":
+            return _EntryLocator(self, selector, 1, True)
+        if "adventureButton" in selector:
+            return _EntryLocator(self, selector, 1 if app_stage else 0, app_stage)
+        if "legalNoticeAcceptButton" in selector or "onetrust" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        if "autofillWithResume" in selector:
+            return _EntryLocator(self, selector, 1 if app_stage else 0, app_stage)
+        if "file-upload-input-ref" in selector:
+            return _EntryLocator(self, selector, 1 if app_stage else 0, app_stage)
+        if "SignInWithEmailButton" in selector:
+            return _EntryLocator(self, selector, 1 if auth_stage else 0, auth_stage)
+        if "createAccountSubmitButton" in selector or "signInSubmitButton" in selector:
+            return _EntryLocator(self, selector, 1 if auth_stage else 0, auth_stage)
+        if "progressBarActiveStep" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        if "pageFooterNextButton" in selector or "formField-" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        return _EntryLocator(self, selector, 0, False)
+
+
+class MissingApplyPage:
+    def __init__(
+        self,
+        body_text: str,
+        explicit_href: str | None = None,
+        *,
+        broad_apply_href: str | None = None,
+    ):
+        self._body_text = body_text
+        self.explicit_href = explicit_href
+        self.broad_apply_href = broad_apply_href
+        self.goto_calls = []
+        self.generation = 0
+        self.apply_clicks = 0
+        self.autofill_clicks = 0
+        self.stale_clicks = []
+        self.uploaded_files = []
+        self.frames = [self]
+        self.url = "about:blank"
+
+    @property
+    def body_text(self):
+        return self._body_text
+
+    def goto(self, url, **kwargs):
+        self.goto_calls.append(url)
+        self.generation += 1
+        self.url = url
+        if self.explicit_href and len(self.goto_calls) >= 2:
+            self._body_text = "Application Autofill with Resume"
+
+    def wait_for_timeout(self, _ms):
+        return None
+
+    def inner_text(self, selector):
+        assert selector == "body"
+        return self.body_text
+
+    def locator(self, selector):
+        if selector == "body":
+            return _EntryLocator(self, selector, 1, True)
+        if "href" in selector and "Apply" in selector:
+            return _HrefLocator(self, selector, self.explicit_href or self.broad_apply_href)
+        if "adventureButton" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        if "legalNoticeAcceptButton" in selector or "onetrust" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        if "autofillWithResume" in selector:
+            ready = len(self.goto_calls) >= 2
+            return _EntryLocator(self, selector, 1 if ready else 0, ready)
+        if "file-upload-input-ref" in selector:
+            ready = len(self.goto_calls) >= 2
+            return _EntryLocator(self, selector, 1 if ready else 0, ready)
+        if "SignInWithEmailButton" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        if "createAccountSubmitButton" in selector or "signInSubmitButton" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        if "progressBarActiveStep" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        if "pageFooterNextButton" in selector or "formField-" in selector:
+            return _EntryLocator(self, selector, 0, False)
+        return _EntryLocator(self, selector, 0, False)
+
+    def evaluate(self, script):
+        if self.explicit_href:
+            return self.explicit_href
+        return None
+
+
+class _HrefLocator(_EntryLocator):
+    def __init__(self, page, selector: str, href: str | None):
+        super().__init__(page, selector, 1 if href else 0, bool(href))
+        self.href = href
+
+    def get_attribute(self, name: str):
+        if name == "href":
+            return self.href
+        return None
+
+
+def entry_result_for_body(body_text: str) -> workday.WorkdayEntryResult:
+    return workday.enter_application_form(MissingApplyPage(body_text), APPLY_URL)
+
+
+def test_missing_apply_with_closed_marker_is_stale():
+    result = entry_result_for_body("This job is no longer available")
+    assert result == workday.WorkdayEntryResult("closed", "posting closed", "job is no longer available")
+
+
+def test_missing_apply_with_real_unavailable_posting_phrase_is_stale():
+    result = entry_result_for_body("This job posting is no longer available")
+    assert result == workday.WorkdayEntryResult(
+        "closed", "posting closed", "posting is no longer available"
+    )
+
+
+def test_missing_apply_without_closed_marker_is_retryable():
+    result = entry_result_for_body("Welcome to careers")
+    assert result.state == "retryable"
+    assert result.reason == "apply button not found"
+
+
+def test_missing_apply_uses_one_explicit_application_href_without_looping():
+    page = MissingApplyPage("Welcome to careers Apply", explicit_href="/jobs/job/example/apply")
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult(
+        "upload_ready", "used explicit application href fallback", "explicit_application_href"
+    )
+    assert page.goto_calls == [
+        APPLY_URL,
+        "https://example.wd1.myworkdayjobs.com/jobs/job/example/apply",
+    ]
+
+
+def test_missing_apply_ignores_apply_filters_text_fallback_and_remains_retryable():
+    page = MissingApplyPage(
+        "Welcome to careers Apply filters",
+        broad_apply_href="/jobs/job/example/apply?filter=true",
+    )
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.goto_calls == [APPLY_URL]
+
+
+def test_missing_apply_rejects_cross_host_application_href_and_remains_retryable():
+    page = MissingApplyPage(
+        "Welcome to careers Start Your Application",
+        explicit_href="https://other.wd1.myworkdayjobs.com/jobs/job/example/apply",
+    )
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.goto_calls == [APPLY_URL]
+
+
+def test_missing_apply_rejects_cross_posting_application_href_and_remains_retryable():
+    page = MissingApplyPage(
+        "Welcome to careers Start Your Application",
+        explicit_href="/jobs/job/different/apply",
+    )
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.goto_calls == [APPLY_URL]
+
+
+def test_missing_apply_accepts_location_segmented_same_requisition_with_apply():
+    apply_url = "https://example.wd1.myworkdayjobs.com/en-US/careers/job/NYC/Role_R123"
+    page = MissingApplyPage(
+        "Welcome to careers Start Your Application",
+        explicit_href="/en-US/careers/job/NYC/Role_R123/apply",
+    )
+
+    result = workday.enter_application_form(page, apply_url)
+
+    assert result == workday.WorkdayEntryResult(
+        "upload_ready", "used explicit application href fallback", "explicit_application_href"
+    )
+    assert page.goto_calls == [
+        apply_url,
+        "https://example.wd1.myworkdayjobs.com/en-US/careers/job/NYC/Role_R123/apply",
+    ]
+
+
+def test_missing_apply_rejects_location_segmented_different_requisition():
+    apply_url = "https://example.wd1.myworkdayjobs.com/en-US/careers/job/NYC/Role_R123"
+    page = MissingApplyPage(
+        "Welcome to careers Start Your Application",
+        explicit_href="/en-US/careers/job/NYC/Other_R999/apply",
+    )
+
+    result = workday.enter_application_form(page, apply_url)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.goto_calls == [apply_url]
+
+
+def test_missing_apply_rejects_https_to_http_application_href():
+    page = MissingApplyPage(
+        "Welcome to careers Start Your Application",
+        explicit_href="http://example.wd1.myworkdayjobs.com/jobs/job/example/apply",
+    )
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.goto_calls == [APPLY_URL]
+
+
+def test_workday_closed_entry_maps_to_stale_adapter_result(monkeypatch, tmp_path):
+    page = mock.Mock()
+    monkeypatch.setattr(workday, "sync_playwright", lambda: _FakePlaywrightContext(page))
+    monkeypatch.setattr(workday, "configure_page", lambda page: page)
+    monkeypatch.setattr(
+        workday,
+        "enter_application_form",
+        lambda page, apply_url: workday.WorkdayEntryResult(
+            "closed", "posting closed", "job is no longer available"
+        ),
+    )
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"pdf")
+
+    result = workday.apply_workday(APPLY_URL, resume, "slug", dry_run=True)
+
+    assert result["outcome"] == "stale"
+    assert result["retryable"] is False
+    assert result["click_attempted"] is False
+    assert result["reason"] == "posting closed: job is no longer available"
+
+
+def test_workday_retryable_entry_maps_to_retryable_adapter_result(monkeypatch, tmp_path):
+    page = mock.Mock()
+    monkeypatch.setattr(workday, "sync_playwright", lambda: _FakePlaywrightContext(page))
+    monkeypatch.setattr(workday, "configure_page", lambda page: page)
+    monkeypatch.setattr(
+        workday,
+        "enter_application_form",
+        lambda page, apply_url: workday.WorkdayEntryResult("retryable", "apply button not found"),
+    )
+    monkeypatch.setattr(workday, "_shot", lambda *args, **kwargs: None)
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"pdf")
+
+    result = workday.apply_workday(APPLY_URL, resume, "slug", dry_run=True)
+
+    assert result["outcome"] == "retryable_failure"
+    assert result["retryable"] is True
+    assert result["click_attempted"] is False
+    assert result["reason"] == "apply button not found"
+
+
+def test_successful_recovery_reenters_apply_and_autofill():
+    page = RecoveryThenApplicationPage()
+    first = workday.enter_application_form(page, APPLY_URL)
+    assert first.state == "auth_required"
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert page.goto_calls == [APPLY_URL, APPLY_URL]
+    assert page.apply_clicks == 1
+    assert page.autofill_clicks == 1
+    assert result.state == "upload_ready"
+
+
+def test_reentry_uses_only_fresh_locators_after_navigation():
+    page = RecoveryThenApplicationPage()
+    workday.enter_application_form(page, APPLY_URL)
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result.state == "upload_ready"
+    assert page.stale_clicks == []
+
+
+def test_saved_draft_entry_bypasses_initial_upload_and_refreshes_resume(monkeypatch, tmp_path):
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"pdf")
+    page = mock.Mock()
+    entry = workday.WorkdayEntryResult(state="upload_ready", marker="saved_draft")
+    monkeypatch.setattr(workday, "enter_application_form", lambda page, apply_url: entry)
+    monkeypatch.setattr(workday, "saved_draft_wizard_is_active", lambda page: True)
+    refresh = mock.Mock(return_value=True)
+    monkeypatch.setattr(workday, "refresh_saved_resume", refresh)
+
+    resume_current = workday.prepare_workday_resume_entry(page, resume, entry)
+
+    assert resume_current is True
+    refresh.assert_called_once_with(page, resume)
+
+
+class _FakePlaywrightContext:
+    def __init__(self, page):
+        self.page = page
+        self.chromium = self
+        self.browser = self
+        self.context = self
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def launch(self, **_kwargs):
+        return self.browser
+
+    def new_context(self, **_kwargs):
+        return self.context
+
+    def new_page(self):
+        return self.page
+
+    def close(self):
+        self.closed = True
+
+
+def _apply_with_second_entry_gate(monkeypatch, tmp_path, verification_required):
+    page = mock.Mock()
+    entries = [
+        workday.WorkdayEntryResult("auth_required", "workday account access required"),
+        workday.WorkdayEntryResult("auth_required", "still blocked detail"),
+    ]
+    monkeypatch.setattr(workday, "sync_playwright", lambda: _FakePlaywrightContext(page))
+    monkeypatch.setattr(workday, "configure_page", lambda page: page)
+    monkeypatch.setattr(workday, "enter_application_form", lambda page, apply_url: entries.pop(0))
+    monkeypatch.setattr(workday, "ensure_workday_account_access", lambda *args: (True, ""))
+    monkeypatch.setattr(workday, "_verification_required", lambda page: verification_required)
+    monkeypatch.setattr(workday, "_shot", lambda *args, **kwargs: None)
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"pdf")
+
+    return workday.apply_workday(APPLY_URL, resume, "slug", dry_run=True)
+
+
+def test_second_entry_auth_required_labels_verification_gate(monkeypatch, tmp_path):
+    result = _apply_with_second_entry_gate(monkeypatch, tmp_path, verification_required=True)
+
+    assert result["ok"] is True
+    assert result["reason"] == "still blocked detail"
+    assert result["unanswered"] == ["Workday account verification"]
+
+
+def test_second_entry_auth_required_labels_sign_in_gate(monkeypatch, tmp_path):
+    result = _apply_with_second_entry_gate(monkeypatch, tmp_path, verification_required=False)
+
+    assert result["ok"] is True
+    assert result["reason"] == "still blocked detail"
+    assert result["unanswered"] == ["Workday account sign-in"]
 
 
 if __name__ == "__main__":
