@@ -36,6 +36,9 @@ APPLY_SELECTORS = (
     "[data-bind*='apply'][role='button']",
 )
 
+APPLY_WAIT_TIMEOUT_MS = 10000
+APPLY_POLL_INTERVAL_MS = 500
+
 SUBMIT_SELECTORS = (
     "button:text-is('Submit')",
     "input[type='submit'][value='Submit']",
@@ -171,6 +174,23 @@ def _find_visible_apply(page):
     return None
 
 
+def _wait_for_visible_apply(page, *, timeout_ms: int = APPLY_WAIT_TIMEOUT_MS, poll_ms: int = APPLY_POLL_INTERVAL_MS):
+    elapsed_ms = 0
+    while elapsed_ms <= timeout_ms:
+        apply_button = _find_visible_apply(page)
+        if apply_button is not None:
+            return apply_button
+        if elapsed_ms >= timeout_ms:
+            break
+        interval = min(poll_ms, timeout_ms - elapsed_ms)
+        try:
+            page.wait_for_timeout(interval)
+        except Exception:
+            break
+        elapsed_ms += interval
+    return None
+
+
 def _find_exact_visible_submit(page):
     candidates = []
     for selector in SUBMIT_SELECTORS:
@@ -303,7 +323,7 @@ def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = Tru
             if _has_captcha_gate(page, body):
                 return _manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"])
 
-            apply_button = _find_visible_apply(page)
+            apply_button = _wait_for_visible_apply(page)
             if apply_button is None:
                 return _manual("unsupported Oracle tenant variant: apply control not found")
             apply_button.scroll_into_view_if_needed()

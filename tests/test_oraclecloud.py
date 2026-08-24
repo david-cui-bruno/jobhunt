@@ -221,7 +221,11 @@ class _FakePage:
         if selector == "input[type=file]":
             return _FakeLocator(self, "files", count=len(self.file_inputs))
         if selector in oraclecloud.APPLY_SELECTORS:
-            visible = self.variant not in {"unsupported", "closed"} and selector == "button:has-text('Apply')"
+            delayed_visible = self.variant == "delayed_apply" and len(self.waits) > 1 and selector == "button:has-text('Apply')"
+            visible = (
+                delayed_visible
+                or (self.variant not in {"unsupported", "closed", "delayed_apply"} and selector == "button:has-text('Apply')")
+            )
             return _FakeLocator(self, selector, visible=visible, count=1 if visible else 0, on_click=self._click_apply)
         if selector in oraclecloud.SUBMIT_SELECTORS:
             visible = self.variant not in {"missing_submit"} and selector == oraclecloud.SUBMIT_SELECTORS[0]
@@ -348,6 +352,19 @@ def test_oracle_dry_run_reaches_submit_boundary_without_click(fake_oracle, pdf):
     assert result["reason"] == "dry run - did not submit"
     assert result["unanswered"] == []
     assert result["artifact_refs"] == {"filled_form_screenshot": str(oraclecloud.SHOTS / "oracle-dry-filled.png")}
+    assert page.submit_clicks == 0
+
+
+def test_oracle_dry_run_waits_for_delayed_visible_apply(fake_oracle, pdf):
+    page = fake_oracle("delayed_apply")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-delayed-apply", dry_run=True)
+
+    assert page.apply_clicks == 1
+    assert page.waits
+    assert result["ok"] is True
+    assert result["submitted"] is False
+    assert result["reason"] == "dry run - did not submit"
     assert page.submit_clicks == 0
 
 
