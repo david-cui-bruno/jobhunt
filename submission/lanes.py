@@ -20,7 +20,7 @@ class LanePolicy:
 
 
 DIRECT = LanePolicy("direct", frozenset({"greenhouse", "lever", "workable", "rippling"}), 2, 8, True, True, True)
-WORKDAY = LanePolicy("workday", frozenset({"workday"}), 1, 2, True, True, True)
+WORKDAY = LanePolicy("workday", frozenset({"workday"}), 2, 4, True, True, True)
 ORACLE = LanePolicy("oracle", frozenset({"oraclecloud"}), 1, 2, True, True, True)
 ASHBY = LanePolicy("ashby", frozenset({"ashby"}), 1, 1, False, True, False)
 MANUAL = LanePolicy("manual", frozenset({"smartrecruiters"}), 0, 0, False, True, False)

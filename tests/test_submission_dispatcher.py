@@ -157,29 +157,55 @@ def test_direct_lane_never_exceeds_two_workers(dispatch_db, monkeypatch) -> None
     assert peak == 2
 
 
-def test_workday_lane_never_exceeds_one_worker(dispatch_db, monkeypatch) -> None:
-    from submission.dispatcher import dispatch_cycle
+def test_workday_lane_uses_two_workers_for_four_distinct_tenants(dispatch_db, tmp_path, monkeypatch) -> None:
+    from submission.dispatcher import dispatch_cycle, select_for_lane
+    from submission.lanes import ASHBY, DIRECT, WORKDAY
 
     active = 0
     peak = 0
+    attempted: list[str] = []
     lock = threading.Lock()
+    two_workers_active = threading.Event()
 
-    def fake_execute(*args, **kwargs):
+    def fake_execute(posting_id, lane, **kwargs):
         nonlocal active, peak
         with lock:
             active += 1
             peak = max(peak, active)
-        time.sleep(0.05)
+            attempted.append(posting_id)
+            if active == 2:
+                two_workers_active.set()
+        two_workers_active.wait(timeout=0.2)
         with lock:
             active -= 1
         return {"outcome": "submitted"}
 
     monkeypatch.setattr("submission.dispatcher.execute", fake_execute)
-    seed_many_workday(dispatch_db, count=4)
+    for idx, tenant in enumerate(("acme", "bravo", "charlie", "delta")):
+        seed_ready(
+            dispatch_db,
+            f"wd-{idx}",
+            f"https://{tenant}.wd5.myworkdayjobs.com/en-US/External/job/Role_R{idx}",
+        )
 
-    dispatch_cycle(dispatch_db)
+    results = dispatch_cycle(dispatch_db)
 
-    assert peak == 1
+    assert WORKDAY.concurrency == 2
+    assert WORKDAY.attempts_per_cycle == 4
+    assert DIRECT.concurrency == 2
+    assert DIRECT.attempts_per_cycle == 8
+    assert ASHBY.concurrency == 1
+    assert ASHBY.attempts_per_cycle == 1
+    assert peak == 2
+    assert sorted(attempted) == ["wd-0", "wd-1", "wd-2", "wd-3"]
+    assert sorted(result["posting_id"] for result in results) == ["wd-0", "wd-1", "wd-2", "wd-3"]
+
+    same_tenant_db = tmp_path / "same-tenant.db"
+    _create_dispatch_db(same_tenant_db)
+    seed_ready(same_tenant_db, "wd-same-1", "https://acme.wd5.myworkdayjobs.com/en-US/External/job/Same_R1")
+    seed_ready(same_tenant_db, "wd-same-2", "https://acme.wd5.myworkdayjobs.com/en-US/External/job/Same_R2")
+
+    assert select_for_lane(same_tenant_db, WORKDAY, limit=4) == ["wd-same-1"]
 
 
 def test_each_attempted_failure_consumes_direct_lane_attempt_slot(dispatch_db, monkeypatch) -> None:
