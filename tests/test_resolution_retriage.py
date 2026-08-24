@@ -153,6 +153,14 @@ def test_canonical_conflict_detects_applied_alias() -> None:
     assert canonical_conflict_reason(db, "wrapper", GREENHOUSE_ALIAS) == "canonical posting already applied"
 
 
+def test_canonical_conflict_detects_current_posting_application_even_when_ready() -> None:
+    db = conn()
+    seed_posting(db, "wrapper", GREENHOUSE_ALIAS, "ready")
+    db.execute("INSERT INTO applications (posting_id) VALUES ('wrapper')")
+
+    assert canonical_conflict_reason(db, "wrapper", GREENHOUSE_ALIAS) == "canonical posting already applied"
+
+
 def test_canonical_conflict_detects_active_submitting_claim() -> None:
     db = conn()
     seed_posting(db, "active", GREENHOUSE_URL, "submitting")

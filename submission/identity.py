@@ -83,9 +83,7 @@ def canonical_conflict_reason(conn: sqlite3.Connection, posting_id: str, url: st
     wanted = canonical_posting_key(posting_id, url)
 
     rows = conn.execute(
-        "SELECT p.posting_id,p.url FROM applications a JOIN postings p USING(posting_id) "
-        "WHERE p.posting_id<>?",
-        (posting_id,),
+        "SELECT p.posting_id,p.url FROM applications a JOIN postings p USING(posting_id)"
     ).fetchall()
     if any(canonical_posting_key(row[0], row[1]) == wanted for row in rows):
         return "canonical posting already applied"
