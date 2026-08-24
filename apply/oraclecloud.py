@@ -227,6 +227,18 @@ def _single_visible_exact_button(page, text: str):
     return None
 
 
+def _check_oracle_legal_disclaimer(page, legal) -> bool:
+    try:
+        legal.check(force=True, timeout=5000)
+        return legal.is_checked()
+    except Exception:
+        label = page.locator("label[for='legal-disclaimer-checkbox']")
+        if label.count() != 1 or not label.is_visible():
+            return False
+        label.click(timeout=5000)
+        return legal.is_checked()
+
+
 def _handle_anonymous_email_gate(page) -> dict | None:
     body = _body_text(page)
     page_url = getattr(page, "url", "")
@@ -248,7 +260,8 @@ def _handle_anonymous_email_gate(page) -> dict | None:
         return _manual("unsupported Oracle anonymous email gate: incomplete or ambiguous Next control")
 
     email.fill(str(PROFILE.get("email", "")))
-    legal.check(force=True, timeout=5000)
+    if not _check_oracle_legal_disclaimer(page, legal):
+        return _manual("unsupported Oracle anonymous email gate: incomplete gate shape")
     next_button.click(timeout=5000)
     for _ in range(10):
         try:
