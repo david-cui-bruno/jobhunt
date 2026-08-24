@@ -62,6 +62,9 @@ def _canonical_identity_material(posting_id: str, url: str) -> str:
         )
 
     if "greenhouse.io" in host:
+        path_match = re.search(r"/(?:jobs/)?(\d+)$", path)
+        if path_match:
+            return f"greenhouse:token:{urllib.parse.quote(path_match.group(1), safe='')}"
         token = _first_query_value(query, "token")
         if token and re.fullmatch(r"\d+", token):
             return f"greenhouse:token:{urllib.parse.quote(token, safe='')}"

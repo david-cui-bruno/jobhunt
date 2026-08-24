@@ -48,6 +48,33 @@ def test_greenhouse_token_key_is_independent_of_board_and_wrapper_host() -> None
     assert canonical_posting_key("board", board_direct) == canonical_posting_key("fallback", fallback_direct)
 
 
+def test_greenhouse_numeric_job_path_aliases_share_one_key() -> None:
+    board_path = "https://boards.greenhouse.io/figma/jobs/6131089004"
+    board_path_with_query = "https://boards.greenhouse.io/figma/jobs/6131089004?gh_jid=6131089004"
+    job_boards_path = "https://job-boards.greenhouse.io/figma/jobs/6131089004"
+    wrapper = "https://www.figma.com/careers/job?gh_jid=6131089004"
+
+    expected = canonical_posting_key("wrapper", wrapper)
+    assert canonical_posting_key("board-path", board_path) == expected
+    assert canonical_posting_key("board-path-query", board_path_with_query) == expected
+    assert canonical_posting_key("job-boards-path", job_boards_path) == expected
+
+
+def test_posting_already_applied_catches_greenhouse_numeric_path_alias() -> None:
+    conn = db()
+    conn.executemany("INSERT INTO postings VALUES (?,?,?,?)", [
+        ("submitted", "Figma", "https://boards.greenhouse.io/figma/jobs/6131089004", "submitted"),
+        ("alias", "Figma", "https://boards.greenhouse.io/figma/jobs/6131089004?gh_jid=6131089004", "ready"),
+    ])
+    conn.execute("INSERT INTO applications VALUES ('submitted')")
+
+    assert posting_already_applied(
+        conn,
+        "alias",
+        "https://job-boards.greenhouse.io/figma/jobs/6131089004",
+    ) is True
+
+
 def test_tracking_query_does_not_change_canonical_posting_key() -> None:
     direct = "https://jobs.lever.co/acme/11111111-1111-1111-1111-111111111111"
     tracked = direct + "?lever-source=github&utm_source=listing"
