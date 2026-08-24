@@ -782,6 +782,49 @@ def test_missing_apply_rejects_cross_posting_application_href_and_remains_retrya
     assert page.goto_calls == [APPLY_URL]
 
 
+def test_missing_apply_accepts_location_segmented_same_requisition_with_apply():
+    apply_url = "https://example.wd1.myworkdayjobs.com/en-US/careers/job/NYC/Role_R123"
+    page = MissingApplyPage(
+        "Welcome to careers Start Your Application",
+        explicit_href="/en-US/careers/job/NYC/Role_R123/apply",
+    )
+
+    result = workday.enter_application_form(page, apply_url)
+
+    assert result == workday.WorkdayEntryResult(
+        "upload_ready", "used explicit application href fallback", "explicit_application_href"
+    )
+    assert page.goto_calls == [
+        apply_url,
+        "https://example.wd1.myworkdayjobs.com/en-US/careers/job/NYC/Role_R123/apply",
+    ]
+
+
+def test_missing_apply_rejects_location_segmented_different_requisition():
+    apply_url = "https://example.wd1.myworkdayjobs.com/en-US/careers/job/NYC/Role_R123"
+    page = MissingApplyPage(
+        "Welcome to careers Start Your Application",
+        explicit_href="/en-US/careers/job/NYC/Other_R999/apply",
+    )
+
+    result = workday.enter_application_form(page, apply_url)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.goto_calls == [apply_url]
+
+
+def test_missing_apply_rejects_https_to_http_application_href():
+    page = MissingApplyPage(
+        "Welcome to careers Start Your Application",
+        explicit_href="http://example.wd1.myworkdayjobs.com/jobs/job/example/apply",
+    )
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.goto_calls == [APPLY_URL]
+
+
 def test_workday_closed_entry_maps_to_stale_adapter_result(monkeypatch, tmp_path):
     page = mock.Mock()
     monkeypatch.setattr(workday, "sync_playwright", lambda: _FakePlaywrightContext(page))

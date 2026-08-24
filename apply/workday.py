@@ -1359,23 +1359,42 @@ def workday_closed_marker(body_text: str) -> str | None:
     return next((marker for marker in CLOSED_MARKERS if marker in text), None)
 
 
-def _workday_posting_identity(path: str) -> str | None:
+def _safe_https_workday_location(parsed: urllib.parse.ParseResult) -> tuple[str, ...] | None:
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return None
+    try:
+        if parsed.port is not None:
+            return None
+    except ValueError:
+        return None
+    if not parsed.hostname:
+        return None
+    return (parsed.hostname.lower(),)
+
+
+def _workday_posting_segments(path: str) -> tuple[str, ...] | None:
     parts = [urllib.parse.unquote(part) for part in path.split("/") if part]
     for index, part in enumerate(parts[:-1]):
-        if part == "job" and parts[index + 1]:
-            return parts[index + 1]
-    return parts[-1] if parts else None
+        if part == "job" and parts[index + 1:]:
+            return tuple(parts[index + 1:])
+    return None
 
 
 def _same_workday_posting_url(current_url: str, fallback_url: str) -> bool:
     current = urllib.parse.urlparse(current_url)
     fallback = urllib.parse.urlparse(fallback_url)
-    if fallback.scheme not in {"http", "https"} or current.netloc != fallback.netloc:
+    current_location = _safe_https_workday_location(current)
+    fallback_location = _safe_https_workday_location(fallback)
+    if (current_location is None or fallback_location is None
+            or current_location != fallback_location):
         return False
-    return (
-        _workday_posting_identity(current.path)
-        == _workday_posting_identity(fallback.path)
-    )
+    current_segments = _workday_posting_segments(current.path)
+    fallback_segments = _workday_posting_segments(fallback.path)
+    if current_segments is None or fallback_segments is None:
+        return False
+    if fallback_segments[-1:] == ("apply",):
+        fallback_segments = fallback_segments[:-1]
+    return current_segments == fallback_segments
 
 
 def _explicit_application_href(page) -> str | None:
