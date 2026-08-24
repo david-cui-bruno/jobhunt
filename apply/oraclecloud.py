@@ -515,12 +515,20 @@ def _normal_control_text(value: str) -> str:
 
 
 def _owned_oracle_answer(answer: dict) -> bool:
-    label = _normal_control_text(answer.get("label") or "")
-    key = _normal_control_text(answer.get("id_or_name") or "")
+    return _owned_oracle_control(answer)
+
+
+def _owned_oracle_control(control: dict) -> bool:
+    label = _normal_control_text(control.get("label") or "")
+    key = _normal_control_text(control.get("id_or_name") or control.get("id") or control.get("name") or "")
     owned = {
-        "phone", "phone number", "mobile",
-        "address line 1", "address line 1 *", "street", "street address",
-        "zip", "zipcode", "zip code", "postal code",
+        "phone", "phone number", "mobile", "mobile phone", "mobile number",
+        "country",
+        "address line 1", "address line 2", "address line 3",
+        "street", "street address",
+        "zip", "zipcode", "zip code", "postal", "postal code",
+        "city", "state", "province", "state province", "state or province",
+        "county",
     }
     return label in owned or key in owned
 
@@ -687,11 +695,12 @@ def _run_shared_qa_passes(page, slug: str, url: str) -> tuple[list[str], list[st
     answers = None
     for qa_pass in range(3):
         controls = page.evaluate(qa.EXTRACT_JS)
+        shared_controls = [control for control in controls if not _owned_oracle_control(control)]
         if answers is None:
-            answers = qa.get_answers(controls, context={"slug": slug, "url": url})
+            answers = qa.get_answers(shared_controls, context={"slug": slug, "url": url})
         by_key = {}
         by_label = {}
-        for control in controls:
+        for control in shared_controls:
             if control.get("id"):
                 by_key[control.get("id")] = control
             if control.get("name"):
@@ -700,14 +709,16 @@ def _run_shared_qa_passes(page, slug: str, url: str) -> tuple[list[str], list[st
                 by_label.setdefault(str(control.get("label")).lower().strip(), control)
 
         todo = []
-        for answer in [answer for answer in answers if not _owned_oracle_answer(answer)]:
+        for answer in answers:
             control = by_key.get(answer.get("id_or_name"))
             if control is None:
                 label = str(answer.get("label") or answer.get("id_or_name") or "").lower().strip()
                 control = by_label.get(label)
+            if control is None and _owned_oracle_answer(answer):
+                continue
             if control is None or (not control.get("value") and not control.get("chosen")):
                 todo.append(answer)
-        newly_filled, failed = qa.fill_answers(page, controls, todo)
+        newly_filled, failed = qa.fill_answers(page, shared_controls, todo)
         failed = [item for item in failed if not _owned_oracle_answer({"label": item, "id_or_name": item})]
         filled.extend(newly_filled)
         try:

@@ -1237,6 +1237,56 @@ def test_oracle_click_timeout_after_marker_is_uncertain_non_retryable(fake_oracl
     assert result["submission_uncertain"] is True
 
 
+def test_shared_qa_passes_excludes_profile_owned_controls_by_control_label_with_dynamic_ids(monkeypatch):
+    controls = [
+        {"id": "oj-c-11", "name": "", "label": "Phone Number", "value": "", "chosen": ""},
+        {"id": "oj-c-12", "name": "", "label": "Address Line 1", "value": "", "chosen": ""},
+        {"id": "oj-c-13", "name": "", "label": "ZIP Code", "value": "", "chosen": ""},
+        {"id": "oj-c-14", "name": "", "label": "Work authorization", "value": "", "chosen": ""},
+        {"id": "oj-c-15", "name": "", "label": "Preferred work location", "value": "", "chosen": ""},
+    ]
+    get_answers_controls = []
+    fill_answers_controls = []
+    fill_todos = []
+
+    class Page:
+        def evaluate(self, script):
+            assert script == oraclecloud.qa.EXTRACT_JS
+            return [dict(control) for control in controls]
+        def wait_for_timeout(self, value): pass
+
+    def fake_get_answers(seen_controls, context):
+        get_answers_controls.append([control["label"] for control in seen_controls])
+        return [
+            {"id_or_name": "oj-c-14", "answer": "Yes"},
+            {"id_or_name": "oj-c-15", "answer": "Austin"},
+        ]
+
+    def fake_fill_answers(page, seen_controls, todo):
+        fill_answers_controls.append([control["label"] for control in seen_controls])
+        fill_todos.append([answer["id_or_name"] for answer in todo])
+        for answer in todo:
+            matched = next(control for control in controls if control["id"] == answer["id_or_name"])
+            matched["value"] = answer["answer"]
+        return [answer["id_or_name"] for answer in todo], []
+
+    monkeypatch.setattr(oraclecloud.qa, "get_answers", fake_get_answers)
+    monkeypatch.setattr(oraclecloud.qa, "fill_answers", fake_fill_answers)
+
+    filled, failed = oraclecloud._run_shared_qa_passes(Page(), "slug", ORACLE_JOB_URL)
+
+    assert get_answers_controls == [["Work authorization", "Preferred work location"]]
+    assert fill_answers_controls == [["Work authorization", "Preferred work location"], ["Work authorization", "Preferred work location"], ["Work authorization", "Preferred work location"]]
+    assert fill_todos == [["oj-c-14", "oj-c-15"], [], []]
+    assert controls[0]["value"] == ""
+    assert controls[1]["value"] == ""
+    assert controls[2]["value"] == ""
+    assert controls[3]["value"] == "Yes"
+    assert controls[4]["value"] == "Austin"
+    assert filled == ["oj-c-14", "oj-c-15"]
+    assert failed == []
+
+
 def test_shared_qa_passes_skip_populated_controls_but_fill_empty_and_label_only(monkeypatch):
     controls = [
         {"id": "address-line-1", "name": "", "label": "Address Line 1", "value": "Imported tenant address", "chosen": ""},
@@ -1262,9 +1312,9 @@ def test_shared_qa_passes_skip_populated_controls_but_fill_empty_and_label_only(
             self.pass_index += 1
 
     def fake_get_answers(seen_controls, context):
-        assert seen_controls == controls
+        assert seen_controls == [controls[2]]
         assert context == {"slug": "oracle-task-2", "url": ORACLE_JOB_URL}
-        return list(answers)
+        return [answers[2]]
 
     def fake_fill_answers(page, seen_controls, todo):
         fill_calls.append([answer["label"] for answer in todo])
@@ -1282,11 +1332,11 @@ def test_shared_qa_passes_skip_populated_controls_but_fill_empty_and_label_only(
 
     filled, failed = oraclecloud._run_shared_qa_passes(Page(), "oracle-task-2", ORACLE_JOB_URL)
 
-    assert fill_calls == [["City", "Start date"], [], []]
+    assert fill_calls == [["Start date"], [], []]
     assert controls[0]["value"] == "Imported tenant address"
-    assert controls[1]["value"] == "Austin"
+    assert controls[1]["value"] == ""
     assert controls[2]["value"] == "Immediately"
-    assert filled == ["City", "Start date"]
+    assert filled == ["Start date"]
     assert failed == []
 
 
