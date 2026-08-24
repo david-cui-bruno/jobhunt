@@ -45,15 +45,17 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
 - **Submission** is a resident local dispatcher (`submit_daemon.py`) polling every
   30 seconds. It groups ready postings by the shared ATS lane classifier:
   direct lanes for Greenhouse, Lever, Workable, and Rippling run with bounded
-  concurrency, Workday has its own single-worker lane, Ashby remains behind its
-  breaker policy, and unsupported ATSs park as manual. Lane policy separates
-  automatic submission from resume preparation: a `preparable-manual` row may
+  concurrency, Workday has its own two-worker lane with four attempts per cycle
+  and same-tenant co-selection blocked, Oracle has its own isolated lane, Ashby
+  remains behind its breaker policy, and unsupported ATSs park as manual. Lane
+  policy separates automatic submission from resume preparation: a
+  `preparable-manual` row may
   receive a tailored resume and safe attempt artifact, but its preparation
   destination is `manual`, never hidden in `ready`. Existing nonautomatic ready
   rows are reconciled to manual with an exact handoff reason before rollout.
   Headless Playwright adapters handle Greenhouse, Lever, Ashby, Workday,
-  Workable, SmartRecruiters, Rippling, plus WaaS founder messages and email
-  applications. The
+  Oracle Recruiting Cloud, Workable, SmartRecruiters, Rippling, plus WaaS
+  founder messages and email applications. The
   **form Q&A engine** (`apply/qa.py`) answers questions
   from the profile + story bank under a two-tier policy:
   - HARD-blocked (never auto-answered, even required): demographics,
@@ -110,9 +112,9 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   `last_error` compare-and-set guards. After apply, verify zero active canonical
   duplicate groups, zero active aliases of application ledger rows, zero
   offseason active rows, zero finished-attempt rows requeued, and that unresolved
-  or unsafe rows remain manual. Live Dreamwork backup, preview, apply,
-  resident-pipeline observation, and Sheet readback remain pending broad review
-  and coordinator execution.
+  or unsafe rows remain manual. The live Dreamwork rollout completed with a
+  mode-0600 backup, hash-preserving preview, bounded apply, integrity checks,
+  resident-pipeline observation, and Sheet synchronization.
 - **Workday recoverable-row requeue** is preview-first and limited to the two
   repaired Workday entry failure prefixes: `resume upload zone never appeared`
   and `apply button not found (posting closed?)`. Preview is the default and
@@ -130,9 +132,10 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   python3 scripts/requeue_workday_recoverable.py --db out/tracker.db --preview --json
   ```
 
-  Live steps remain pending coordinator approval. Before any live apply, create a
-  SQLite backup with mode `0600`, verify integrity on both files, and inspect the
-  preview JSON:
+  Live Workday requeue and dispatcher controls completed with mode-0600
+  backups, integrity checks, exact posting IDs, and service restoration. Before
+  any future live apply, create a SQLite backup with mode `0600`, verify
+  integrity on both files, and inspect the preview JSON:
 
   ```bash
   backup="${TMPDIR:-/tmp}/tracker-workday-requeue-$(date +%Y%m%d%H%M%S).db"

@@ -234,13 +234,14 @@ of mechanical-engineering co-ops and fall-term roles.</p>
   here can be irreversible (double-submits) or invisible (silent no-ops).</p>
 
 <h3>Per-ATS adapters <span class="mono" style="color:var(--cyan)">apply/*.py</span></h3>
-<p>Greenhouse · Lever · Ashby · Workday · Workable · SmartRecruiters · Rippling · email. Each
+<p>Greenhouse · Lever · Ashby · Workday · Oracle Recruiting Cloud · Workable · SmartRecruiters · Rippling · email. Each
 knows one vendor's DOM: where fields live, how uploads work, what a confirmed submission looks
 like. Detection routes by URL (with redirect-chasing for postings that link a homepage).</p>
 
 <div class="grid">
   <div class="card"><h4>ATS lanes</h4><p>Greenhouse, Lever, Workable, and Rippling share the
-  direct lane with bounded concurrency. Workday has a single-worker lane. Ashby remains behind
+  direct lane with bounded concurrency. Workday has a two-worker lane with four attempts per
+  cycle and same-tenant co-selection blocked. Oracle has an isolated lane. Ashby remains behind
   a breaker. Lane policy separates automatic submission from preparation: a
   <code>preparable-manual</code> row can receive a tailored resume and safe local artifact, then
   moves to <code>manual</code> rather than invisible <code>ready</code>. Existing nonautomatic ready
