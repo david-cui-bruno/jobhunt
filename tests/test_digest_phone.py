@@ -12,12 +12,83 @@ import digest  # noqa: E402
 import digest_replies  # noqa: E402
 
 
-def _collected(action=(), manual_ask=(), verify=(), notes=(), debt=None,
+def _collected(action=(), manual_ask=(), manual_finish=(), verify=(), notes=(), debt=None,
                stats=None):
     return {"action": list(action), "manual_ask": list(manual_ask),
-            "verify": list(verify), "notes": list(notes),
+            "manual_finish": list(manual_finish), "verify": list(verify), "notes": list(notes),
             "manual_debt": debt or {},
             "stats": stats or {"submitted_24h": 4, "ready": 2, "queued": 31}}
+
+
+class CollectClassificationTest(unittest.TestCase):
+    def test_verify_comes_from_uncertain_finished_attempt_and_manual_finish_is_separate(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("""
+            CREATE TABLE postings (
+                posting_id TEXT PRIMARY KEY, company TEXT, title TEXT, url TEXT,
+                status TEXT, last_error TEXT, first_seen INTEGER, last_attempt_at INTEGER,
+                outcome TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE inbox_events (
+                category TEXT, company TEXT, role TEXT, deadline TEXT,
+                action_url TEXT, summary TEXT, ts INTEGER
+            )
+        """)
+        from submission.attempts import ensure_submission_attempts
+        ensure_submission_attempts(conn)
+        conn.executemany(
+            "INSERT INTO postings VALUES (?,?,?,?,?,?,?,?,?)",
+            [
+                ("p1", "Uncertain Co", "SWE", "https://uncertain.example/job", "manual",
+                 "submit clicked but confirmation was not observed; verify possible prior submission",
+                 20, 20, ""),
+                ("p2", "Captcha Co", "SWE", "https://captcha.example/job", "manual",
+                 "Lever hCaptcha requires manual completion", 20, 20, ""),
+                ("p3", "Debt Co", "SWE", "https://debt.example/job", "manual",
+                 "no adapter for other", 20, 20, ""),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO submission_attempts (
+                attempt_id, posting_id, ats, lane, worker_id, browser_mode,
+                policy_revision, started_at, finished_at, outcome, click_attempted,
+                confirmation_observed
+            ) VALUES ('a1', 'p1', 'lever', 'lever', 'w', 'headless', 'test', 20, 21,
+                      'manual', 1, 0)
+            """
+        )
+
+        data = digest.collect(conn, since=10)
+
+        self.assertEqual([row[0] for row in data["verify"]], ["Uncertain Co"])
+        self.assertEqual([row[0] for row in data["manual_finish"]], ["Captcha Co"])
+        self.assertEqual(data["manual_debt"]["no adapter for"], 1)
+        self.assertFalse(data["manual_ask"])
+
+    def test_full_and_short_digest_include_manual_finish_without_raw_answer_or_local_paths(self):
+        d = _collected(
+            manual_finish=[
+                ("Captcha Co", "SWE", "https://captcha.example/job",
+                 "Lever hCaptcha requires manual completion"),
+            ],
+        )
+
+        full = digest.compose(d)
+        short = digest.compose_short(d)
+
+        self.assertIn("manual completion", full)
+        self.assertIn("Captcha Co", full)
+        self.assertIn("SWE", full)
+        self.assertIn("Lever hCaptcha requires manual completion", full)
+        self.assertIn("https://captcha.example/job", full)
+        self.assertIn("manual completion: 1", short)
+        self.assertIn("Sheet:", short)
+        self.assertNotIn("/Users/", short)
+        self.assertNotIn("Lever hCaptcha requires manual completion", short)
+        self.assertLessEqual(len(short), digest.SHORT_LIMIT)
 
 
 class ComposeShortTest(unittest.TestCase):

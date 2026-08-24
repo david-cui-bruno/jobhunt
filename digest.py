@@ -54,6 +54,29 @@ AGENT_DEBT_PREFIXES = (
     "JD page removed",
 )
 
+MANUAL_FINISH_PREFIXES = (
+    "needs manual Lever location selection",
+    "Lever hCaptcha requires manual completion",
+    "SmartRecruiters CAPTCHA requires manual completion",
+    "Ashby rejected the submission as possible spam",
+    "ashby automation disabled after spam rejection",
+    "prepared for manual completion:",
+)
+
+
+def _sheet_url() -> str:
+    state = ROOT / "out" / "sheet_tracker.json"
+    if state.exists():
+        try:
+            obj = json.loads(state.read_text())
+            if obj.get("url"):
+                return obj["url"]
+            if obj.get("spreadsheet_id"):
+                return f"https://docs.google.com/spreadsheets/d/{obj['spreadsheet_id']}"
+        except json.JSONDecodeError:
+            pass
+    return "https://docs.google.com/spreadsheets/d/jobhunt-tracker"
+
 
 def _state(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE TABLE IF NOT EXISTS scan_state (k TEXT PRIMARY KEY, v TEXT)")
@@ -71,20 +94,34 @@ def _since_ts(conn) -> int:
 
 def collect(conn, since: int) -> dict:
     manual_ask = []   # needs David's actual input
+    manual_finish = []
     manual_debt = {}  # agent-fixable, count by reason prefix
-    for company, title, url, err in conn.execute(
-        "SELECT company, title, url, COALESCE(last_error,'') FROM postings "
+    uncertain_sql = (
+        "EXISTS (SELECT 1 FROM submission_attempts sa "
+        "WHERE sa.posting_id=postings.posting_id AND sa.finished_at IS NOT NULL "
+        "AND sa.click_attempted=1 AND sa.confirmation_observed=0)"
+    )
+    for posting_id, company, title, url, err in conn.execute(
+        "SELECT posting_id, company, title, url, COALESCE(last_error,'') FROM postings "
         "WHERE status='manual' AND COALESCE(last_attempt_at, first_seen) > ? "
         "ORDER BY COALESCE(last_attempt_at, first_seen) DESC", (since,)):
+        uncertain = conn.execute(
+            f"SELECT 1 FROM postings WHERE posting_id=? AND {uncertain_sql}",
+            (posting_id,),
+        ).fetchone() is not None
+        if uncertain:
+            continue
         if any(err.startswith(p) for p in AGENT_DEBT_PREFIXES):
             key = next(p for p in AGENT_DEBT_PREFIXES if err.startswith(p))
             manual_debt[key] = manual_debt.get(key, 0) + 1
+        elif any(err.startswith(p) for p in MANUAL_FINISH_PREFIXES):
+            manual_finish.append((company, title, url, err))
         else:
             manual_ask.append((company, title, url, err))
 
     verify = conn.execute(
         "SELECT company, title, url FROM postings "
-        "WHERE outcome='submitted' AND status='manual' AND COALESCE(last_attempt_at, first_seen) > ?",
+        f"WHERE status='manual' AND COALESCE(last_attempt_at, first_seen) > ? AND {uncertain_sql}",
         (since,)).fetchall()
 
     action = conn.execute(
@@ -119,7 +156,8 @@ def collect(conn, since: int) -> dict:
         queues = queue_metrics(conn)
     except sqlite3.OperationalError:
         queues = []
-    return {"manual_ask": manual_ask, "manual_debt": manual_debt, "verify": verify,
+    return {"manual_ask": manual_ask, "manual_finish": manual_finish,
+            "manual_debt": manual_debt, "verify": verify,
             "action": action, "stats": stats, "notes": [n for n in notes if n],
             "attempt_metrics": ats_metrics, "queue_metrics": queues,
             "ashby_breaker": _ashby_breaker_state(conn)}
@@ -202,6 +240,12 @@ def compose(d: dict) -> str | None:
         sections.append(
             "stuck applications (reply with answers and i'll retry, or say skip):\n" + "\n".join(lines))
 
+    if d.get("manual_finish"):
+        lines = []
+        for company, title, url, err in d["manual_finish"]:
+            lines.append(f"• {company} - {title[:55]}\n  action: {err[:180]}\n  {url}")
+        sections.append("manual completion needed:\n" + "\n".join(lines))
+
     if d["verify"]:
         lines = [f"• {c} — {t[:55]}\n  {u}" for c, t, u in d["verify"][:5]]
         sections.append("might have submitted, couldn't confirm (check if you care):\n" + "\n".join(lines))
@@ -263,6 +307,14 @@ def compose_short(d: dict) -> str | None:
         sections.append("stuck (reply \"<company>: <answer>\" or \"skip <company>\"):\n"
                         + "\n".join(lines))
 
+    if d.get("manual_finish"):
+        count = len(d["manual_finish"])
+        sample = ", ".join(company for company, _title, _url, _err in d["manual_finish"][:3])
+        line = f"manual completion: {count}"
+        if sample:
+            line += f" ({sample})"
+        sections.append(line)
+
     if d["verify"]:
         lines = [f"• {c} — {t[:45]}" for c, t, _u in d["verify"][:5]]
         sections.append("maybe submitted, unconfirmed:\n" + "\n".join(lines))
@@ -283,7 +335,7 @@ def compose_short(d: dict) -> str | None:
     if debt:
         tail += f" · {debt} stuck on my side"
     body = ("hey — jobhunt daily:\n\n" + "\n\n".join(sections) + f"\n\n{tail}\n"
-            "(full links in the email · ask me \"jobhunt status\" anytime)")
+            f"Sheet: {_sheet_url()}")
     return body[:SHORT_LIMIT]
 
 
