@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -38,6 +39,10 @@ APPLY_SELECTORS = (
 
 APPLY_WAIT_TIMEOUT_MS = 10000
 APPLY_POLL_INTERVAL_MS = 500
+ORACLE_IDENTITY_SUBJECT = "Please confirm your identity"
+ORACLE_IDENTITY_FROM = "Amex Careers <careers@recruitment.americanexpress.com>"
+ORACLE_IDENTITY_BODY_PHRASE = "confirm your identity using the one-time passcode below:"
+ORACLE_IDENTITY_CLOCK_TOLERANCE_MS = 30000
 
 SUBMIT_SELECTORS = (
     "button:text-is('Submit')",
@@ -227,6 +232,127 @@ def _single_visible_exact_button(page, text: str):
     return None
 
 
+def _message_headers(full: dict) -> dict[str, str]:
+    headers = ((full.get("payload") or {}).get("headers") or []) if isinstance(full, dict) else []
+    return {str(h.get("name", "")).lower(): str(h.get("value", "")) for h in headers if isinstance(h, dict)}
+
+
+def _message_matches_profile_address(headers: dict[str, str]) -> bool:
+    profile_email = str(PROFILE.get("email", "")).strip().lower()
+    return bool(profile_email and profile_email in headers.get("to", "").lower())
+
+
+def _extract_oracle_identity_code(text: str) -> str | None:
+    if ORACLE_IDENTITY_BODY_PHRASE not in text:
+        return None
+    codes = re.findall(r"\b\d{6}\b", text)
+    if len(codes) != 1:
+        return None
+    return codes[0]
+
+
+def _fetch_oracle_identity_code(requested_at_ms: int, timeout_s: int = 60) -> str | None:
+    notify = ROOT / "notify"
+    if str(notify) not in sys.path:
+        sys.path.insert(0, str(notify))
+    try:
+        import mailer
+    except Exception:
+        return None
+
+    deadline = time.time() + max(timeout_s, 0)
+    query = "subject:(Please confirm your identity) newer_than:1h"
+    first = True
+    while first or time.time() < deadline:
+        first = False
+        try:
+            data = mailer._call(f"/messages?q={query.replace(' ', '%20')}&maxResults=10")
+            messages = []
+            for msg in data.get("messages", [])[:10]:
+                full = mailer._call(f"/messages/{msg['id']}?format=full")
+                messages.append(full)
+            messages.sort(key=lambda m: int(m.get("internalDate", 0) or 0), reverse=True)
+            for full in messages[:5]:
+                internal_ms = int(full.get("internalDate", 0) or 0)
+                if internal_ms < requested_at_ms - ORACLE_IDENTITY_CLOCK_TOLERANCE_MS:
+                    continue
+                headers = _message_headers(full)
+                if headers.get("subject") != ORACLE_IDENTITY_SUBJECT:
+                    continue
+                if headers.get("from") != ORACLE_IDENTITY_FROM:
+                    continue
+                if not _message_matches_profile_address(headers):
+                    continue
+                text = mailer.extract_plain(full) or full.get("snippet", "") or ""
+                code = _extract_oracle_identity_code(text)
+                if code:
+                    return code
+            if timeout_s <= 0:
+                break
+        except Exception:
+            return None
+        time.sleep(3)
+    return None
+
+
+def _is_oracle_identity_gate(page) -> bool:
+    page_url = getattr(page, "url", "")
+    if not (page_url.endswith("/apply/email") or page_url.endswith("/apply/email/")):
+        return False
+    body = _body_text(page)
+    return "Confirm Your Identity" in body and "The verification code was sent to this email address:" in body
+
+
+def _find_identity_pin_inputs(page):
+    pins = []
+    for digit in range(1, 7):
+        selector = f"#pin-code-{digit}"
+        loc = page.locator(selector)
+        if loc.count() != 1 or not loc.is_visible():
+            return None
+        if (loc.get_attribute("type") or "") != "number":
+            return None
+        if (loc.get_attribute("autocomplete") or "") != "off":
+            return None
+        expected_label = f"Enter verification code digit {digit} of six."
+        if (loc.get_attribute("aria-label") or "") != expected_label:
+            return None
+        pins.append(loc)
+    return pins
+
+
+def _handle_oracle_identity_gate(page, requested_at_ms: int) -> dict | None:
+    if not _is_oracle_identity_gate(page):
+        return None
+    code = _fetch_oracle_identity_code(requested_at_ms, timeout_s=60)
+    if not code or not re.fullmatch(r"\d{6}", code):
+        return _manual("Oracle identity verification code was absent, ambiguous, malformed, stale, or unavailable")
+    pins = _find_identity_pin_inputs(page)
+    if pins is None:
+        return _manual("Oracle identity verification controls were missing or ambiguous")
+    verify = _single_visible_exact_button(page, "VERIFY")
+    if verify is None:
+        return _manual("Oracle identity verification Verify control was missing or ambiguous")
+    for loc, digit in zip(pins, code):
+        loc.fill(digit)
+    verify.click(timeout=5000)
+    for _ in range(10):
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            break
+        body = _body_text(page)
+        if _has_account_gate(body):
+            return _manual("Oracle account required for application", ["Oracle account required"])
+        if _has_captcha_gate(page, body):
+            return _manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"])
+        if _is_oracle_identity_gate(page):
+            return _manual("Oracle identity verification was rejected or unchanged")
+        if _find_resume_input(page) is not None:
+            return None
+    return _manual("Oracle identity verification did not advance to resume upload")
+
+
 def _check_oracle_legal_disclaimer(page, legal) -> bool:
     try:
         legal.check(force=True, timeout=5000)
@@ -268,6 +394,7 @@ def _handle_anonymous_email_gate(page) -> dict | None:
     email.fill(str(PROFILE.get("email", "")))
     if not _check_oracle_legal_disclaimer(page, legal):
         return _manual("unsupported Oracle anonymous email gate: incomplete gate shape")
+    requested_at_ms = int(time.time() * 1000)
     next_button.click(timeout=5000)
     for _ in range(10):
         try:
@@ -279,6 +406,9 @@ def _handle_anonymous_email_gate(page) -> dict | None:
             return _manual("Oracle account required for application", ["Oracle account required"])
         if _has_captcha_gate(page, body):
             return _manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"])
+        identity_result = _handle_oracle_identity_gate(page, requested_at_ms)
+        if identity_result is not None:
+            return identity_result
         if _find_resume_input(page) is not None:
             return None
     return None

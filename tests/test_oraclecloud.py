@@ -1,4 +1,5 @@
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -138,6 +139,8 @@ class _FakeLocator:
     def nth(self, index):
         if self.name == "next_buttons":
             return self.page.next_buttons[index]
+        if self.name == "verify_buttons":
+            return self.page.verify_buttons[index]
         return self.page.file_inputs[index]
 
     def count(self):
@@ -203,6 +206,7 @@ class _FakePage:
         self.filled = {}
         self.checked = {}
         self.next_clicks = 0
+        self.verify_clicks = 0
         self.role_queries = []
         self.uploaded_to = None
         self.uploaded_file = None
@@ -241,6 +245,16 @@ class _FakePage:
             return self.confirmation_body
         if self.variant.startswith("email_gate") and not self.next_clicks:
             return "You don't need to have an account Email Address I agree with the terms and conditions Next"
+        if self.variant.startswith("email_gate_identity") and self.next_clicks and not self.verify_clicks:
+            return (
+                "Confirm Your Identity The verification code was sent to this email address: "
+                "Send New Code VERIFY"
+            )
+        if self.variant == "email_gate_identity_unchanged" and self.verify_clicks:
+            return (
+                "Confirm Your Identity The verification code was sent to this email address: "
+                "Send New Code VERIFY"
+            )
         return "Example application form"
 
     def locator(self, selector):
@@ -262,6 +276,11 @@ class _FakePage:
                 "email_gate_legal_label_misses_proxy_toggles",
                 "email_gate_missing_legal_proxy",
                 "email_gate_ambiguous_legal_proxy",
+                "email_gate_identity",
+                "email_gate_identity_missing_pin",
+                "email_gate_identity_ambiguous_pin",
+                "email_gate_identity_ambiguous_verify",
+                "email_gate_identity_unchanged",
             } and not self.next_clicks
             return _FakeLocator(self, "primary-email", visible=present, count=1 if present else 0)
         if selector == "#legal-disclaimer-checkbox":
@@ -280,8 +299,25 @@ class _FakePage:
                 "email_gate_legal_label_misses_proxy_toggles",
                 "email_gate_missing_legal_proxy",
                 "email_gate_ambiguous_legal_proxy",
+                "email_gate_identity",
+                "email_gate_identity_missing_pin",
+                "email_gate_identity_ambiguous_pin",
+                "email_gate_identity_ambiguous_verify",
+                "email_gate_identity_unchanged",
             } and not self.next_clicks
             return _FakeLocator(self, "legal-disclaimer-checkbox", visible=False, count=1 if present else 0)
+        if selector.startswith("#pin-code-"):
+            if not self.variant.startswith("email_gate_identity") or not self.next_clicks or self.verify_clicks:
+                return _FakeLocator(self, selector, visible=False, count=0)
+            digit = selector.rsplit("-", 1)[-1]
+            if self.variant == "email_gate_identity_missing_pin" and digit == "6":
+                return _FakeLocator(self, selector, visible=False, count=0)
+            count = 2 if self.variant == "email_gate_identity_ambiguous_pin" and digit == "3" else 1
+            return _FakeLocator(self, selector, visible=True, count=count, attrs={
+                "type": "number",
+                "autocomplete": "off",
+                "aria-label": f"Enter verification code digit {digit} of six.",
+            })
         if selector == "label[for='legal-disclaimer-checkbox']":
             if not self.variant.startswith("email_gate") or self.next_clicks:
                 return _FakeLocator(self, "legal-disclaimer-label", visible=False, count=0)
@@ -353,6 +389,12 @@ class _FakePage:
                 count = 1
             self.next_buttons = [_FakeLocator(self, "next", visible=True, on_click=self._click_next) for _ in range(count)]
             return _FakeLocator(self, "next_buttons", visible=count > 0, count=count)
+        if role == "button" and str(name).upper() == "VERIFY" and exact is True:
+            if not self.variant.startswith("email_gate_identity") or not self.next_clicks or self.verify_clicks:
+                return _FakeLocator(self, "verify_buttons", visible=False, count=0)
+            count = 2 if self.variant == "email_gate_identity_ambiguous_verify" else 1
+            self.verify_buttons = [_FakeLocator(self, "verify", visible=True, on_click=self._click_verify) for _ in range(count)]
+            return _FakeLocator(self, "verify_buttons", visible=count > 0, count=count)
         return _FakeLocator(self, str(name or role), count=0, visible=False)
 
     def get_by_label(self, label, exact=False):
@@ -389,7 +431,15 @@ class _FakePage:
 
     def _click_next(self):
         self.next_clicks += 1
-        self.url = f"{ORACLE_JOB_URL}/apply/resume"
+        if self.variant.startswith("email_gate_identity"):
+            self.url = f"{ORACLE_JOB_URL}/apply/email"
+        else:
+            self.url = f"{ORACLE_JOB_URL}/apply/resume"
+
+    def _click_verify(self):
+        self.verify_clicks += 1
+        if self.variant != "email_gate_identity_unchanged":
+            self.url = f"{ORACLE_JOB_URL}/apply/resume"
 
     def _click_submit(self):
         self.submit_clicks += 1
@@ -493,6 +543,124 @@ def test_oracle_anonymous_email_gate_advances_to_resume_without_submit(fake_orac
     assert result["reason"] == "dry run - did not submit"
     assert page.submit_clicks == 0
 
+
+
+def test_oracle_identity_code_gate_fills_six_digits_and_advances_to_resume(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("email_gate_identity")
+    monkeypatch.setattr(oraclecloud, "_fetch_oracle_identity_code", lambda requested_at_ms, timeout_s=60: "123456")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-identity", dry_run=True)
+
+    assert page.next_clicks == 1
+    assert page.filled["#pin-code-1"] == "1"
+    assert page.filled["#pin-code-6"] == "6"
+    assert page.verify_clicks == 1
+    assert "click:Send New Code" not in page.events
+    assert page.uploaded_to == "resume"
+    assert result["reason"] == "dry run - did not submit"
+    assert page.submit_clicks == 0
+
+
+def test_oracle_identity_code_gate_rejects_absent_stale_or_malformed_code(fake_oracle, pdf, monkeypatch):
+    for code in (None, "12345", "123456 654321"):
+        page = fake_oracle("email_gate_identity")
+        monkeypatch.setattr(oraclecloud, "_fetch_oracle_identity_code", lambda requested_at_ms, timeout_s=60, code=code: code)
+
+        result = apply_oraclecloud(ORACLE_JOB_URL, pdf, f"oracle-code-{code}", dry_run=True)
+
+        assert result["outcome"] == "manual"
+        assert "Oracle identity verification" in result["reason"]
+        assert page.verify_clicks == 0
+        assert page.uploaded_to is None
+        assert page.submit_clicks == 0
+
+
+def test_oracle_identity_code_fetch_rejects_stale_ambiguous_malformed_and_gmail_errors(monkeypatch):
+    class FakeMailer:
+        def __init__(self, messages):
+            self.messages = messages
+
+        def _call(self, path):
+            if path.startswith("/messages?"):
+                return {"messages": [{"id": key} for key in self.messages]}
+            key = path.split("/messages/", 1)[1].split("?", 1)[0]
+            value = self.messages[key]
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        def extract_plain(self, full):
+            return full.get("body", "")
+
+    def install_mailer(messages):
+        monkeypatch.setitem(sys.modules, "mailer", FakeMailer(messages))
+
+    profile_email = oraclecloud.PROFILE["email"]
+    good = {
+        "internalDate": "2000",
+        "payload": {"headers": [
+            {"name": "Subject", "value": "Please confirm your identity"},
+            {"name": "From", "value": "Amex Careers <careers@recruitment.americanexpress.com>"},
+            {"name": "To", "value": profile_email},
+        ]},
+        "body": "confirm your identity using the one-time passcode below: 123456",
+    }
+    install_mailer({"good": good})
+    assert oraclecloud._fetch_oracle_identity_code(1900, timeout_s=0) == "123456"
+
+    stale = dict(good, internalDate="1000")
+    install_mailer({"stale": stale})
+    assert oraclecloud._fetch_oracle_identity_code(40000, timeout_s=0) is None
+
+    ambiguous = dict(good, body="confirm your identity using the one-time passcode below: 123456 and 654321")
+    install_mailer({"ambiguous": ambiguous})
+    assert oraclecloud._fetch_oracle_identity_code(1900, timeout_s=0) is None
+
+    malformed = dict(good, body="confirm your identity using the one-time passcode below: 12345")
+    install_mailer({"malformed": malformed})
+    assert oraclecloud._fetch_oracle_identity_code(1900, timeout_s=0) is None
+
+    install_mailer({"boom": RuntimeError("gmail failed")})
+    assert oraclecloud._fetch_oracle_identity_code(1900, timeout_s=0) is None
+
+
+def test_oracle_identity_code_gate_rejects_missing_or_ambiguous_pin_controls(fake_oracle, pdf, monkeypatch):
+    monkeypatch.setattr(oraclecloud, "_fetch_oracle_identity_code", lambda requested_at_ms, timeout_s=60: "123456")
+    for variant in ("email_gate_identity_missing_pin", "email_gate_identity_ambiguous_pin"):
+        page = fake_oracle(variant)
+
+        result = apply_oraclecloud(ORACLE_JOB_URL, pdf, f"oracle-{variant}", dry_run=True)
+
+        assert result["outcome"] == "manual"
+        assert "Oracle identity verification" in result["reason"]
+        assert page.verify_clicks == 0
+        assert page.submit_clicks == 0
+
+
+def test_oracle_identity_code_gate_rejects_ambiguous_verify_without_send_new_code(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("email_gate_identity_ambiguous_verify")
+    monkeypatch.setattr(oraclecloud, "_fetch_oracle_identity_code", lambda requested_at_ms, timeout_s=60: "123456")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-ambiguous-verify", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert "Oracle identity verification" in result["reason"]
+    assert page.verify_clicks == 0
+    assert "click:Send New Code" not in page.events
+    assert page.submit_clicks == 0
+
+
+def test_oracle_identity_code_gate_rejects_unchanged_gate_after_verify(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("email_gate_identity_unchanged")
+    monkeypatch.setattr(oraclecloud, "_fetch_oracle_identity_code", lambda requested_at_ms, timeout_s=60: "123456")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-identity-unchanged", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert "Oracle identity verification" in result["reason"]
+    assert page.verify_clicks == 1
+    assert page.uploaded_to is None
+    assert page.submit_clicks == 0
 
 def test_oracle_anonymous_email_gate_clicks_exact_visible_legal_proxy_when_hidden_input_is_outside_viewport(fake_oracle, pdf):
     page = fake_oracle("email_gate_hidden_legal_requires_label")
