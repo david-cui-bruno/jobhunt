@@ -219,6 +219,12 @@ class SourceCoverageTests(unittest.TestCase):
             "Fall Software Development Intern",
             "Site Reliability Internship - Spring ...",
             "Spring Software Engineer Intern",
+            "Software Engineer Intern Summer 2026",
+            "2026 Software Engineering Intern",
+            "Applied Materials 2026 Summer Software Engineer Intern",
+            "Mill Summer 2026 Software Engineer Intern",
+            "Snap 2026 Software Engineer Intern",
+            "Zettabyte Space Software Engineering Intern 2026",
             "Software Engineer Co-op",
             "Software Engineer Co Op",
             "Software Engineer Coop",
@@ -230,6 +236,8 @@ class SourceCoverageTests(unittest.TestCase):
         for title in (
             "Summer 2027 Software Engineer Intern",
             "Winter 2027 Software Engineer Intern",
+            "Software Engineer Intern Summer 2027",
+            "2027 Software Engineering Intern",
             "Product Manager Intern",
             "Backend Engineer",
         ):

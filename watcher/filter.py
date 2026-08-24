@@ -87,6 +87,8 @@ def _title_text(title: str) -> str:
 
 def title_ok(title: str, source: str = "") -> bool:
     t = _title_text(title)
+    if re.search(r"\b20\d{2}\b", t) and not re.search(r"\b2027\b", t):
+        return False
     if any(r.search(t) for r in HARD_EXCLUDE_RES):
         return False
     exclude = EXCLUDE_RES

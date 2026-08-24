@@ -473,13 +473,33 @@ def seed_retriage_row(
     last_error: str = "no adapter for other",
     status: str = "manual",
     outcome: str | None = "manual",
+    title: str | None = None,
+    source: str = "dreamwork-2027",
 ) -> None:
-    db.execute(
-        "INSERT INTO postings "
-        "(posting_id, company, title, url, status, outcome, last_error, last_attempt_at, first_seen) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 100, 50)",
-        (posting_id, "Acme", f"Role {posting_id}", SOURCE_URL + '/' + posting_id, status, outcome, last_error),
-    )
+    columns = {row[1] for row in db.execute("PRAGMA table_info(postings)")}
+    if "source" in columns:
+        db.execute(
+            "INSERT INTO postings "
+            "(posting_id, source, company, title, url, status, outcome, last_error, last_attempt_at, first_seen) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 100, 50)",
+            (
+                posting_id,
+                source,
+                "Acme",
+                title or f"Role {posting_id}",
+                SOURCE_URL + '/' + posting_id,
+                status,
+                outcome,
+                last_error,
+            ),
+        )
+    else:
+        db.execute(
+            "INSERT INTO postings "
+            "(posting_id, company, title, url, status, outcome, last_error, last_attempt_at, first_seen) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 100, 50)",
+            (posting_id, "Acme", title or f"Role {posting_id}", SOURCE_URL + '/' + posting_id, status, outcome, last_error),
+        )
     record_resolution(
         db,
         ResolutionResult(SOURCE_URL + '/' + posting_id, resolved_url, "dreamwork-original-v1", posting_id[:1] * 64, ""),
@@ -531,6 +551,37 @@ def test_retriage_candidates_preview_only_safe_resolved_manual_rows() -> None:
     assert candidates[0]["reason"] == "no adapter for other"
     assert candidates[1]["destination"] == "manual"
     assert candidates[1]["ats"] == "smartrecruiters"
+
+
+def test_retriage_candidates_apply_current_title_season_policy() -> None:
+    from submission.resolutions import apply_retriage, retriage_candidates
+
+    db = retriage_conn()
+    db.execute("ALTER TABLE postings ADD COLUMN source TEXT")
+    seed_retriage_row(db, "summer-2026", GREENHOUSE_URL, title="Software Engineer Intern Summer 2026")
+    seed_retriage_row(
+        db,
+        "summer-2027",
+        "https://job-boards.greenhouse.io/acme/jobs/2234567",
+        title="Software Engineer Intern Summer 2027",
+    )
+    seed_retriage_row(
+        db,
+        "unseasoned",
+        "https://job-boards.greenhouse.io/acme/jobs/3234567",
+        title="Software Engineer Intern",
+    )
+    before_wrong_year = posting_snapshot(db, "summer-2026")
+    db.commit()
+
+    candidates = retriage_candidates(db)
+    result = apply_retriage(db, ["summer-2026", "summer-2027", "unseasoned"])
+
+    assert [candidate["posting_id"] for candidate in candidates] == ["summer-2027", "unseasoned"]
+    assert result == {"requested": 3, "updated": 2, "skipped": 1}
+    assert posting_snapshot(db, "summer-2026") == before_wrong_year
+    assert posting_snapshot(db, "summer-2027")[4:7] == ("queued", None, "")
+    assert posting_snapshot(db, "unseasoned")[4:7] == ("queued", None, "")
 
 
 def test_apply_retriage_updates_only_selected_safe_rows_and_preserves_manual_smartrecruiters() -> None:

@@ -114,18 +114,22 @@ TERMINAL_STATUSES = frozenset({"submitted", "skipped"})
 def retriage_candidates(conn: sqlite3.Connection, posting_ids: Iterable[str] | None = None) -> list[dict]:
     from submission.identity import canonical_conflict_reason
     from submission.lanes import classify_url, preparation_destination
+    from watcher.filter import title_ok
 
     candidates: list[dict] = []
     requested_ids = list(dict.fromkeys(posting_ids or []))
-    query, params = _candidate_query(requested_ids if posting_ids is not None else None)
+    query, params = _candidate_query(conn, requested_ids if posting_ids is not None else None)
     for row in conn.execute(query, params):
         posting_id = row["posting_id"] if isinstance(row, sqlite3.Row) else row[0]
         company = row["company"] if isinstance(row, sqlite3.Row) else row[1]
         title = row["title"] if isinstance(row, sqlite3.Row) else row[2]
-        source_url = row["source_url"] if isinstance(row, sqlite3.Row) else row[3]
-        resolved_url = row["resolved_url"] if isinstance(row, sqlite3.Row) else row[4]
-        reason = row["last_error"] if isinstance(row, sqlite3.Row) else row[5]
+        source = row["source"] if isinstance(row, sqlite3.Row) else row[3]
+        source_url = row["source_url"] if isinstance(row, sqlite3.Row) else row[4]
+        resolved_url = row["resolved_url"] if isinstance(row, sqlite3.Row) else row[5]
+        reason = row["last_error"] if isinstance(row, sqlite3.Row) else row[6]
         if not resolved_url or not _technical_reason(reason):
+            continue
+        if source and not title_ok(title, source=source):
             continue
         if "click" in reason.lower():
             continue
@@ -189,9 +193,10 @@ def apply_retriage(conn: sqlite3.Connection, posting_ids: list[str]) -> dict:
         raise
 
 
-def _candidate_query(posting_ids: list[str] | None = None) -> tuple[str, tuple]:
+def _candidate_query(conn: sqlite3.Connection, posting_ids: list[str] | None = None) -> tuple[str, tuple]:
     id_clause = ""
     params: tuple = ()
+    source_expr = "COALESCE(p.source, '')" if _has_postings_column(conn, "source") else "''"
     if posting_ids is not None:
         if not posting_ids:
             return "SELECT NULL WHERE 0", ()
@@ -202,6 +207,7 @@ def _candidate_query(posting_ids: list[str] | None = None) -> tuple[str, tuple]:
         SELECT p.posting_id,
                COALESCE(p.company, '') AS company,
                COALESCE(p.title, '') AS title,
+               {source_expr} AS source,
                r.source_url,
                r.resolved_url,
                COALESCE(p.last_error, '') AS last_error
@@ -213,7 +219,11 @@ def _candidate_query(posting_ids: list[str] | None = None) -> tuple[str, tuple]:
           AND COALESCE(p.status, '') NOT IN ('submitted', 'skipped')
           {id_clause}
         ORDER BY p.posting_id
-    """.format(id_clause=id_clause), params
+    """.format(id_clause=id_clause, source_expr=source_expr), params
+
+
+def _has_postings_column(conn: sqlite3.Connection, name: str) -> bool:
+    return any(row[1] == name for row in conn.execute("PRAGMA table_info(postings)").fetchall())
 
 
 def _technical_reason(reason: str) -> bool:
