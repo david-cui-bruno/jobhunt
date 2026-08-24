@@ -64,7 +64,7 @@ preferences:
   remote_ok: true
   relocate_ok: true
   exclude_companies: []
-  one_application_per_company: true   # one app per company, ever; intern beats full-time (see filter.py)
+  one_application_per_company: false  # apply to every distinct posting; canonical URL identity prevents duplicates
 resume:
   base: "resume/resume.tex"
   note: "Grad date is track-based: May 2028 on intern-application resumes, May 2027 on full-time ones (tailor/tailor.py apply_grad_date). Never change it beyond that rule to make a role appear eligible."

@@ -52,9 +52,9 @@ def run() -> list[dict]:
     results = []
     summary = watch.run()                     # fetch + upsert new postings
     new_ids = [p["posting_id"] for p in summary.get("new", [])]
+    filt.run(current_posting_ids=set(summary.get("current_posting_ids", [])))
     if not new_ids:
         return results
-    filt.run()                                # filter the fresh batch
 
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row

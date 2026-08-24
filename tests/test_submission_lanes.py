@@ -2,6 +2,7 @@ import sqlite3
 import sys
 import types
 
+import drip
 from submission.lanes import classify_url, quarantine_unsupported
 
 
@@ -60,13 +61,14 @@ def test_quarantine_unsupported_moves_unknown_queued_row_to_manual() -> None:
         "INSERT INTO postings VALUES (?,?,?,?,?,?)",
         [
             ("unknown", "queued", "https://example.com/careers/1", None, None, None),
+            ("ashby", "queued", "https://jobs.ashbyhq.com/acme/id", None, None, None),
             ("greenhouse", "queued", "https://boards.greenhouse.io/acme/jobs/1", None, None, None),
             ("hn", "queued", "https://news.ycombinator.com/item?id=123", None, None, None),
             ("waas", "queued", "https://www.workatastartup.com/jobs/123/example-engineer", None, None, None),
         ],
     )
 
-    assert quarantine_unsupported(conn) == 1
+    assert quarantine_unsupported(conn) == 2
 
     rows = {
         row["posting_id"]: dict(row)
@@ -75,7 +77,29 @@ def test_quarantine_unsupported_moves_unknown_queued_row_to_manual() -> None:
     assert rows["unknown"]["status"] == "manual"
     assert rows["unknown"]["outcome"] == "manual"
     assert rows["unknown"]["last_error"] == "no adapter for other"
+    assert rows["ashby"]["status"] == "manual"
+    assert rows["ashby"]["last_error"] == (
+        "ashby automation disabled after spam rejection; apply manually from a trusted browser"
+    )
     assert rows["greenhouse"]["status"] == "queued"
     assert rows["greenhouse"]["last_error"] is None
     assert rows["hn"]["status"] == "queued"
     assert rows["waas"]["status"] == "queued"
+
+
+def test_enabled_ashby_row_can_enter_tailoring() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE postings (posting_id TEXT PRIMARY KEY, status TEXT, url TEXT, "
+        "locations TEXT, first_seen INTEGER, last_attempt_at INTEGER, outcome TEXT, last_error TEXT)"
+    )
+    conn.execute("CREATE TABLE ats_lane_state (ats TEXT PRIMARY KEY, enabled INTEGER)")
+    conn.execute("INSERT INTO ats_lane_state VALUES ('ashby', 1)")
+    conn.execute(
+        "INSERT INTO postings VALUES (?,?,?,?,?,?,?,?)",
+        ("ashby", "queued", "https://jobs.ashbyhq.com/acme/id", "NYC", 1, None, None, None),
+    )
+
+    assert quarantine_unsupported(conn) == 0
+    assert drip.pick_next(conn)["posting_id"] == "ashby"

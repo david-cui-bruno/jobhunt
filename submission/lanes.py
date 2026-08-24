@@ -42,20 +42,37 @@ def classify_url(url: str) -> tuple[str, LanePolicy]:
     return ats, lane_for(ats)
 
 
+def ashby_enabled(conn: sqlite3.Connection) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT enabled FROM ats_lane_state WHERE ats='ashby'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return bool(row and row[0])
+
+
 def quarantine_unsupported(conn: sqlite3.Connection) -> int:
-    """Move queued rows with no supported/preparable adapter to manual."""
+    """Move queued rows that cannot enter an active automatic lane to manual."""
     quarantined = 0
     rows = conn.execute("SELECT posting_id, url FROM postings WHERE status='queued'").fetchall()
     for row in rows:
         posting_id = row["posting_id"] if isinstance(row, sqlite3.Row) else row[0]
         url = row["url"] if isinstance(row, sqlite3.Row) else row[1]
         ats, lane = classify_url(url)
-        if lane.name != "unsupported":
+        if lane.name == "ashby" and not ashby_enabled(conn):
+            reason = (
+                "ashby automation disabled after spam rejection; "
+                "apply manually from a trusted browser"
+            )
+        elif lane.name == "unsupported":
+            reason = f"no adapter for {ats}"
+        else:
             continue
         changed = conn.execute(
             "UPDATE postings SET status='manual', outcome='manual', last_error=?, last_attempt_at=? "
             "WHERE posting_id=? AND status='queued'",
-            (f"no adapter for {ats}", int(time.time()), posting_id),
+            (reason, int(time.time()), posting_id),
         ).rowcount
         quarantined += changed
     conn.commit()

@@ -46,3 +46,9 @@ def test_greenhouse_token_key_is_independent_of_board_and_wrapper_host() -> None
     fallback_direct = "https://boards.greenhouse.io/embed/job_app?token=1234567"
     assert canonical_posting_key("wrapper", wrapper) == canonical_posting_key("board", board_direct)
     assert canonical_posting_key("board", board_direct) == canonical_posting_key("fallback", fallback_direct)
+
+
+def test_tracking_query_does_not_change_canonical_posting_key() -> None:
+    direct = "https://jobs.lever.co/acme/11111111-1111-1111-1111-111111111111"
+    tracked = direct + "?lever-source=github&utm_source=listing"
+    assert canonical_posting_key("direct", direct) == canonical_posting_key("tracked", tracked)

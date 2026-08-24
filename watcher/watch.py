@@ -1,20 +1,21 @@
 """Watcher: polls target-season listing repos and emits new postings.
 
 Sources:
-  - SimplifyJobs/Summer2027-Internships (structured Summer/Fall/Spring listings)
+  - SimplifyJobs/Summer2027-Internships (structured seasonal listings)
   - vanshb03/Summer2027-Internships (README markdown table)
   - speedyapply/2027-SWE-College-Jobs (README markdown tables)
   - speedyapply/2027-AI-College-Jobs (README markdown tables)
-  - vanshb03/Summer2027-Internships off-season list
   - zapplyjobs/Internships-2027
   - dreamworkhq/Tech-Internships-2027
 """
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import sqlite3
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -30,10 +31,9 @@ VANSH_OFFSEASON_URL = "https://raw.githubusercontent.com/vanshb03/Summer2027-Int
 ZAPPLY_2027_URL = "https://raw.githubusercontent.com/zapplyjobs/Internships-2027/main/README.md"
 DREAMWORK_2027_URL = "https://raw.githubusercontent.com/dreamworkhq/Tech-Internships-2027/main/README.md"
 
-# David explicitly wants Fall 2026, Spring 2027, and Summer 2027 roles.  The
-# Simplify JSON contains all three, but the old watcher discarded everything
-# except Summer 2027.
-TARGET_TERMS = {"Fall 2026", "Spring 2027", "Summer 2027"}
+# David wants Winter and Summer 2027 only. Simplify carries other seasons in
+# the same JSON feed, including titles that do not repeat the season.
+TARGET_TERMS = {"Winter 2027", "Summer 2027"}
 
 
 @dataclass
@@ -56,8 +56,11 @@ def _fetch(url: str) -> str:
 
 
 def _clean_url(url: str) -> str:
-    url = re.sub(r"[?&]utm_source=[^&]*", "", url)
-    return url.rstrip("?&")
+    """Remove UTM tracking parameters without corrupting the query string."""
+    parts = urllib.parse.urlsplit(url)
+    query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    clean_query = [(key, value) for key, value in query if not key.lower().startswith("utm_")]
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(clean_query)))
 
 
 def fetch_simplify() -> list[Posting]:
@@ -118,6 +121,7 @@ def _parse_md_table(md: str, source: str) -> list[Posting]:
         if not m:
             continue
         url = _clean_url(m.group(1) or m.group(2))
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:12]
         closed = "🔒" in line
         out.append(Posting(
             source=source,
@@ -125,7 +129,10 @@ def _parse_md_table(md: str, source: str) -> list[Posting]:
             title=re.sub(r"🛂|🇺🇸|🔒", "", title).strip(),
             locations=re.sub(r"<[^>]+>", " ", cells[2]).strip()[:200],
             url=url,
-            posting_id=f"{source}:{company.lower()}:{re.sub(r'[^a-z0-9]', '', title.lower())[:60]}",
+            posting_id=(
+                f"{source}:{company.lower()}:"
+                f"{re.sub(r'[^a-z0-9]', '', title.lower())[:60]}:{url_hash}"
+            ),
             sponsorship="no-sponsorship" if "🛂" in title else "",
             citizenship_required="🇺🇸" in title,
             closed=closed,
@@ -164,7 +171,6 @@ WATCH_SOURCES = (
     ("vansh", fetch_vansh),
     ("speedy", fetch_speedy),
     ("speedy-ai", fetch_speedy_ai),
-    ("vansh-offseason", fetch_vansh_offseason),
     ("zapply-2027", fetch_zapply_2027),
     ("dreamwork-2027", fetch_dreamwork_2027),
 )
@@ -224,16 +230,33 @@ def run() -> dict:
     all_new: list[Posting] = []
     errors = {}
     source_counts = {}
+    current_postings: list[Posting] = []
     for name, fn in WATCH_SOURCES:
         try:
             postings = fn()
             source_counts[name] = len(postings)
+            current_postings.extend(postings)
             all_new += upsert(conn, postings)
         except Exception as e:  # keep other sources alive
             errors[name] = str(e)
+    current_ids: set[str] = set()
+    for posting in current_postings:
+        row = conn.execute(
+            "SELECT posting_id FROM postings WHERE posting_id=?",
+            (posting.posting_id,),
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT posting_id FROM postings WHERE lower(company)=lower(?) AND url=?",
+                (posting.company, posting.url),
+            ).fetchone()
+        if row:
+            current_ids.add(row[0])
+
     summary = {
         "new_count": len(all_new),
         "new": [asdict(p) for p in all_new],
+        "current_posting_ids": sorted(current_ids),
         "errors": errors,
         "source_counts": source_counts,
         "total_tracked": conn.execute("SELECT COUNT(*) FROM postings").fetchone()[0],
@@ -244,7 +267,10 @@ def run() -> dict:
 
 if __name__ == "__main__":
     s = run()
-    print(json.dumps({k: v for k, v in s.items() if k != "new"}, indent=2))
+    print(json.dumps({
+        k: v for k, v in s.items()
+        if k not in {"new", "current_posting_ids"}
+    }, indent=2))
     for p in s["new"][:15]:
         print(f"  NEW: {p['company']} - {p['title']} [{p['source']}]")
     if len(s["new"]) > 15:

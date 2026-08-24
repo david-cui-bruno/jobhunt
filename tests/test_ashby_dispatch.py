@@ -367,7 +367,7 @@ def test_sprint_skips_ashby_before_tailoring_or_claiming(db: Path, tmp_path: Pat
     seed(db, tmp_path, "ashby-1", status="queued")
     monkeypatch.setattr(sprint, "DB", db)
     monkeypatch.setattr("watcher.watch.run", lambda: {"new": [{"posting_id": "ashby-1"}]})
-    monkeypatch.setattr("watcher.filter.run", lambda: None)
+    monkeypatch.setattr("watcher.filter.run", lambda **kwargs: None)
     monkeypatch.setattr("drip.claim_posting", lambda *args, **kwargs: pytest.fail("claimed ashby in sprint"))
 
     assert sprint.run() == []

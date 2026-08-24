@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from submission.database import connect_tracker
-from submission.lanes import classify_url, quarantine_unsupported
+from submission.lanes import ashby_enabled, classify_url, quarantine_unsupported
 
 ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT / "notify")]
@@ -69,7 +69,9 @@ def pick_next(conn: sqlite3.Connection, excluded: set[str] | None = None):
         if row["posting_id"] in excluded:
             continue
         ats, lane = classify_url(row["url"])
-        if lane.automatic or lane.name == "manual":
+        if lane.automatic or lane.name == "manual" or (
+            lane.name == "ashby" and ashby_enabled(conn)
+        ):
             candidates.append((row, ats))
     if not candidates:
         return None
@@ -231,7 +233,9 @@ def run():
     except Exception as e:
         print(f"[drip] bigco failed: {e}")
 
-    filt_res = filt.run()
+    filt_res = filt.run(
+        current_posting_ids=set(summary.get("current_posting_ids", []))
+    )
     print(f"[drip] watcher: {summary['new_count']} new, filter: {filt_res}")
 
     # 2) email applications: compose and send ready HN postings autonomously.

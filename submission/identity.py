@@ -7,6 +7,27 @@ import time
 import urllib.parse
 
 
+TRACKING_QUERY_NAMES = frozenset({
+    "gh_src",
+    "lever-source",
+    "ref",
+    "referrer",
+    "source",
+    "sourceid",
+})
+
+
+def _identity_query(parsed: urllib.parse.ParseResult) -> str:
+    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    kept = [
+        (key, value)
+        for key, value in pairs
+        if not key.lower().startswith("utm_")
+        and key.lower() not in TRACKING_QUERY_NAMES
+    ]
+    return urllib.parse.urlencode(kept)
+
+
 def _first_query_value(query: dict[str, list[str]], name: str) -> str | None:
     return (query.get(name) or [None])[0]
 
@@ -41,7 +62,9 @@ def _canonical_identity_material(posting_id: str, url: str) -> str:
         if token and re.fullmatch(r"\d+", token):
             return f"greenhouse:token:{urllib.parse.quote(token, safe='')}"
 
-    return urllib.parse.urlunparse((parsed.scheme, host, path, "", parsed.query, "")) or posting_id
+    return urllib.parse.urlunparse(
+        (parsed.scheme, host, path, "", _identity_query(parsed), "")
+    ) or posting_id
 
 
 def canonical_posting_key(posting_id: str, url: str) -> str:

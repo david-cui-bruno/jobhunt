@@ -11,11 +11,26 @@ from unittest import mock
 import drip
 import submit
 from watcher import filter as filt
-from watcher import watch
+from watcher import startups, watch
 
 
 class SourceCoverageTests(unittest.TestCase):
-    def test_simplify_keeps_every_approved_recruiting_term(self) -> None:
+    def test_clean_url_removes_tracking_without_corrupting_query(self) -> None:
+        self.assertEqual(
+            watch._clean_url(
+                "https://www.dreamworkhq.com/job/abc?"
+                "utm_source=github&utm_campaign=internships"
+            ),
+            "https://www.dreamworkhq.com/job/abc",
+        )
+        self.assertEqual(
+            watch._clean_url(
+                "https://jobs.example.com/apply?job=123&utm_source=github&lang=en#form"
+            ),
+            "https://jobs.example.com/apply?job=123&lang=en#form",
+        )
+
+    def test_simplify_keeps_only_summer_and_winter_2027_terms(self) -> None:
         rows = []
         for index, term in enumerate(("Summer 2027", "Fall 2026", "Spring 2027", "Winter 2027")):
             rows.append({
@@ -33,13 +48,16 @@ class SourceCoverageTests(unittest.TestCase):
 
         self.assertEqual(
             {posting.company for posting in postings},
-            {"Company 0", "Company 1", "Company 2"},
+            {"Company 0", "Company 3"},
         )
 
-    def test_watcher_polls_ai_and_offseason_github_lists(self) -> None:
+    def test_watcher_polls_ai_but_not_offseason_github_lists(self) -> None:
         names = {name for name, _ in watch.WATCH_SOURCES}
         self.assertIn("speedy-ai", names)
-        self.assertIn("vansh-offseason", names)
+        self.assertNotIn("vansh-offseason", names)
+
+    def test_daily_startup_discovery_has_no_offseason_github_sources(self) -> None:
+        self.assertEqual(startups.OFFSEASON_SOURCES, ())
 
     def test_markdown_source_uses_posting_link_not_company_homepage(self) -> None:
         markdown = "\n".join((
@@ -53,6 +71,51 @@ class SourceCoverageTests(unittest.TestCase):
 
         self.assertEqual(1, len(postings))
         self.assertEqual("https://jobs.example/acme/123", postings[0].url)
+
+    def test_markdown_posting_identity_includes_the_application_url(self) -> None:
+        markdown = "\n".join((
+            "| Company | Position | Location | Posting | Age |",
+            "|---|---|---|---|---|",
+            "| Acme | Software Engineer Intern | NYC | "
+            "<a href=\"https://jobs.example/acme/123\">Apply</a> | 1d |",
+            "| Acme | Software Engineer Intern | SF | "
+            "<a href=\"https://jobs.example/acme/456\">Apply</a> | 1d |",
+        ))
+
+        postings = watch._parse_md_table(markdown, "speedy")
+
+        self.assertEqual(2, len(postings))
+        self.assertNotEqual(postings[0].posting_id, postings[1].posting_id)
+
+    def test_watch_run_reports_current_database_ids_for_reconciliation(self) -> None:
+        posting = watch.Posting(
+            source="vansh",
+            company="Acme",
+            title="Software Engineer Intern",
+            locations="NYC",
+            url="https://jobs.example/acme/123",
+            posting_id="new-parser-id",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "tracker.db"
+            conn = sqlite3.connect(db)
+            watch.init_db(conn)
+            conn.execute(
+                "INSERT INTO postings "
+                "(posting_id, source, company, title, locations, url, sponsorship, "
+                "citizenship_required, closed, first_seen, status) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("legacy-id", "vansh", "Acme", posting.title, "NYC", posting.url, "", 0, 0, 1, "filtered_out"),
+            )
+            conn.commit()
+            conn.close()
+
+            with mock.patch.object(watch, "DB_PATH", db), mock.patch.object(
+                watch, "WATCH_SOURCES", (("vansh", lambda: [posting]),)
+            ):
+                summary = watch.run()
+
+        self.assertEqual(summary["current_posting_ids"], ["legacy-id"])
 
     def test_advanced_degree_only_titles_are_filtered(self) -> None:
         for title in (
@@ -87,7 +150,7 @@ class SourceCoverageTests(unittest.TestCase):
             with self.subTest(title=title):
                 self.assertTrue(filt.title_ok(title))
 
-    def test_manual_company_blocks_a_second_application(self) -> None:
+    def test_manual_company_does_not_block_a_distinct_application(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "tracker.db"
             conn = sqlite3.connect(db)
@@ -113,10 +176,10 @@ class SourceCoverageTests(unittest.TestCase):
             ).fetchone()[0]
             conn.close()
 
-        self.assertEqual(result, {"queued": 0, "filtered_out": 1})
-        self.assertEqual(status, "filtered_out")
+        self.assertEqual(result, {"queued": 1, "filtered_out": 0})
+        self.assertEqual(status, "queued")
 
-    def test_active_tailoring_claim_cannot_be_replaced_by_new_intern(self) -> None:
+    def test_active_tailoring_claim_does_not_block_a_distinct_internship(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "tracker.db"
             conn = sqlite3.connect(db)
@@ -139,8 +202,157 @@ class SourceCoverageTests(unittest.TestCase):
             statuses = dict(conn.execute("SELECT posting_id,status FROM postings"))
             conn.close()
 
+        self.assertEqual(result, {"queued": 1, "filtered_out": 0})
+        self.assertEqual(statuses, {"claimed": "tailoring", "intern": "queued"})
+
+    def test_current_eligible_filtered_listing_is_rechecked_without_reviving_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "tracker.db"
+            conn = sqlite3.connect(db)
+            watch.init_db(conn)
+            conn.executemany(
+                "INSERT INTO postings "
+                "(posting_id, source, company, title, locations, url, sponsorship, "
+                "citizenship_required, closed, first_seen, status, outcome) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    ("current", "vansh", "Acme", "Software Engineer Intern", "NYC", "https://new", "", 0, 0, 1, "filtered_out", None),
+                    ("stale", "vansh", "Beta", "Software Engineer Intern", "SF", "https://stale", "", 0, 0, 1, "filtered_out", "stale"),
+                ],
+            )
+            conn.commit()
+            conn.close()
+
+            with mock.patch.object(filt, "DB_PATH", db):
+                result = filt.run(current_posting_ids={"current", "stale"})
+
+            conn = sqlite3.connect(db)
+            statuses = dict(conn.execute("SELECT posting_id,status FROM postings"))
+            conn.close()
+
+        self.assertEqual(result, {"queued": 1, "filtered_out": 0})
+        self.assertEqual(statuses, {"current": "queued", "stale": "filtered_out"})
+
+    def test_current_title_mismatch_is_marked_once_per_filter_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "tracker.db"
+            conn = sqlite3.connect(db)
+            watch.init_db(conn)
+            conn.execute(
+                "INSERT INTO postings "
+                "(posting_id, source, company, title, locations, url, sponsorship, "
+                "citizenship_required, closed, first_seen, status) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("current", "vansh", "Acme", "Tax Intern", "NYC", "https://new", "", 0, 0, 1, "filtered_out"),
+            )
+            conn.commit()
+            conn.close()
+
+            with mock.patch.object(filt, "DB_PATH", db):
+                first = filt.run(current_posting_ids={"current"})
+                second = filt.run(current_posting_ids={"current"})
+
+            conn = sqlite3.connect(db)
+            row = conn.execute(
+                "SELECT status,last_error FROM postings WHERE posting_id='current'"
+            ).fetchone()
+            conn.close()
+
+        self.assertEqual(first, {"queued": 0, "filtered_out": 1})
+        self.assertEqual(second, {"queued": 0, "filtered_out": 0})
+        self.assertEqual(row, ("filtered_out", f"{filt.FILTER_REVISION}:title mismatch"))
+
+    def test_same_canonical_posting_from_two_sources_is_queued_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "tracker.db"
+            conn = sqlite3.connect(db)
+            watch.init_db(conn)
+            conn.executemany(
+                "INSERT INTO postings "
+                "(posting_id, source, company, title, locations, url, sponsorship, "
+                "citizenship_required, closed, first_seen, status) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    ("one", "vansh", "Acme", "Software Engineer Intern", "NYC", "https://jobs.example/acme/123", "", 0, 0, 1, "new"),
+                    ("two", "speedy", "Acme Inc", "SWE Intern", "SF", "https://jobs.example/acme/123", "", 0, 0, 2, "new"),
+                ],
+            )
+            conn.commit()
+            conn.close()
+
+            with mock.patch.object(filt, "DB_PATH", db):
+                result = filt.run()
+
+            conn = sqlite3.connect(db)
+            statuses = dict(conn.execute("SELECT posting_id,status FROM postings"))
+            conn.close()
+
+        self.assertEqual(result, {"queued": 1, "filtered_out": 1})
+        self.assertEqual(set(statuses.values()), {"queued", "filtered_out"})
+
+    def test_already_applied_canonical_posting_is_not_requeued_from_an_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "tracker.db"
+            conn = sqlite3.connect(db)
+            watch.init_db(conn)
+            conn.executemany(
+                "INSERT INTO postings "
+                "(posting_id, source, company, title, locations, url, sponsorship, "
+                "citizenship_required, closed, first_seen, status) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    ("applied", "simplify", "Acme", "Software Engineer Intern", "NYC", "https://jobs.example/acme/123", "", 0, 0, 1, "submitted"),
+                    ("alias", "vansh", "Acme Inc", "SWE Intern", "SF", "https://jobs.example/acme/123", "", 0, 0, 2, "new"),
+                ],
+            )
+            conn.execute(
+                "INSERT INTO applications (posting_id,submitted_at) VALUES ('applied',1)"
+            )
+            conn.commit()
+            conn.close()
+
+            with mock.patch.object(filt, "DB_PATH", db):
+                result = filt.run()
+
+            conn = sqlite3.connect(db)
+            status = conn.execute(
+                "SELECT status FROM postings WHERE posting_id='alias'"
+            ).fetchone()[0]
+            conn.close()
+
         self.assertEqual(result, {"queued": 0, "filtered_out": 1})
-        self.assertEqual(statuses, {"claimed": "tailoring", "intern": "filtered_out"})
+        self.assertEqual(status, "filtered_out")
+
+    def test_stale_canonical_posting_is_not_requeued_from_an_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "tracker.db"
+            conn = sqlite3.connect(db)
+            watch.init_db(conn)
+            conn.executemany(
+                "INSERT INTO postings "
+                "(posting_id, source, company, title, locations, url, sponsorship, "
+                "citizenship_required, closed, first_seen, status, outcome) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    ("dead", "one", "Acme", "Software Engineer Intern", "NYC", "https://jobs.example/acme/123", "", 0, 0, 1, "filtered_out", "stale"),
+                    ("alias", "two", "Acme", "Software Engineer Intern", "NYC", "https://jobs.example/acme/123", "", 0, 0, 2, "new", None),
+                ],
+            )
+            conn.commit()
+            conn.close()
+
+            with mock.patch.object(filt, "DB_PATH", db):
+                result = filt.run()
+
+            conn = sqlite3.connect(db)
+            alias = conn.execute(
+                "SELECT status,last_error FROM postings WHERE posting_id='alias'"
+            ).fetchone()
+            conn.close()
+
+        self.assertEqual(result, {"queued": 0, "filtered_out": 1})
+        self.assertEqual(alias[0], "filtered_out")
+        self.assertIn("canonical posting already tracked", alias[1])
 
 
 class BacklogPriorityTests(unittest.TestCase):

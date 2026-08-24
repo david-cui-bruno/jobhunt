@@ -3,8 +3,8 @@
 Rules from profile.yaml:
   - roles_include / roles_exclude keyword match on title
   - skip closed postings
-  - one application per company (intern vs new grad conflict -> prefer intern)
-  - dedupe near-identical titles at same company (keep first)
+  - apply to every distinct canonical posting, including multiple roles at one company
+  - re-evaluate current source rows when the filter policy changes
 """
 from __future__ import annotations
 
@@ -16,12 +16,18 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from submission.identity import canonical_posting_key
+
 DB_PATH = ROOT / "out" / "tracker.db"
 PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
 
 INCLUDE = [k.lower() for k in PROFILE["preferences"]["roles_include"]]
 EXCLUDE = [k.lower() for k in PROFILE["preferences"]["roles_exclude"]]
 EXCLUDE_COMPANIES = {c.lower() for c in PROFILE["preferences"]["exclude_companies"]}
+FILTER_REVISION = "filter-v3-summer-winter-multi-posting"
 
 
 def _phrase_re(phrase: str) -> re.Pattern:
@@ -97,12 +103,32 @@ def title_ok(title: str, source: str = "") -> bool:
     return any(r.search(t) for r in INCLUDE_RES)
 
 
-def run(verbose: bool = False) -> dict:
+def run(
+    verbose: bool = False,
+    current_posting_ids: set[str] | None = None,
+) -> dict:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT * FROM postings WHERE status='new'").fetchall()
+    current_posting_ids = current_posting_ids or set()
+    rows = conn.execute(
+        "SELECT * FROM postings WHERE status IN ('new','filtered_out')"
+    ).fetchall()
+    reserved_canonical = {
+        canonical_posting_key(row["posting_id"], row["url"] or "")
+        for row in conn.execute(
+            "SELECT posting_id,url FROM postings "
+            "WHERE status NOT IN ('new','filtered_out') "
+            "OR (status='filtered_out' AND outcome IS NOT NULL)"
+        )
+    }
     queued, filtered = 0, 0
     for r in rows:
+        if r["status"] == "filtered_out":
+            if r["posting_id"] not in current_posting_ids or r["outcome"] is not None:
+                continue
+            if (r["last_error"] or "").startswith(f"{FILTER_REVISION}:"):
+                continue
+        canonical_key = canonical_posting_key(r["posting_id"], r["url"] or "")
         reason = None
         if r["closed"]:
             reason = "closed"
@@ -110,37 +136,22 @@ def run(verbose: bool = False) -> dict:
             reason = "excluded company"
         elif not title_ok(r["title"], source=r["source"] if "source" in r.keys() else ""):
             reason = "title mismatch"
-        else:
-            # one-app-per-company: any other posting already queued or beyond?
-            # (David 2026-08-08: never intern + full-time at the same company.
-            # When the new posting is an INTERN role and the one in the pipeline
-            # is a not-yet-submitted full-time role, swap: intern wins.)
-            dup = conn.execute(
-                "SELECT posting_id, title, status FROM postings WHERE lower(company)=lower(?) "
-                "AND status IN ('queued','tailoring','sprinting','submitting','tailored','ready','manual','failed','submitted') LIMIT 1",
-                (r["company"],),
-            ).fetchone()
-            if dup:
-                new_is_intern = bool(re.search(r"\bintern|co[- ]?op\b", r["title"], re.I))
-                old_is_intern = bool(re.search(r"\bintern|co[- ]?op\b", dup["title"], re.I))
-                if (new_is_intern and not old_is_intern
-                        and dup["status"] not in {"submitted", "tailoring", "sprinting", "submitting"}):
-                    conn.execute(
-                        "UPDATE postings SET status='filtered_out' WHERE posting_id=?",
-                        (dup["posting_id"],))
-                    if verbose:
-                        print(f"  SWAP: intern beats full-time at {r['company']} ({dup['title']})")
-                else:
-                    reason = "company already in pipeline"
+        elif canonical_key in reserved_canonical:
+            reason = "canonical posting already tracked"
         if reason:
-            conn.execute("UPDATE postings SET status='filtered_out' WHERE posting_id=?",
-                         (r["posting_id"],))
+            conn.execute(
+                "UPDATE postings SET status='filtered_out', last_error=? WHERE posting_id=?",
+                (f"{FILTER_REVISION}:{reason}", r["posting_id"]),
+            )
             filtered += 1
             if verbose:
                 print(f"  SKIP ({reason}): {r['company']} - {r['title']}")
         else:
-            conn.execute("UPDATE postings SET status='queued' WHERE posting_id=?",
-                         (r["posting_id"],))
+            conn.execute(
+                "UPDATE postings SET status='queued', outcome=NULL, last_error=NULL WHERE posting_id=?",
+                (r["posting_id"],),
+            )
+            reserved_canonical.add(canonical_key)
             queued += 1
             if verbose:
                 print(f"  QUEUE: {r['company']} - {r['title']}")

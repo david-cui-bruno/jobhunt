@@ -1,9 +1,8 @@
 """Startup discovery: sources beyond the GitHub listing repos.
 
 Sources:
-  1. Off-season listing repos (Simplify README-Off-Season, vansh OFFSEASON_README)
-  2. YC companies API (recent batches) -> their careers/ATS pages -> intern/new-grad roles
-  3. HN "Who is hiring?" monthly thread -> intern-friendly + LLM-parsed entries
+  1. YC companies API (recent batches) -> their careers/ATS pages -> intern/new-grad roles
+  2. HN "Who is hiring?" monthly thread -> intern-friendly + LLM-parsed entries
 
 Emits postings into the same tracker DB with source tags; the existing
 filter -> tailor -> email -> submit pipeline picks them up unchanged.
@@ -22,10 +21,9 @@ ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "out" / "tracker.db"
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
-OFFSEASON_SOURCES = [
-    ("simplify-offseason", "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/README-Off-Season.md"),
-    ("vansh-offseason", "https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/main/OFFSEASON_README.md"),
-]
+# Fall and Spring sources are intentionally disabled. David wants Winter and
+# Summer 2027 only, and these lists do not reliably label each row's season.
+OFFSEASON_SOURCES: tuple[tuple[str, str], ...] = ()
 
 YC_BATCHES = ["Summer 2026", "Fall 2026", "Winter 2026"]  # recent, hiring-active
 YC_API = "https://api.ycombinator.com/v0.1/companies"
