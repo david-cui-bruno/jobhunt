@@ -18,7 +18,7 @@ COVERED_REASONS = (
     "resume upload zone never appeared",
     "apply button not found (posting closed?)",
 )
-ACTIVE_OR_APPLIED_STATES = {"ready", "submitting", "sprinting", "tailoring", "applied"}
+ACTIVE_OR_APPLIED_STATES = {"ready", "submitting", "sprinting", "tailoring", "submitted", "applied"}
 TERMINAL_EXCLUDED_STATES = {"stale", "submitted", "applied"}
 REQUEUE_ERROR = "requeued after Workday entry repair"
 
@@ -94,7 +94,7 @@ def _has_finished_click_or_confirmation(conn: sqlite3.Connection, posting_id: st
     if not _table_exists(conn, "submission_attempts"):
         return False
     cols = _columns(conn, "submission_attempts")
-    if not {"posting_id", "finished_at"}.issubset(cols):
+    if "posting_id" not in cols:
         return False
     click_col = "click_attempted" if "click_attempted" in cols else "0"
     confirm_col = "confirmation_observed" if "confirmation_observed" in cols else "0"
@@ -102,7 +102,6 @@ def _has_finished_click_or_confirmation(conn: sqlite3.Connection, posting_id: st
         f"""
         SELECT 1 FROM submission_attempts
         WHERE posting_id=?
-          AND finished_at IS NOT NULL
           AND (COALESCE({click_col}, 0)=1 OR COALESCE({confirm_col}, 0)=1)
         LIMIT 1
         """,
@@ -261,11 +260,14 @@ def main(argv: list[str] | None = None) -> int:
                 rows = rows[: max(args.limit, 0)]
             payload = {"ok": True, "mode": "preview", "count": len(rows), "rows": rows}
         else:
+            if not args.posting_id and args.limit is None:
+                raise ValueError("--apply requires at least one --posting-id or a positive --limit")
+            if args.limit is not None and args.limit <= 0:
+                raise ValueError("--apply requires a positive --limit when no --posting-id is supplied")
             candidates = args.posting_id
             if not candidates:
                 rows = recoverable_workday_rows(conn)
-                if args.limit is not None:
-                    rows = rows[: max(args.limit, 0)]
+                rows = rows[: args.limit]
                 candidates = [row["posting_id"] for row in rows]
             result = apply_requeue(conn, candidates)
             payload = {"ok": True, "mode": "apply", **result}

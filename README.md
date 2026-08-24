@@ -142,7 +142,9 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
 
   Apply uses `BEGIN IMMEDIATE`, recomputes eligibility inside the transaction,
   and compare-and-sets only requested rows that are still `failed` or `manual`.
-  It preserves `attempt_count` and all ledgers, clears `outcome`, and writes
+  It refuses unbounded mutation: every `--apply` invocation must include at
+  least one explicit `--posting-id` or a positive `--limit`. It preserves
+  `attempt_count` and all ledgers, clears `outcome`, and writes
   `last_error='requeued after Workday entry repair'`. Use explicit posting IDs
   or a small bounded canary, then verify with a fresh preview and ledger checks:
 

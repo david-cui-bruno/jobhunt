@@ -73,6 +73,9 @@ def make_db(path: Path, *, attempts: bool = True) -> sqlite3.Connection:
 
 
 def seed(conn, posting_id, *, url=WORKDAY_URL, canonical_url=None, source_status="failed", status=None, outcome=None, last_error=None, attempt_count=2):
+    row_url = url
+    if row_url == WORKDAY_URL:
+        row_url = WORKDAY_URL + f"-{posting_id}"
     conn.execute(
         """
         INSERT INTO postings (id, company, title, url, canonical_url, source_status, status, outcome, last_error, attempt_count)
@@ -82,8 +85,8 @@ def seed(conn, posting_id, *, url=WORKDAY_URL, canonical_url=None, source_status
             posting_id,
             f"Company {posting_id}",
             f"Role {posting_id}",
-            url,
-            canonical_url or url,
+            row_url,
+            canonical_url or row_url,
             source_status,
             status,
             outcome,
@@ -142,7 +145,7 @@ def test_preview_returns_only_strictly_safe_workday_rows(tmp_path):
         "tenant": "acme.wd5.myworkdayjobs.com/external",
         "reason": COVERED_REASONS[0] + ": missing",
         "attempt_count": 2,
-        "url": WORKDAY_URL,
+        "url": WORKDAY_URL + "-safe-upload",
     }
     assert all("password" not in json.dumps(row).lower() for row in rows)
 
@@ -153,6 +156,29 @@ def test_pre_attempt_ledger_database_is_supported_without_weakening_when_present
     seed(conn, "legacy-safe")
 
     assert [row["posting_id"] for row in recoverable_workday_rows(conn)] == ["legacy-safe"]
+
+
+def test_unfinished_click_or_confirmation_attempt_blocks_requeue(tmp_path):
+    db_path = tmp_path / "tracker.db"
+    conn = make_db(db_path)
+    seed(conn, "safe")
+    seed(conn, "unfinished-click")
+    attempt(conn, "unfinished-click", click_attempted=1, finished_at=None)
+    seed(conn, "unfinished-confirmed")
+    attempt(conn, "unfinished-confirmed", confirmation_observed=1, finished_at=None)
+
+    assert [row["posting_id"] for row in recoverable_workday_rows(conn)] == ["safe"]
+
+
+def test_submitted_canonical_alias_blocks_requeue(tmp_path):
+    db_path = tmp_path / "tracker.db"
+    conn = make_db(db_path)
+    shared = "https://acme.wd5.myworkdayjobs.com/en-US/External/job/submitted-alias"
+    seed(conn, "safe")
+    seed(conn, "alias-candidate", canonical_url=shared)
+    seed(conn, "alias-submitted", canonical_url=shared, source_status="submitted")
+
+    assert [row["posting_id"] for row in recoverable_workday_rows(conn)] == ["safe"]
 
 
 def test_cli_preview_is_default_json_and_does_not_mutate_database(tmp_path):
@@ -210,3 +236,24 @@ def test_cli_apply_fails_closed_for_missing_database(tmp_path):
     assert result.returncode != 0
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
+
+
+def test_cli_apply_rejects_unbounded_request(tmp_path):
+    db_path = tmp_path / "tracker.db"
+    conn = make_db(db_path)
+    seed(conn, "safe")
+    before = db_hash(db_path)
+
+    result = subprocess.run(
+        [sys.executable, "scripts/requeue_workday_recoverable.py", "--db", str(db_path), "--apply", "--json"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert db_hash(db_path) == before
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert "--posting-id" in payload["error"]
+    assert "--limit" in payload["error"]
