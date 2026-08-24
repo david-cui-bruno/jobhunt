@@ -46,9 +46,14 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   30 seconds. It groups ready postings by the shared ATS lane classifier:
   direct lanes for Greenhouse, Lever, Workable, and Rippling run with bounded
   concurrency, Workday has its own single-worker lane, Ashby remains behind its
-  breaker policy, and unsupported ATSs park as manual. Headless Playwright
-  adapters handle Greenhouse, Lever, Ashby, Workday, Workable, SmartRecruiters,
-  Rippling, plus WaaS founder messages and email applications. The
+  breaker policy, and unsupported ATSs park as manual. Lane policy separates
+  automatic submission from resume preparation: a `preparable-manual` row may
+  receive a tailored resume and safe attempt artifact, but its preparation
+  destination is `manual`, never hidden in `ready`. Existing nonautomatic ready
+  rows are reconciled to manual with an exact handoff reason before rollout.
+  Headless Playwright adapters handle Greenhouse, Lever, Ashby, Workday,
+  Workable, SmartRecruiters, Rippling, plus WaaS founder messages and email
+  applications. The
   **form Q&A engine** (`apply/qa.py`) answers questions
   from the profile + story bank under a two-tier policy:
   - HARD-blocked (never auto-answered, even required): demographics,
@@ -100,13 +105,22 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   interview / recruiter reply / rejection / offer), applies labels, archives
   noise, extracts deadlines.
 - **Reporting**: exactly ONE email per day (6pm ET) plus a Telegram copy via
-  kith-bridge, casual tone, skimmable in 30 seconds: what needs David
-  (deadline-sorted), stuck applications with the exact blocking question,
-  unverified submissions, pipeline stats, top failing ATSs, per-ATS confirmed
-  ratios, lane queue depths, and Ashby breaker state when paused. Replying "skip X" or
-  "for <company>: <answer>" is executed by `digest_replies.py`; freeform
-  replies land in the daily agent review. All other notification emails are
-  muted (`notify/mailer.py` logs them to `out/notices.log`).
+  kith-bridge. This one-digest rule is the only routine notification path: no
+  per-posting Telegram, email, browser-popup, or Sheet-update notice is sent.
+  The digest is casual, skimmable in 30 seconds, and separates work into
+  verification before retrying, finish-manually actions, unanswered questions,
+  pipeline stats, top failing ATSs, per-ATS confirmed ratios, lane queue depths,
+  and Ashby breaker state when paused. Click-uncertain attempts come only from
+  the attempt ledger and appear under verification with no retry action.
+  CAPTCHA and missing-field handoffs appear under finish manually. Engineering
+  debt is grouped for agents, not as a request to David. The Google Sheet has a
+  `Manual Actions` tab with the complete current handoff list. It contains
+  company, role, ATS, action, exact application URL, age, attempt state, latest
+  reason, and booleans for prepared resume or local artifact availability, but
+  never local paths, cookies, headers, credentials, or form answers. Replying
+  "skip X" or "for <company>: <answer>" is executed by `digest_replies.py`;
+  freeform replies land in the daily agent review. All other notification
+  emails are muted (`notify/mailer.py` logs them to `out/notices.log`).
 
 ## Safety rails
 
@@ -121,6 +135,15 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   stops that one application.
 - Volume is not artificially capped. Lane concurrency, per-posting timeouts,
   canonical dedupe, and fail-closed uncertainty quarantine bound risk instead.
+
+- CAPTCHA handling is preflight-only. Lever hCaptcha and SmartRecruiters
+  DataDome markers stop before the submit marker, return a definitive manual
+  outcome, set `click_attempted=false`, and set `submission_uncertain=false`.
+  The pipeline never solves, bypasses, or retries a CAPTCHA.
+- Local artifacts stay local. Filled-form screenshots and structured missing
+  fields are stored in ignored Mac-only runtime paths and the attempt ledger.
+  Digest and Sheet views may expose availability booleans and sanitized action
+  text, but never artifact paths or raw answers.
 - Gmail token failover: if jobhunt's OAuth token is revoked, `notify/mailer`
   falls back to kith's healthy token for the same account instead of going
   silent.

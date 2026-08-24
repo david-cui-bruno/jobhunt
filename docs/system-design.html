@@ -241,8 +241,11 @@ like. Detection routes by URL (with redirect-chasing for postings that link a ho
 <div class="grid">
   <div class="card"><h4>ATS lanes</h4><p>Greenhouse, Lever, Workable, and Rippling share the
   direct lane with bounded concurrency. Workday has a single-worker lane. Ashby remains behind
-  a breaker, and unsupported ATSs are parked as manual instead of blocking other rows.</p>
-  <span class="tag ok">direct</span><span class="tag ok">workday</span><span class="tag warn">ashby breaker</span></div>
+  a breaker. Lane policy separates automatic submission from preparation: a
+  <code>preparable-manual</code> row can receive a tailored resume and safe local artifact, then
+  moves to <code>manual</code> rather than invisible <code>ready</code>. Existing nonautomatic ready
+  rows are reconciled by compare-and-set with an exact handoff reason.</p>
+  <span class="tag ok">direct</span><span class="tag ok">workday</span><span class="tag warn">preparable manual</span></div>
   <div class="card"><h4>Process isolation</h4><p>Every posting runs in its own killable
   subprocess (<code>submit_worker.py</code>) with a hard 300s deadline. A hung browser cannot
   take down the resident dispatcher.</p><span class="tag ok">5-min posting cap</span><span class="tag ok">per-lane budgets</span></div>
@@ -278,6 +281,19 @@ like. Detection routes by URL (with redirect-chasing for postings that link a ho
   irreversible submission, run one cycle, immediately pause, then inspect telemetry. Service reload
   is pending until those gates pass. The resident Mac has completed the dedicated install, two native
   smokes, integration, backup, integrity check, schema migration, and disabled-lane preview.</p><span class="tag warn">manual approval required</span></div>
+
+  <div class="card"><h4>CAPTCHA preflight</h4><p>Lever hCaptcha and SmartRecruiters DataDome checks run before the submit marker.
+  If a challenge is observable, the adapter returns a definitive manual handoff with
+  <code>click_attempted=false</code> and <code>submission_uncertain=false</code>. The system never
+  solves, bypasses, or retries CAPTCHA work.</p><span class="tag bad">no solver</span><span class="tag warn">stop before click</span></div>
+  <div class="card"><h4>Uncertainty verification</h4><p>A clicked submit without confirmation is quarantine work, not a retry.
+  The attempt ledger is the authority for <code>click_attempted</code> and
+  <code>confirmation_observed</code>, and the digest renders those rows only as verification before retrying.
+  Manual CAPTCHA and missing-field rows stay separate from uncertainty.</p><span class="tag bad">never retry uncertainty</span></div>
+  <div class="card"><h4>Local-only artifacts</h4><p>Filled-form screenshots and unanswered-field lists are stored in ignored Mac-only runtime paths
+  and the append-only attempt ledger. Telegram and Google Sheets may show only safe availability
+  booleans and action text. They must not contain local paths, cookies, headers, credentials, or
+  form answers.</p><span class="tag ok">artifact exists boolean only</span></div>
   <div class="card"><h4>Deferred courtesies removed</h4><p>A "don't submit while David is
   gaming" check matched the idle Steam client and silently froze the pipeline for six days.
   Deleted: headless submissions never show a window anyway. Lesson enshrined below.</p></div>
@@ -327,10 +343,13 @@ can show "🟠 OA received" without anyone updating anything.</p>
   <b>Replies are commands</b>: "skip X", "for Acme: I can start June 1" - parsed and applied.
   All other notification email is muted to a log file.</p></div>
   <div class="card"><h4>Live Google Sheet</h4>
-  <p>Three tabs, rewritten every 30 min (one-way; edits never read back): a chill dashboard
+  <p>Four tabs, rewritten every 30 min (one-way; edits never read back): a chill dashboard
   (sent this week, heard-back %, outcomes), Applications with color-coded status badges
-  derived from inbox_events, and the live pipeline. The glanceable answer to "how's it
-  going".</p></div>
+  derived from inbox_events, the live pipeline, and <code>Manual Actions</code>. The Manual Actions
+  tab is the complete safe handoff sheet: company, role, ATS, action, exact application URL, age,
+  attempt state, latest reason, and booleans for prepared resume or local artifact availability.
+  It excludes submitted rows and engineering debt from David-facing actions, and it never exposes
+  local artifact paths or raw form answers.</p></div>
 </div>
 
 <h2 id="immune"><span class="num">§</span>The immune system</h2>
@@ -373,13 +392,17 @@ no way to notice its own death. Three layers, each catching what the previous ca
   answer is a bug of the worst class.</p></div>
   <div class="card"><h4>Never double-apply</h4><p>Ledger UNIQUE constraint + company-level
   freeze + "unconfirmed submission" quarantine. A maybe-submitted application is never
-  retried.</p></div>
+  retried. The same uncertainty rule drives the verification section of the daily digest.</p></div>
   <div class="card"><h4>Bounded blast radius</h4><p>Per-posting subprocess kill · lane concurrency ·
   canonical dedupe · fail-closed uncertainty quarantine · one-recovery-per-tenant-per-day.
   Throughput is not limited by an artificial daily application or tailoring cap.</p></div>
   <div class="card"><h4>Everything auditable</h4><p>Every status change carries a reason in
   <code>last_error</code>. Every auto-answer logs to <code>qa_answers.log</code>. Every filled
-  form is screenshotted (14-day rotation). "Why did X happen" is always answerable.</p></div>
+  form is screenshotted (14-day rotation) in local-only runtime storage. "Why did X happen" is
+  always answerable without leaking artifact paths into Telegram or Sheets.</p></div>
+  <div class="card"><h4>One-digest rule</h4><p>The daily digest and its Telegram copy are the only routine notifications.
+  The digest links to the complete Manual Actions Sheet instead of sending one message per posting.
+  All per-posting mail remains muted into <code>out/notices.log</code>.</p></div>
 </div>
 
 <h2 id="lessons"><span class="num">§</span>Design lessons (earned the hard way)</h2>
