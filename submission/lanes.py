@@ -21,12 +21,13 @@ class LanePolicy:
 
 DIRECT = LanePolicy("direct", frozenset({"greenhouse", "lever", "workable", "rippling"}), 2, 8, True, True, True)
 WORKDAY = LanePolicy("workday", frozenset({"workday"}), 1, 2, True, True, True)
+ORACLE = LanePolicy("oracle", frozenset({"oraclecloud"}), 1, 2, True, True, True)
 ASHBY = LanePolicy("ashby", frozenset({"ashby"}), 1, 1, False, True, False)
 MANUAL = LanePolicy("manual", frozenset({"smartrecruiters"}), 0, 0, False, True, False)
 EMAIL = LanePolicy("email", frozenset({"email"}), 0, 0, False, False, True)
 WAAS = LanePolicy("waas", frozenset({"waas"}), 0, 0, False, False, True)
 UNSUPPORTED = LanePolicy("unsupported", frozenset({"other", "icims"}), 0, 0, False, False, False)
-POLICIES = (DIRECT, WORKDAY, ASHBY, MANUAL, EMAIL, WAAS, UNSUPPORTED)
+POLICIES = (DIRECT, WORKDAY, ORACLE, ASHBY, MANUAL, EMAIL, WAAS, UNSUPPORTED)
 
 
 def lane_for(ats: str) -> LanePolicy:

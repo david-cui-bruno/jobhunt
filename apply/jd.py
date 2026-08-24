@@ -7,6 +7,8 @@ import re
 import urllib.parse
 import urllib.request
 
+from apply.oraclecloud_url import parse_oracle_posting_url
+
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"}
 
 
@@ -87,6 +89,8 @@ def canonical_application_url(url: str) -> str:
 
 def detect_ats(url: str) -> str:
     url = canonical_application_url(url)
+    if parse_oracle_posting_url(url):
+        return "oraclecloud"
     host = urllib.parse.urlparse(url).netloc.lower()
     if "greenhouse.io" in host: return "greenhouse"
     if "lever.co" in host: return "lever"

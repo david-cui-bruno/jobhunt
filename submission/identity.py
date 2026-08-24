@@ -6,6 +6,8 @@ import sqlite3
 import time
 import urllib.parse
 
+from apply.oraclecloud_url import parse_oracle_posting_url
+
 
 TRACKING_QUERY_NAMES = frozenset({
     "gh_src",
@@ -35,6 +37,10 @@ def _first_query_value(query: dict[str, list[str]], name: str) -> str | None:
 def _canonical_identity_material(posting_id: str, url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     query = urllib.parse.parse_qs(parsed.query)
+
+    parsed_oracle = parse_oracle_posting_url(url)
+    if parsed_oracle:
+        return f"oraclecloud:{parsed_oracle.host}:{parsed_oracle.site.lower()}:{parsed_oracle.job_id}"
 
     ashby_id = _first_query_value(query, "ashby_jid")
     if ashby_id and re.fullmatch(r"[0-9a-f-]{36}", ashby_id, re.I):
