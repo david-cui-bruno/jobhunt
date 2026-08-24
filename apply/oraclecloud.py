@@ -241,7 +241,11 @@ def _message_matches_profile_address(headers: dict[str, str]) -> bool:
     profile_email = str(PROFILE.get("email", "")).strip().lower()
     if not profile_email:
         return False
-    raw_recipients = [headers.get(name, "") for name in ("to", "cc", "delivered-to")]
+    raw_recipients = [
+        value
+        for name in ("to", "cc", "delivered-to")
+        if (value := headers.get(name, "").strip())
+    ]
     addresses = [addr.lower() for _name, addr in getaddresses(raw_recipients)]
     return profile_email in addresses
 
