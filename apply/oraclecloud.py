@@ -644,7 +644,7 @@ def _fill_oracle_address_line1(page) -> bool:
     if not street:
         return False
     try:
-        fields = page.get_by_label("Address Line 1", exact=True)
+        fields = page.get_by_label(re.compile(r"^Address Line 1\s*\*?$", re.IGNORECASE))
         if fields.count() != 1:
             return False
         field = fields.nth(0)
@@ -828,11 +828,11 @@ def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = Tru
                     except Exception:
                         pass
 
-                _fill_basics(page)
-                _fill_oracle_address_line1(page)
                 qa_filled, qa_failed = _run_shared_qa_passes(page, slug, url)
                 result["qa_filled"] = _merge_unique(result["qa_filled"], qa_filled)
                 result["qa_failed"] = _merge_unique(result["qa_failed"], qa_failed)
+                _fill_basics(page)
+                _fill_oracle_address_line1(page)
 
                 body = _body_text(page)
                 closed = _closed_reason(body)

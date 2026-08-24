@@ -451,6 +451,8 @@ class _FakePage:
         return _FakeLocator(self, str(name or role), count=0, visible=False)
 
     def get_by_label(self, label, exact=False):
+        if hasattr(label, "search"):
+            return _FakeLocator(self, str(label), visible=False, count=0)
         normalized = label.lower()
         if self.variant.startswith("multipage") and normalized.startswith("page "):
             return _FakeLocator(self, f"page_{self.app_page_index}_field")
@@ -616,6 +618,28 @@ def test_oracle_four_page_dry_run_clicks_next_three_times_uploads_once_and_aggre
     assert result["qa_filled"] == ["page1", "page2", "page3", "page4"]
     assert page.submit_clicks == 0
     assert "mark_submit_attempted" not in page.events
+
+
+def test_oracle_refills_owned_controls_after_shared_qa_can_rerender_page(fake_oracle, pdf, monkeypatch):
+    fake_oracle("anonymous")
+    calls = []
+
+    def shared_qa(page, slug, url):
+        calls.append("shared_qa")
+        return [], []
+
+    monkeypatch.setattr(oraclecloud, "_run_shared_qa_passes", shared_qa)
+    monkeypatch.setattr(oraclecloud, "_fill_basics", lambda page: calls.append("basics"))
+    monkeypatch.setattr(
+        oraclecloud,
+        "_fill_oracle_address_line1",
+        lambda page: calls.append("address") or True,
+    )
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-owned-after-qa", dry_run=True)
+
+    assert result["reason"] == "dry run - did not submit"
+    assert calls == ["shared_qa", "basics", "address"]
 
 
 def test_oracle_required_field_on_page_two_stops_before_next(fake_oracle, pdf):
@@ -1380,20 +1404,29 @@ class _OracleControlLocator:
 
 
 class _OracleControlsPage:
-    def __init__(self, controls=None, suggestions=None, street="123 Example Ave"):
+    def __init__(self, controls=None, suggestions=None, street="123 Example Ave", address_label="Address Line 1"):
         self.events = []
         self.street = street
+        self.address_label = address_label
         self.all_controls = controls or []
         self.collection = list(self.all_controls)
         self.suggestions = suggestions or []
         self.address = _OracleControlLocator(self, "address", value="", attrs={"type": "text"})
 
     def get_by_label(self, label, exact=False):
+        if hasattr(label, "search"):
+            if label.search(self.address_label):
+                self.collection = [self.address]
+                return _OracleControlLocator(self, "collection", count=1)
+            return _OracleControlLocator(self, str(label), visible=False, count=0)
         normalized = label.lower()
         if normalized in {"phone", "phone number", "mobile"}:
             self.collection = [control for control in self.all_controls if "phone" in control.attrs.get("label", "").lower()]
             return _OracleControlLocator(self, "collection", count=len(self.collection))
-        if exact and normalized == "address line 1":
+        if exact and normalized == self.address_label.lower():
+            self.collection = [self.address]
+            return _OracleControlLocator(self, "collection", count=1)
+        if not exact and normalized in self.address_label.lower():
             self.collection = [self.address]
             return _OracleControlLocator(self, "collection", count=1)
         return _OracleControlLocator(self, label, visible=False, count=0)
@@ -1508,6 +1541,17 @@ def test_oracle_address_types_street_selects_unique_matching_visible_suggestion(
     assert oraclecloud._fill_oracle_address_line1(page) is True
 
     assert page.events[:2] == ["press:address:123 Example Ave", "wait:600"]
+    assert page.events[-1] == "click:suggestion-1"
+    assert page.address.input_value() == "123 Example Ave"
+
+
+def test_oracle_address_accepts_one_visible_required_suffix_label(monkeypatch):
+    page = _OracleControlsPage(street="123 Example Ave", address_label="Address Line 1 *")
+    page.suggestions = [_OracleControlLocator(page, "suggestion-1", text="123 Example Ave, Example City, ST")]
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"address": {"street": "123 Example Ave"}})
+
+    assert oraclecloud._fill_oracle_address_line1(page) is True
+
     assert page.events[-1] == "click:suggestion-1"
     assert page.address.input_value() == "123 Example Ave"
 
