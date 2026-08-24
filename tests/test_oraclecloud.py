@@ -1288,3 +1288,180 @@ def test_shared_qa_passes_skip_populated_controls_but_fill_empty_and_label_only(
     assert controls[2]["value"] == "Immediately"
     assert filled == ["City", "Start date"]
     assert failed == []
+
+
+class _OracleControlLocator:
+    def __init__(self, page, name, *, value="", visible=True, attrs=None, count=1, text=""):
+        self.page = page
+        self.name = name
+        self._value = value
+        self._visible = visible
+        self.attrs = attrs or {}
+        self._count = count
+        self.text = text
+
+    @property
+    def first(self):
+        return self.nth(0)
+
+    def nth(self, index):
+        if self.name == "collection":
+            return self.page.collection[index]
+        if self.name == "suggestions":
+            return self.page.suggestions[index]
+        return self
+
+    def count(self): return self._count
+    def is_visible(self): return self._visible
+    def input_value(self): return self._value
+    def fill(self, value):
+        self.page.events.append(f"fill:{self.name}:{value}")
+        self._value = value
+    def press_sequentially(self, value, delay=None):
+        self.page.events.append(f"press:{self.name}:{value}")
+        self._value = value
+    def click(self, timeout=None):
+        self.page.events.append(f"click:{self.name}")
+        if self.name.startswith("suggestion"):
+            self.page.address._value = self.page.street
+    def get_attribute(self, name): return self.attrs.get(name)
+    def inner_text(self, timeout=None): return self.text
+
+
+class _OracleControlsPage:
+    def __init__(self, controls=None, suggestions=None, street="123 Example Ave"):
+        self.events = []
+        self.street = street
+        self.all_controls = controls or []
+        self.collection = list(self.all_controls)
+        self.suggestions = suggestions or []
+        self.address = _OracleControlLocator(self, "address", value="", attrs={"type": "text"})
+
+    def get_by_label(self, label, exact=False):
+        normalized = label.lower()
+        if normalized in {"phone", "phone number", "mobile"}:
+            self.collection = [control for control in self.all_controls if "phone" in control.attrs.get("label", "").lower()]
+            return _OracleControlLocator(self, "collection", count=len(self.collection))
+        if exact and normalized == "address line 1":
+            self.collection = [self.address]
+            return _OracleControlLocator(self, "collection", count=1)
+        return _OracleControlLocator(self, label, visible=False, count=0)
+
+    def locator(self, selector):
+        if "role='option'" in selector or 'role="option"' in selector or "[role=option]" in selector:
+            return _OracleControlLocator(self, "suggestions", count=len(self.suggestions))
+        return _OracleControlLocator(self, selector, count=0, visible=False)
+
+    def wait_for_timeout(self, value): self.events.append(f"wait:{value}")
+
+
+def test_oracle_phone_skips_country_code_and_fills_one_national_digits_candidate(monkeypatch):
+    controls = [
+        _OracleControlLocator(None, "country", attrs={"label": "Phone Country code", "role": "combobox", "type": "text"}),
+        _OracleControlLocator(None, "phone", attrs={"label": "Phone Number", "type": "tel"}),
+    ]
+    page = _OracleControlsPage(controls)
+    for control in controls: control.page = page
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"phone": "+1 (555) 010-2345", "name": {}, "links": {}})
+
+    oraclecloud._fill_basics(page)
+
+    assert not any(event.startswith("fill:country") for event in page.events)
+    assert controls[1].input_value() == "5550102345"
+
+
+def test_oracle_phone_preserves_nonempty_existing_value(monkeypatch):
+    phone = _OracleControlLocator(None, "phone", value="already set", attrs={"label": "Phone", "type": "tel"})
+    page = _OracleControlsPage([phone]); phone.page = page
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"phone": "5550102345", "name": {}, "links": {}})
+
+    oraclecloud._fill_basics(page)
+
+    assert phone.input_value() == "already set"
+    assert page.events == []
+
+
+def test_oracle_phone_ambiguous_candidates_fail_closed(monkeypatch):
+    one = _OracleControlLocator(None, "phone1", attrs={"label": "Phone", "type": "tel"})
+    two = _OracleControlLocator(None, "phone2", attrs={"label": "Phone Number", "type": "text"})
+    page = _OracleControlsPage([one, two]); one.page = two.page = page
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"phone": "5550102345", "name": {}, "links": {}})
+
+    oraclecloud._fill_basics(page)
+
+    assert one.input_value() == ""
+    assert two.input_value() == ""
+    assert page.events == []
+
+
+def test_oracle_address_preserves_populated_line_without_keypress_or_click(monkeypatch):
+    page = _OracleControlsPage(street="123 Example Ave")
+    page.address._value = "Imported address"
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"address": {"street": "123 Example Ave"}})
+
+    assert oraclecloud._fill_oracle_address_line1(page) is False
+
+    assert page.address.input_value() == "Imported address"
+    assert page.events == []
+
+
+def test_oracle_address_types_street_selects_unique_matching_visible_suggestion(monkeypatch):
+    page = _OracleControlsPage(street="123 Example Ave")
+    page.suggestions = [_OracleControlLocator(page, "suggestion-1", text="123 Example Ave, Example City, ST")]
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"address": {"street": "123 Example Ave"}})
+
+    assert oraclecloud._fill_oracle_address_line1(page) is True
+
+    assert page.events[:2] == ["press:address:123 Example Ave", "wait:600"]
+    assert page.events[-1] == "click:suggestion-1"
+    assert page.address.input_value() == "123 Example Ave"
+
+
+@pytest.mark.parametrize("suggestions", [[], ["456 Other Rd"], ["123 Example Ave", "123 Example Ave Apt 2"]])
+def test_oracle_address_suggestion_zero_nonmatching_or_ambiguous_fails_closed(monkeypatch, suggestions):
+    page = _OracleControlsPage(street="123 Example Ave")
+    page.suggestions = [_OracleControlLocator(page, f"suggestion-{i}", text=text) for i, text in enumerate(suggestions)]
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"address": {"street": "123 Example Ave"}})
+
+    assert oraclecloud._fill_oracle_address_line1(page) is False
+
+    assert page.address.input_value() == "123 Example Ave"
+    assert not any(event.startswith("click:suggestion") for event in page.events)
+
+
+def test_oracle_owned_answer_filter_prevents_optional_phone_qa_failed(monkeypatch):
+    controls = [{"id": "workAuth", "name": "workAuth", "label": "Work authorization", "value": "", "chosen": ""}]
+    answers = [
+        {"id_or_name": "phone", "label": "phone", "answer": "5550102345", "required": False},
+        {"id_or_name": "workAuth", "label": "Work authorization", "answer": "Yes", "required": True},
+    ]
+    calls = []
+    class Page:
+        def evaluate(self, script): return controls
+        def wait_for_timeout(self, value): pass
+    monkeypatch.setattr(oraclecloud.qa, "get_answers", lambda seen, context: list(answers))
+    def fake_fill(page, seen, todo):
+        calls.append([a["label"] for a in todo])
+        return [a["label"] for a in todo], ["phone"]
+    monkeypatch.setattr(oraclecloud.qa, "fill_answers", fake_fill)
+
+    filled, failed = oraclecloud._run_shared_qa_passes(Page(), "slug", ORACLE_JOB_URL)
+
+    assert calls == [["Work authorization"], ["Work authorization"], ["Work authorization"]]
+    assert failed == []
+
+
+def test_oracle_required_owned_empty_address_still_blocks_adapter(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("anonymous")
+    monkeypatch.setattr(oraclecloud, "_fill_oracle_address_line1", lambda page: False)
+    original_evaluate = page.evaluate
+    def evaluate(script):
+        if script == oraclecloud.REQUIRED_EMPTY_JS: return ["Address Line 1 *"]
+        return original_evaluate(script)
+    page.evaluate = evaluate
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-required-address", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert result["submitted"] is False
+    assert "Address Line 1 *" in result["unanswered"]

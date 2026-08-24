@@ -496,6 +496,11 @@ def _fill_if_visible(page, labels: tuple[str, ...], value: str) -> None:
             loc = page.get_by_label(label, exact=False).first
             if loc.count() and loc.is_visible():
                 try:
+                    if str(loc.input_value() or "").strip():
+                        return
+                except Exception:
+                    pass
+                try:
                     loc.fill("")
                 except Exception:
                     pass
@@ -505,6 +510,137 @@ def _fill_if_visible(page, labels: tuple[str, ...], value: str) -> None:
             continue
 
 
+def _normal_control_text(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(value).lower())).strip()
+
+
+def _owned_oracle_answer(answer: dict) -> bool:
+    label = _normal_control_text(answer.get("label") or "")
+    key = _normal_control_text(answer.get("id_or_name") or "")
+    owned = {
+        "phone", "phone number", "mobile",
+        "address line 1", "address line 1 *", "street", "street address",
+        "zip", "zipcode", "zip code", "postal code",
+    }
+    return label in owned or key in owned
+
+
+def _national_phone_digits(value: str) -> str:
+    digits = re.sub(r"\D+", "", str(value or ""))
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+    return digits
+
+
+def _control_attr(loc, name: str) -> str:
+    try:
+        return str(loc.get_attribute(name) or "")
+    except Exception:
+        return ""
+
+
+def _is_fillable_text_control(loc) -> bool:
+    try:
+        if not loc.is_visible():
+            return False
+    except Exception:
+        return False
+    attrs = {name: _control_attr(loc, name).lower() for name in ("type", "role", "aria-readonly", "readonly", "disabled", "hidden")}
+    if attrs["role"] in {"combobox", "listbox", "button"}:
+        return False
+    if any(attrs[name] for name in ("aria-readonly", "readonly", "disabled", "hidden")):
+        return False
+    input_type = attrs["type"] or "text"
+    return input_type in {"text", "tel", "", "search", "email", "number"}
+
+
+def _fill_phone_if_visible(page, labels: tuple[str, ...], value: str) -> None:
+    digits = _national_phone_digits(value)
+    if not digits:
+        return
+    candidates = []
+    seen = set()
+    for label in labels:
+        try:
+            locs = page.get_by_label(label, exact=False)
+            for index in range(locs.count()):
+                loc = locs.first if locs.count() == 1 else locs.nth(index)
+                marker = getattr(loc, "name", None) or id(loc)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                if not _is_fillable_text_control(loc):
+                    continue
+                if "country" in _control_attr(loc, "label").lower() or "country" in _control_attr(loc, "aria-label").lower():
+                    continue
+                try:
+                    if str(loc.input_value() or "").strip():
+                        return
+                except Exception:
+                    pass
+                candidates.append(loc)
+        except Exception:
+            continue
+    if len(candidates) == 1:
+        candidates[0].fill(digits)
+
+
+def _profile_street() -> str:
+    address = PROFILE.get("address") or {}
+    for key in ("street", "address_line_1", "address1", "line1"):
+        if str(address.get(key) or "").strip():
+            return str(address.get(key)).strip()
+    return ""
+
+
+def _fill_oracle_address_line1(page) -> bool:
+    street = _profile_street()
+    if not street:
+        return False
+    try:
+        fields = page.get_by_label("Address Line 1", exact=True)
+        if fields.count() != 1:
+            return False
+        field = fields.nth(0)
+        if not field.is_visible():
+            return False
+        if str(field.input_value() or "").strip():
+            return False
+    except Exception:
+        return False
+    try:
+        field.press_sequentially(street, delay=20)
+    except Exception:
+        return False
+    try:
+        page.wait_for_timeout(600)
+    except Exception:
+        pass
+    matches = []
+    try:
+        options = page.locator("[role='option'], [role=option], [role='menuitem'], li")
+        target = _normal_control_text(street)
+        for index in range(options.count()):
+            option = options.nth(index)
+            if not option.is_visible():
+                continue
+            text = option.inner_text(timeout=500)
+            if target and target in _normal_control_text(text):
+                matches.append(option)
+    except Exception:
+        return False
+    if len(matches) != 1:
+        return False
+    try:
+        matches[0].click(timeout=1000)
+    except Exception:
+        return False
+    try:
+        return bool(str(field.input_value() or "").strip())
+    except Exception:
+        return False
+
+
 def _fill_basics(page) -> None:
     p = PROFILE
     name = p.get("name") or {}
@@ -512,7 +648,7 @@ def _fill_basics(page) -> None:
     _fill_if_visible(page, ("First name", "First Name", "Given name"), name.get("first", ""))
     _fill_if_visible(page, ("Last name", "Last Name", "Family name", "Surname"), name.get("last", ""))
     _fill_if_visible(page, ("Email", "Email address"), p.get("email", ""))
-    _fill_if_visible(page, ("Phone", "Phone number", "Mobile"), re.sub(r"[^0-9+]", "", str(p.get("phone", ""))))
+    _fill_phone_if_visible(page, ("Phone", "Phone number", "Mobile"), str(p.get("phone", "")))
     _fill_if_visible(page, ("LinkedIn", "LinkedIn profile"), links.get("linkedin", ""))
     _fill_if_visible(page, ("GitHub", "Portfolio", "Website"), links.get("github") or links.get("website") or "")
 
@@ -536,7 +672,7 @@ def _run_shared_qa_passes(page, slug: str, url: str) -> tuple[list[str], list[st
                 by_label.setdefault(str(control.get("label")).lower().strip(), control)
 
         todo = []
-        for answer in answers:
+        for answer in [answer for answer in answers if not _owned_oracle_answer(answer)]:
             control = by_key.get(answer.get("id_or_name"))
             if control is None:
                 label = str(answer.get("label") or answer.get("id_or_name") or "").lower().strip()
@@ -544,6 +680,7 @@ def _run_shared_qa_passes(page, slug: str, url: str) -> tuple[list[str], list[st
             if control is None or (not control.get("value") and not control.get("chosen")):
                 todo.append(answer)
         newly_filled, failed = qa.fill_answers(page, controls, todo)
+        failed = [item for item in failed if not _owned_oracle_answer({"label": item, "id_or_name": item})]
         filled.extend(newly_filled)
         try:
             page.wait_for_timeout(600)
@@ -624,6 +761,7 @@ def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = Tru
                         pass
 
                 _fill_basics(page)
+                _fill_oracle_address_line1(page)
                 qa_filled, qa_failed = _run_shared_qa_passes(page, slug, url)
                 result["qa_filled"] = _merge_unique(result["qa_filled"], qa_filled)
                 result["qa_failed"] = _merge_unique(result["qa_failed"], qa_failed)
