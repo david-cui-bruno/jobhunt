@@ -1671,3 +1671,43 @@ def test_oracle_required_owned_empty_address_still_blocks_adapter(fake_oracle, p
     assert result["outcome"] == "manual"
     assert result["submitted"] is False
     assert "Address Line 1 *" in result["unanswered"]
+
+
+def test_oracle_basics_fills_only_visible_exact_preferred_full_name(monkeypatch):
+    class Collection:
+        def __init__(self, controls):
+            self.controls = controls
+
+        def count(self):
+            return len(self.controls)
+
+        def nth(self, index):
+            return self.controls[index]
+
+    hidden = _OracleControlLocator(None, "preferred-hidden", visible=False)
+    visible = _OracleControlLocator(None, "preferred-visible")
+
+    class Page(_OracleControlsPage):
+        def get_by_label(self, label, exact=False):
+            if exact and label == "Preferred Full Name":
+                return Collection([hidden, visible])
+            return super().get_by_label(label, exact=exact)
+
+    page = Page()
+    hidden.page = visible.page = page
+    monkeypatch.setattr(
+        oraclecloud,
+        "PROFILE",
+        {"name": {"first": "Example", "last": "Candidate"}, "phone": "", "links": {}},
+    )
+
+    oraclecloud._fill_basics(page)
+
+    assert hidden.input_value() == ""
+    assert visible.input_value() == "Example Candidate"
+
+
+def test_oracle_preferred_full_name_is_owned_by_deterministic_basics_fill():
+    assert oraclecloud._owned_oracle_control(
+        {"id": "oj-dynamic-17", "name": "", "label": "Preferred Full Name"}
+    ) is True

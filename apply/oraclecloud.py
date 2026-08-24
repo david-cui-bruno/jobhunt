@@ -510,6 +510,28 @@ def _fill_if_visible(page, labels: tuple[str, ...], value: str) -> None:
             continue
 
 
+def _fill_single_visible_exact(page, label: str, value: str) -> bool:
+    value = str(value or "").strip()
+    if not value:
+        return False
+    try:
+        fields = page.get_by_label(label, exact=True)
+        visible = []
+        for index in range(fields.count()):
+            field = fields.nth(index)
+            if field.is_visible():
+                visible.append(field)
+        if len(visible) != 1:
+            return False
+        field = visible[0]
+        if str(field.input_value() or "").strip():
+            return True
+        field.fill(value)
+        return str(field.input_value() or "").strip() == value
+    except Exception:
+        return False
+
+
 def _normal_control_text(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(value).lower())).strip()
 
@@ -522,6 +544,7 @@ def _owned_oracle_control(control: dict) -> bool:
     label = _normal_control_text(control.get("label") or "")
     key = _normal_control_text(control.get("id_or_name") or control.get("id") or control.get("name") or "")
     owned = {
+        "preferred full name",
         "phone", "phone number", "mobile", "mobile phone", "mobile number",
         "country",
         "address line 1", "address line 2", "address line 3",
@@ -685,6 +708,11 @@ def _fill_basics(page) -> None:
     _fill_if_visible(page, ("First name", "First Name", "Given name"), name.get("first", ""))
     _fill_if_visible(page, ("Last name", "Last Name", "Family name", "Surname"), name.get("last", ""))
     _fill_if_visible(page, ("Email", "Email address"), p.get("email", ""))
+    _fill_single_visible_exact(
+        page,
+        "Preferred Full Name",
+        " ".join(part for part in (name.get("first"), name.get("last")) if str(part or "").strip()),
+    )
     _fill_phone_if_visible(page, ("Phone", "Phone number", "Mobile"), str(p.get("phone", "")))
     _fill_if_visible(page, ("LinkedIn", "LinkedIn profile"), links.get("linkedin", ""))
     _fill_if_visible(page, ("GitHub", "Portfolio", "Website"), links.get("github") or links.get("website") or "")
