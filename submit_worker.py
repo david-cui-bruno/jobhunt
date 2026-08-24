@@ -31,6 +31,17 @@ def _adapter(ats: str, url: str):
     detected = ats if ats and ats != "other" else detect_ats(target_url)
     if lane_for(detected).name == "unsupported":
         return None, False, detected, target_url
+    if detected == "oraclecloud":
+        from oraclecloud import apply_oraclecloud
+        from oraclecloud_url import parse_oracle_posting_url
+        parsed_oracle = parse_oracle_posting_url(target_url)
+        if parsed_oracle is None:
+            return None, False, "other", target_url
+        target_url = (
+            f"https://{parsed_oracle.host}/hcmUI/CandidateExperience/"
+            f"{parsed_oracle.locale}/sites/{parsed_oracle.site}/job/{parsed_oracle.job_id}"
+        )
+        return apply_oraclecloud, False, detected, target_url
     if detected == "greenhouse":
         from greenhouse import apply_greenhouse
         return apply_greenhouse, False, detected, target_url

@@ -116,6 +116,7 @@ class _FakeLocator:
         return self._visible
 
     def click(self, timeout=None):
+        self.page.events.append(f"click:{self.name}")
         if self.on_click:
             self.on_click()
 
@@ -154,6 +155,10 @@ class _FakePage:
         self.uploaded_to = None
         self.uploaded_file = None
         self.qa_evaluations = 0
+        self.events = []
+        self.url = ORACLE_JOB_URL
+        self.confirmation_body = "Your application has been submitted successfully."
+        self.raise_on_submit = variant == "submit_timeout"
         self.file_inputs = [
             _FakeLocator(self, "avatar", attrs={"accept": "image/png", "near_text": "Profile photo"}),
             _FakeLocator(self, "resume", attrs={"accept": "application/pdf", "near_text": "Resume upload"}),
@@ -170,6 +175,8 @@ class _FakePage:
 
     def wait_for_timeout(self, value):
         self.waits.append(value)
+        if self.variant == "submit_timeout" and self.submit_clicks:
+            raise TimeoutError("confirmation wait timed out")
 
     def inner_text(self, selector):
         if self.variant == "closed":
@@ -178,6 +185,8 @@ class _FakePage:
             return "Sign in to apply. You must create an account to continue."
         if self.variant == "captcha":
             return "Please verify you are human. reCAPTCHA"
+        if self.submit_clicks and self.variant == "confirmed":
+            return self.confirmation_body
         return "Example application form"
 
     def locator(self, selector):
@@ -186,8 +195,12 @@ class _FakePage:
         if selector in oraclecloud.APPLY_SELECTORS:
             visible = self.variant not in {"unsupported", "closed"} and selector == "button:has-text('Apply')"
             return _FakeLocator(self, selector, visible=visible, count=1 if visible else 0, on_click=self._click_apply)
+        if selector in oraclecloud.SUBMIT_SELECTORS:
+            visible = self.variant not in {"missing_submit"} and selector == oraclecloud.SUBMIT_SELECTORS[0]
+            count = 2 if self.variant == "ambiguous_submit" and visible else (1 if visible else 0)
+            return _FakeLocator(self, "submit", visible=visible, count=count, on_click=self._click_submit)
         if "Submit" in selector or "submit" in selector:
-            return _FakeLocator(self, "submit", on_click=self._click_submit)
+            return _FakeLocator(self, "non_exact_submit", visible=False, count=0)
         if "iframe" in selector or "recaptcha" in selector.lower() or "hcaptcha" in selector.lower():
             present = self.variant == "captcha"
             return _FakeLocator(self, "captcha", visible=present, count=1 if present else 0)
@@ -373,3 +386,72 @@ def test_oracle_required_empty_returns_manual_without_submit(fake_oracle, pdf):
     assert result["click_attempted"] is False
     assert result["submission_uncertain"] is False
     assert page.submit_clicks == 0
+
+
+def test_oracle_dry_run_requires_exact_visible_submit(fake_oracle, pdf):
+    page = fake_oracle("anonymous")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-dry", dry_run=True)
+
+    assert result["ok"] is True
+    assert result["submitted"] is False
+    assert result["reason"] == "dry run - did not submit"
+    assert page.submit_clicks == 0
+    assert "mark_submit_attempted" not in page.events
+
+
+def test_oracle_missing_or_ambiguous_submit_is_manual_without_marker_or_click(fake_oracle, pdf):
+    for variant in ("missing_submit", "ambiguous_submit"):
+        page = fake_oracle(variant)
+
+        result = apply_oraclecloud(ORACLE_JOB_URL, pdf, f"oracle-{variant}", dry_run=True)
+
+        assert result["outcome"] == "manual"
+        assert result["click_attempted"] is False
+        assert result["submission_uncertain"] is False
+        assert page.submit_clicks == 0
+        assert "mark_submit_attempted" not in page.events
+
+
+def test_oracle_live_submit_marks_immediately_before_one_click_and_confirms(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("confirmed")
+    monkeypatch.setattr(oraclecloud, "mark_submit_attempted", lambda: page.events.append("mark_submit_attempted"))
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-confirmed", dry_run=False)
+
+    assert page.events[-2:] == ["mark_submit_attempted", "click:submit"]
+    assert page.submit_clicks == 1
+    assert result["ok"] is True
+    assert result["submitted"] is True
+    assert result["reason"] == "confirmed"
+    assert result["click_attempted"] is True
+    assert result["submission_uncertain"] is False
+
+
+def test_oracle_unconfirmed_submit_marks_uncertain_non_retryable(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("anonymous")
+    monkeypatch.setattr(oraclecloud, "mark_submit_attempted", lambda: page.events.append("mark_submit_attempted"))
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-unconfirmed", dry_run=False)
+
+    assert page.events[-2:] == ["mark_submit_attempted", "click:submit"]
+    assert page.submit_clicks == 1
+    assert result["outcome"] == "manual"
+    assert result["ok"] is False
+    assert result["submitted"] is False
+    assert result["retryable"] is False
+    assert result["click_attempted"] is True
+    assert result["submission_uncertain"] is True
+
+
+def test_oracle_click_timeout_after_marker_is_uncertain_non_retryable(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("submit_timeout")
+    monkeypatch.setattr(oraclecloud, "mark_submit_attempted", lambda: page.events.append("mark_submit_attempted"))
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-timeout", dry_run=False)
+
+    assert page.events[-2:] == ["mark_submit_attempted", "click:submit"]
+    assert result["outcome"] == "manual"
+    assert result["retryable"] is False
+    assert result["click_attempted"] is True
+    assert result["submission_uncertain"] is True

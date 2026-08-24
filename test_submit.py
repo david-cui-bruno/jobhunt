@@ -184,6 +184,7 @@ class SubmitSafetyTests(unittest.TestCase):
             Path("apply/workday.py"),
             Path("apply/smartrecruiters.py"),
             Path("apply/rippling.py"),
+            Path("apply/oraclecloud.py"),
             Path("watcher/waas.py"),
         )
         for relative in adapter_paths:

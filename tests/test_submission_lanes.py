@@ -143,6 +143,31 @@ def test_waas_submit_worker_branch_requires_opt_in(monkeypatch) -> None:
     assert target_url == "https://www.workatastartup.com/jobs/123/example-engineer"
 
 
+def test_oracle_submit_worker_routes_only_strict_oracle_urls(monkeypatch) -> None:
+    import submit_worker
+
+    fake_oracle = types.ModuleType("oraclecloud")
+
+    def apply_oraclecloud(url: str, pdf, slug: str, dry_run: bool = True) -> dict:
+        return {"reason": url}
+
+    fake_oracle.apply_oraclecloud = apply_oraclecloud
+    monkeypatch.setitem(sys.modules, "oraclecloud", fake_oracle)
+
+    fn, waas, detected, target_url = submit_worker._adapter(
+        "other",
+        "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992?utm=x",
+    )
+
+    assert fn is apply_oraclecloud
+    assert waas is False
+    assert detected == "oraclecloud"
+    assert target_url == "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992"
+
+    assert submit_worker._adapter("oraclecloud", "https://www.oracle.com/careers")[0] is None
+    assert submit_worker._adapter("other", "https://example.oraclecloud.com/not-a-job")[0] is None
+
+
 def test_quarantine_unsupported_moves_unknown_queued_row_to_manual() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

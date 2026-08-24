@@ -17,10 +17,12 @@ try:
     from artifacts import safe_screenshot
     import qa
     import stealth
+    from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
     from timeouts import configure_page
 except ModuleNotFoundError:  # package import from tests
     from apply.artifacts import safe_screenshot
     from apply import qa, stealth
+    from apply.submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
     from apply.timeouts import configure_page
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +34,11 @@ APPLY_SELECTORS = (
     "a:has-text('Apply Now')",
     "button:has-text('Apply')",
     "[data-bind*='apply'][role='button']",
+)
+
+SUBMIT_SELECTORS = (
+    "button:text-is('Submit')",
+    "input[type='submit'][value='Submit']",
 )
 
 CLOSED_PATTERNS = (
@@ -162,6 +169,33 @@ def _find_visible_apply(page):
         except Exception:
             continue
     return None
+
+
+def _find_exact_visible_submit(page):
+    candidates = []
+    for selector in SUBMIT_SELECTORS:
+        try:
+            loc = page.locator(selector)
+            count = loc.count()
+            if count == 1:
+                if loc.is_visible():
+                    candidates.append(loc)
+            elif count > 1:
+                for index in range(count):
+                    cand = loc.nth(index)
+                    if cand.is_visible():
+                        candidates.append(cand)
+        except Exception:
+            continue
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _uncertain_result(result: dict, reason: str) -> dict:
+    result.update(ok=False, submitted=False, reason=reason)
+    mark_unconfirmed(result)
+    return result
 
 
 def _find_resume_input(page):
@@ -319,10 +353,39 @@ def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = Tru
                 _record_filled_screenshot(result, page, slug)
                 return result
 
-            # Task 3 stops here for both dry-run and non-dry-run callers. The submit
-            # click and confirmation handling belong to Task 4.
-            result.update(ok=True, submitted=False, reason="dry run - did not submit", unanswered=[])
-            return result
+            submit_button = _find_exact_visible_submit(page)
+            if submit_button is None:
+                result.update(_manual("unsupported Oracle tenant variant: exact visible Submit control not found"))
+                return result
+
+            if dry_run:
+                result.update(ok=True, submitted=False, reason="dry run - did not submit", unanswered=[])
+                return result
+
+            try:
+                mark_submit_attempted()
+                submit_button.click(timeout=5000)
+                try:
+                    page.wait_for_timeout(5000)
+                except Exception as exc:
+                    return _uncertain_result(result, f"submit confirmation uncertain: {type(exc).__name__}: {exc}")
+                body = _body_text(page)
+                page_url = getattr(page, "url", "")
+                if confirmation_observed(body, page_url):
+                    result.update(
+                        ok=True,
+                        submitted=True,
+                        outcome="submitted",
+                        reason="confirmed",
+                        unanswered=[],
+                        retryable=False,
+                        click_attempted=True,
+                        submission_uncertain=False,
+                    )
+                    return result
+                return _uncertain_result(result, "submit confirmation was not observed")
+            except Exception as exc:
+                return _uncertain_result(result, f"submit click uncertain: {type(exc).__name__}: {exc}")
         finally:
             try:
                 browser.close()
