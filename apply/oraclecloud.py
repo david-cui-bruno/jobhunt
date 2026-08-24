@@ -626,8 +626,8 @@ def _fill_oracle_address_line1(page) -> bool:
     attempted = False
     try:
         try:
-            field.press_sequentially(street, delay=20)
             attempted = True
+            field.press_sequentially(street, delay=20)
         except Exception:
             return False
         try:

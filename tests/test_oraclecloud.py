@@ -1462,6 +1462,23 @@ def test_oracle_address_types_street_selects_unique_matching_visible_suggestion(
     assert page.address.input_value() == "123 Example Ave"
 
 
+def test_oracle_address_clears_partial_typing_when_keypress_raises(monkeypatch):
+    class PartialTypingAddress(_OracleControlLocator):
+        def press_sequentially(self, value, delay=None):
+            self.page.events.append(f"press:{self.name}:{value}")
+            self._value = value[:4]
+            raise RuntimeError("typing interrupted")
+
+    page = _OracleControlsPage(street="123 Example Ave")
+    page.address = PartialTypingAddress(page, "address", value="", attrs={"type": "text"})
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"address": {"street": "123 Example Ave"}})
+
+    assert oraclecloud._fill_oracle_address_line1(page) is False
+
+    assert page.address.input_value() == ""
+    assert page.events == ["press:address:123 Example Ave", "fill:address:"]
+
+
 def test_oracle_address_rejects_click_that_commits_different_value(monkeypatch):
     page = _OracleControlsPage(street="123 Example Ave")
 
