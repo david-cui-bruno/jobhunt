@@ -24,7 +24,7 @@ def _manual_actions_db(tmp_path):
             posting_id TEXT PRIMARY KEY,
             company TEXT,
             title TEXT,
-            ats TEXT,
+            source TEXT,
             url TEXT,
             status TEXT,
             last_error TEXT,
@@ -115,12 +115,36 @@ def _manual_actions_db(tmp_path):
                 "lever-location",
                 "Location Co",
                 "SWE",
-                "lever",
-                "https://location.example/job",
+                "watcher-source",
+                "https://jobs.lever.co/location/00000000-0000-0000-0000-000000000006",
                 "manual",
                 "needs manual Lever location selection behind hCaptcha",
                 138,
                 200,
+                "",
+            ),
+            (
+                "email-action",
+                "Email Co",
+                "Founding Engineer",
+                "hn",
+                "mailto:jobs@example.com",
+                "manual",
+                "needs answers: email application details",
+                139,
+                201,
+                "",
+            ),
+            (
+                "waas-action",
+                "WaaS Co",
+                "Software Engineer",
+                "waas",
+                "https://www.workatastartup.com/jobs/12345",
+                "manual",
+                "needs answers: Work at a Startup prompt",
+                139,
+                202,
                 "",
             ),
             (
@@ -259,12 +283,15 @@ def test_collect_manual_actions_exposes_safe_fields_only(tmp_path, monkeypatch):
     ]
     body = rows[1:]
     assert [row[0] for row in body] == [
-        "Location Co", "Answers Co", "Disabled Ashby Co", "Spam Co",
+        "WaaS Co", "Email Co", "Location Co", "Answers Co", "Disabled Ashby Co", "Spam Co",
         "Uncertain Co", "Captcha Co",
     ]
     assert all("Debt Co" not in row and "Submitted Co" not in row for row in body)
     assert any(row[7] is True and row[8] is True for row in body)
     by_company = {row[0]: row for row in body}
+    assert by_company["WaaS Co"][2] == "waas"
+    assert by_company["Email Co"][2] == "email"
+    assert by_company["Location Co"][2] == "lever"
     assert by_company["Location Co"][3] == "Finish manually"
     assert by_company["Answers Co"][3] == "Answer questions"
     assert by_company["Disabled Ashby Co"][3] == "Finish manually"

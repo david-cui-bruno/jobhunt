@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 
 from digest import AGENT_DEBT_PREFIXES, MANUAL_FINISH_PREFIXES
 from notify import mailer
+from submission.lanes import classify_url
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "out" / "tracker.db"
@@ -182,7 +183,7 @@ def _collect_manual_actions(conn: sqlite3.Connection) -> list[list]:
     """ if has_attempts else ""
     attempt_fields = "sa.outcome, sa.reason_code, sa.raw_reason, sa.click_attempted, sa.confirmation_observed, sa.artifact_refs_json," if has_attempts else "NULL AS outcome, NULL AS reason_code, NULL AS raw_reason, NULL AS click_attempted, NULL AS confirmation_observed, NULL AS artifact_refs_json,"
     rows = conn.execute(f"""
-        SELECT p.company, p.title, p.ats, p.url, p.last_error, p.first_seen, p.last_attempt_at,
+        SELECT p.company, p.title, p.url, p.last_error, p.first_seen, p.last_attempt_at,
                {resume_select} AS prepared_resume,
                {attempt_fields}
                p.posting_id
@@ -211,7 +212,7 @@ def _collect_manual_actions(conn: sqlite3.Connection) -> list[list]:
         output.append([
             row["company"] or "?",
             row["title"] or "?",
-            row["ats"] or "",
+            classify_url(row["url"] or "")[0],
             action,
             row["url"] or "",
             f"{age_days}d" if age_days != "" else "",
