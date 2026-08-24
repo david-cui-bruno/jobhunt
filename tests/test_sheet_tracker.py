@@ -184,6 +184,60 @@ def _manual_actions_db(tmp_path):
                 "{}",
                 "[]",
             ),
+            (
+                "a3",
+                "debt",
+                "other",
+                "unsupported",
+                "w",
+                "headless",
+                "test",
+                192,
+                193,
+                "manual",
+                "manual",
+                "no adapter for other",
+                0,
+                0,
+                "{}",
+                "[]",
+            ),
+            (
+                "a4",
+                "ashby-spam",
+                "ashby",
+                "ashby",
+                "w",
+                "headless",
+                "test",
+                193,
+                194,
+                "manual",
+                "manual",
+                "Ashby rejected the submission as possible spam: use normal Chrome",
+                0,
+                0,
+                "{}",
+                "[]",
+            ),
+            (
+                "a5",
+                "ashby-disabled",
+                "ashby",
+                "ashby",
+                "w",
+                "headless",
+                "test",
+                194,
+                195,
+                "manual",
+                "manual",
+                "ashby automation disabled after spam rejection; finish in trusted browser",
+                0,
+                0,
+                "{}",
+                "[]",
+            ),
         ],
     )
     conn.commit()
@@ -251,3 +305,37 @@ def test_ensure_sheet_reuses_existing_manual_actions_sheet(monkeypatch):
 
     assert sheet_tracker._ensure_sheet("sid", "Manual Actions") == 42
     assert calls == [("GET", "/sid?fields=sheets.properties", None)]
+
+
+def test_sync_quotes_manual_actions_a1_ranges(tmp_path, monkeypatch):
+    captured = []
+
+    def fake_api(method, path, body=None):
+        captured.append((method, path, body))
+        if method == "GET":
+            return {
+                "sheets": [
+                    {"properties": {"title": "Dashboard", "sheetId": 1}},
+                    {"properties": {"title": "Applications", "sheetId": 2}},
+                    {"properties": {"title": "Pipeline", "sheetId": 3}},
+                    {"properties": {"title": "Manual Actions", "sheetId": 4}},
+                ]
+            }
+        return {}
+
+    state = tmp_path / "sheet_tracker.json"
+    state.write_text(json.dumps({"spreadsheet_id": "sid", "url": "https://sheet.example"}))
+    db = tmp_path / "tracker.db"
+    db.touch()
+    monkeypatch.setattr(sheet_tracker, "STATE", state)
+    monkeypatch.setattr(sheet_tracker, "DB", db)
+    monkeypatch.setattr(sheet_tracker, "_api", fake_api)
+    monkeypatch.setattr(sheet_tracker, "_collect", lambda: ([], [], {"total": 0, "responded": 0, "week": 0, "oa": 0, "interview": 0, "offer": 0, "rejected": 0}))
+    monkeypatch.setattr(sheet_tracker, "_collect_manual_actions", lambda conn: [sheet_tracker.MANUAL_ACTION_HEADERS[:]])
+
+    assert sheet_tracker.sync() == "https://sheet.example"
+
+    clear_body = next(body for method, path, body in captured if path == "/sid/values:batchClear")
+    update_body = next(body for method, path, body in captured if path == "/sid/values:batchUpdate")
+    assert "'Manual Actions'!A:J" in clear_body["ranges"]
+    assert any(row["range"] == "'Manual Actions'!A1" for row in update_body["data"])

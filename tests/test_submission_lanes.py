@@ -3,7 +3,12 @@ import sys
 import types
 
 import drip
-from submission.lanes import classify_url, quarantine_unsupported, reconcile_nonautomatic_ready
+from submission.lanes import (
+    classify_url,
+    preparation_destination,
+    quarantine_unsupported,
+    reconcile_nonautomatic_ready,
+)
 
 
 import pytest
@@ -53,10 +58,59 @@ def test_lane_mapping_is_explicit() -> None:
     assert classify_url("https://example.com/careers/1")[1].name == "unsupported"
 
 
+def test_owned_ready_flow_lanes_are_explicit() -> None:
+    _ats, email_lane = classify_url("https://news.ycombinator.com/item?id=123")
+    _ats, waas_lane = classify_url("https://www.workatastartup.com/jobs/123/example-engineer")
+    _ats, smartrecruiters_lane = classify_url("https://jobs.smartrecruiters.com/acme/1")
+
+    assert email_lane.owns_ready_flow is True
+    assert waas_lane.owns_ready_flow is True
+    assert smartrecruiters_lane.owns_ready_flow is False
+
+
 def test_hn_and_waas_sources_are_not_classified_as_unsupported() -> None:
     assert classify_url("https://news.ycombinator.com/item?id=123")[1].name == "email"
     assert classify_url("mailto:jobs@example.com")[1].name == "email"
     assert classify_url("https://www.workatastartup.com/jobs/123/example-engineer")[1].name == "waas"
+
+
+def test_owned_ready_flow_destinations_remain_ready(conn):
+    assert preparation_destination(conn, "https://news.ycombinator.com/item?id=123") == ("ready", None)
+    assert preparation_destination(conn, "https://www.workatastartup.com/jobs/123/example-engineer") == (
+        "ready",
+        None,
+    )
+
+
+def test_reconcile_nonautomatic_ready_preserves_owned_ready_flows(conn):
+    conn.executemany(
+        "INSERT INTO postings(posting_id,status,url) VALUES (?,?,?)",
+        [
+            ("hn-1", "ready", "https://news.ycombinator.com/item?id=123"),
+            ("waas-1", "ready", "https://www.workatastartup.com/jobs/123/example-engineer"),
+            ("sr-1", "ready", "https://jobs.smartrecruiters.com/acme/1"),
+            ("ashby-1", "ready", "https://jobs.ashbyhq.com/acme/id"),
+        ],
+    )
+    conn.commit()
+
+    assert reconcile_nonautomatic_ready(conn) == 2
+    rows = {
+        row[0]: row[1:]
+        for row in conn.execute("SELECT posting_id,status,outcome,last_error FROM postings ORDER BY posting_id")
+    }
+    assert rows["hn-1"] == ("ready", None, None)
+    assert rows["waas-1"] == ("ready", None, None)
+    assert rows["sr-1"] == (
+        "manual",
+        "manual",
+        "prepared for manual completion: smartrecruiters",
+    )
+    assert rows["ashby-1"] == (
+        "manual",
+        "manual",
+        "prepared for manual completion: ashby",
+    )
 
 
 def test_waas_submit_worker_branch_requires_opt_in(monkeypatch) -> None:

@@ -247,7 +247,7 @@ def compose(d: dict) -> str | None:
 
     if d.get("manual_finish"):
         lines = []
-        for company, title, url, err in d["manual_finish"]:
+        for company, title, url, err in d["manual_finish"][:8]:
             lines.append(f"• {company} - {title[:55]}\n  action: {err[:180]}\n  {url}")
         sections.append("manual completion needed:\n" + "\n".join(lines))
 

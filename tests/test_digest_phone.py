@@ -90,6 +90,22 @@ class CollectClassificationTest(unittest.TestCase):
         self.assertNotIn("Lever hCaptcha requires manual completion", short)
         self.assertLessEqual(len(short), digest.SHORT_LIMIT)
 
+    def test_full_digest_caps_manual_finish_section(self):
+        d = _collected(
+            manual_finish=[
+                (f"Manual Co {i}", "SWE", f"https://manual.example/{i}",
+                 "prepared for manual completion: smartrecruiters")
+                for i in range(9)
+            ],
+        )
+
+        full = digest.compose(d)
+
+        self.assertIn("Manual Co 0", full)
+        self.assertIn("Manual Co 7", full)
+        self.assertNotIn("Manual Co 8", full)
+
+
     def test_pre_ledger_db_without_submission_attempts_does_not_crash(self):
         conn = sqlite3.connect(":memory:")
         conn.execute("""

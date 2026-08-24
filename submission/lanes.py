@@ -16,15 +16,16 @@ class LanePolicy:
     attempts_per_cycle: int
     automatic: bool
     preparable: bool
+    owns_ready_flow: bool
 
 
-DIRECT = LanePolicy("direct", frozenset({"greenhouse", "lever", "workable", "rippling"}), 2, 8, True, True)
-WORKDAY = LanePolicy("workday", frozenset({"workday"}), 1, 2, True, True)
-ASHBY = LanePolicy("ashby", frozenset({"ashby"}), 1, 1, False, True)
-MANUAL = LanePolicy("manual", frozenset({"smartrecruiters"}), 0, 0, False, True)
-EMAIL = LanePolicy("email", frozenset({"email"}), 0, 0, False, False)
-WAAS = LanePolicy("waas", frozenset({"waas"}), 0, 0, False, False)
-UNSUPPORTED = LanePolicy("unsupported", frozenset({"other", "icims"}), 0, 0, False, False)
+DIRECT = LanePolicy("direct", frozenset({"greenhouse", "lever", "workable", "rippling"}), 2, 8, True, True, True)
+WORKDAY = LanePolicy("workday", frozenset({"workday"}), 1, 2, True, True, True)
+ASHBY = LanePolicy("ashby", frozenset({"ashby"}), 1, 1, False, True, False)
+MANUAL = LanePolicy("manual", frozenset({"smartrecruiters"}), 0, 0, False, True, False)
+EMAIL = LanePolicy("email", frozenset({"email"}), 0, 0, False, False, True)
+WAAS = LanePolicy("waas", frozenset({"waas"}), 0, 0, False, False, True)
+UNSUPPORTED = LanePolicy("unsupported", frozenset({"other", "icims"}), 0, 0, False, False, False)
 POLICIES = (DIRECT, WORKDAY, ASHBY, MANUAL, EMAIL, WAAS, UNSUPPORTED)
 
 
@@ -55,7 +56,7 @@ def ashby_enabled(conn: sqlite3.Connection) -> bool:
 
 def preparation_destination(conn: sqlite3.Connection, url: str) -> tuple[str, str | None]:
     ats, lane = classify_url(url)
-    if lane.automatic or (lane.name == ASHBY.name and ashby_enabled(conn)):
+    if lane.owns_ready_flow or (lane.name == ASHBY.name and ashby_enabled(conn)):
         return "ready", None
     if lane.preparable:
         return "manual", f"prepared for manual completion: {ats}"

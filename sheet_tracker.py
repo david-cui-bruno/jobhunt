@@ -150,6 +150,22 @@ def _manual_action(reason: str, click_attempted: int | None, confirmed: int | No
     return "Answer questions"
 
 
+def _manual_action_from_components(
+    components: list[str | None],
+    click_attempted: int | None,
+    confirmed: int | None,
+) -> str | None:
+    if click_attempted and not confirmed:
+        return "Verify before retrying"
+    texts = [component for component in components if component]
+    if any(text.startswith(prefix) for text in texts for prefix in AGENT_DEBT_PREFIXES):
+        return None
+    if any(text.startswith(prefix) for text in texts for prefix in MANUAL_FINISH_PREFIXES):
+        return "Finish manually"
+    combined = " ".join(texts)
+    return _manual_action(combined, None, None)
+
+
 def _collect_manual_actions(conn: sqlite3.Connection) -> list[list]:
     has_attempts = _table_exists(conn, "submission_attempts")
     email_cols = _columns(conn, "emails")
@@ -180,8 +196,12 @@ def _collect_manual_actions(conn: sqlite3.Connection) -> list[list]:
     output = [MANUAL_ACTION_HEADERS[:]]
     for row in rows:
         reason = row["last_error"] or row["raw_reason"] or row["reason_code"] or ""
-        action_reason = " ".join(filter(None, [row["reason_code"], row["last_error"], row["raw_reason"]]))
-        action = _manual_action(action_reason, row["click_attempted"], row["confirmation_observed"])
+        reason_components = [row["last_error"], row["raw_reason"], row["reason_code"]]
+        action = _manual_action_from_components(
+            reason_components,
+            row["click_attempted"],
+            row["confirmation_observed"],
+        )
         if not action:
             continue
         artifacts = json.loads(row["artifact_refs_json"] or "{}") if row["artifact_refs_json"] else {}
@@ -309,14 +329,14 @@ def sync() -> str:
     pipe_rows = [["Company", "Role", "Stage", "Source", "Link"]] + pipeline
 
     # Full clear + rewrite (one-way view; cheap at this scale).
-    _api("POST", f"/{sid}/values:batchClear", {"ranges": ["Dashboard!A1:Z100", "Applications!A1:Z5000", "Pipeline!A1:Z5000", "Manual Actions!A:J"]})
+    _api("POST", f"/{sid}/values:batchClear", {"ranges": ["Dashboard!A1:Z100", "Applications!A1:Z5000", "Pipeline!A1:Z5000", "'Manual Actions'!A:J"]})
     _api("POST", f"/{sid}/values:batchUpdate", {
         "valueInputOption": "RAW",
         "data": [
             {"range": "Dashboard!A1", "values": dashboard},
             {"range": "Applications!A1", "values": app_rows},
             {"range": "Pipeline!A1", "values": pipe_rows},
-            {"range": "Manual Actions!A1", "values": manual_actions},
+            {"range": "'Manual Actions'!A1", "values": manual_actions},
         ],
     })
 
