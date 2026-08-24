@@ -68,6 +68,8 @@ HARD_EXCLUDE_RES = [re.compile(p) for p in (
     r"\bmanufacturing engineer", r"\bindustrial engineer",
     r"\bprocess engineer", r"\bstructural engineer", r"\bfacilities\b",
     r"\bquality engineer", r"\btest technician",
+    r"\bfpga\b", r"\bengineering intern\b.{0,30}\bcivil\b",
+    r"\btransducer\b", r"\bpropulsion test\b", r"\bdc design\b",
 )]
 
 

@@ -235,6 +235,25 @@ class SourceCoverageTests(unittest.TestCase):
             with self.subTest(title=title):
                 self.assertTrue(filt.title_ok(title))
 
+    def test_hardware_only_engineering_titles_are_filtered(self) -> None:
+        for title in (
+            "FPGA Engineering Intern",
+            "Student Engineering Intern - Civil",
+            "Transducer Engineering Intern",
+            "Propulsion Test Engineering Intern",
+            "AI Infrastructure DC Design Intern",
+        ):
+            with self.subTest(title=title):
+                self.assertFalse(filt.title_ok(title))
+
+        for title in (
+            "Embedded Software Engineering Intern",
+            "Firmware Engineering Intern",
+            "Powertrain Controls Software Engineering Intern",
+        ):
+            with self.subTest(title=title):
+                self.assertTrue(filt.title_ok(title))
+
     def test_manual_company_does_not_block_a_distinct_application(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "tracker.db"
