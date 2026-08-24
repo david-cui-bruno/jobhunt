@@ -157,6 +157,7 @@ class _FakeLocator:
             "email_gate_missing_legal_label",
             "email_gate_ambiguous_legal_label",
             "email_gate_label_click_does_not_check_legal",
+            "email_gate_legal_label_click_raises",
         } and self.name == "legal-disclaimer-checkbox":
             raise Exception("Element is outside of the viewport")
         self.checked = True
@@ -254,6 +255,7 @@ class _FakePage:
                 "email_gate_missing_legal_label",
                 "email_gate_ambiguous_legal_label",
                 "email_gate_label_click_does_not_check_legal",
+                "email_gate_legal_label_click_raises",
             } and not self.next_clicks
             return _FakeLocator(self, "primary-email", visible=present, count=1 if present else 0)
         if selector == "#legal-disclaimer-checkbox":
@@ -268,6 +270,7 @@ class _FakePage:
                 "email_gate_missing_legal_label",
                 "email_gate_ambiguous_legal_label",
                 "email_gate_label_click_does_not_check_legal",
+                "email_gate_legal_label_click_raises",
             } and not self.next_clicks
             return _FakeLocator(self, "legal-disclaimer-checkbox", visible=False, count=1 if present else 0)
         if selector == "label[for='legal-disclaimer-checkbox']":
@@ -281,6 +284,8 @@ class _FakePage:
                 count = 1
 
             def click_label():
+                if self.variant == "email_gate_legal_label_click_raises":
+                    raise Exception("label click failed")
                 if self.variant != "email_gate_label_click_does_not_check_legal":
                     self.checked["legal-disclaimer-checkbox"] = {"via": "label"}
 
@@ -491,6 +496,19 @@ def test_oracle_email_gate_legal_label_fallback_fail_closed_when_missing_ambiguo
         assert page.next_clicks == 0
         assert page.uploaded_to is None
         assert page.submit_clicks == 0
+
+
+def test_oracle_email_gate_legal_label_fallback_fail_closed_when_label_click_raises(fake_oracle, pdf):
+    page = fake_oracle("email_gate_legal_label_click_raises")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-legal-label-click-raises", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert "anonymous email gate" in result["reason"]
+    assert page.events == ["click:button:has-text('Apply')", "click:legal-disclaimer-label"]
+    assert page.next_clicks == 0
+    assert page.uploaded_to is None
+    assert page.submit_clicks == 0
 
 
 def test_oracle_anonymous_email_gate_uses_exact_accessible_next_button(fake_oracle, pdf):

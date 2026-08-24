@@ -232,11 +232,14 @@ def _check_oracle_legal_disclaimer(page, legal) -> bool:
         legal.check(force=True, timeout=5000)
         return legal.is_checked()
     except Exception:
-        label = page.locator("label[for='legal-disclaimer-checkbox']")
-        if label.count() != 1 or not label.is_visible():
+        try:
+            label = page.locator("label[for='legal-disclaimer-checkbox']")
+            if label.count() != 1 or not label.is_visible():
+                return False
+            label.click(timeout=5000)
+            return legal.is_checked()
+        except Exception:
             return False
-        label.click(timeout=5000)
-        return legal.is_checked()
 
 
 def _handle_anonymous_email_gate(page) -> dict | None:
