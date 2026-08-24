@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import sqlite3
 import time
 import urllib.request
@@ -87,6 +88,7 @@ def _spreadsheet_id() -> str:
             {"properties": {"title": "Dashboard", "gridProperties": {"frozenRowCount": 1}}},
             {"properties": {"title": "Applications", "gridProperties": {"frozenRowCount": 1}}},
             {"properties": {"title": "Pipeline", "gridProperties": {"frozenRowCount": 1}}},
+            {"properties": {"title": "Manual Actions", "gridProperties": {"frozenRowCount": 1}}},
         ],
     })
     sid = created["spreadsheetId"]
@@ -97,6 +99,100 @@ def _spreadsheet_id() -> str:
 def _sheet_ids(sid: str) -> dict[str, int]:
     meta = _api("GET", f"/{sid}?fields=sheets.properties")
     return {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta["sheets"]}
+
+
+def _ensure_sheet(sid: str, title: str) -> int:
+    ids = _sheet_ids(sid)
+    if title in ids:
+        return ids[title]
+    created = _api("POST", f"/{sid}:batchUpdate", {"requests": [{"addSheet": {"properties": {"title": title, "gridProperties": {"frozenRowCount": 1}}}}]})
+    return created["replies"][0]["addSheet"]["properties"]["sheetId"]
+
+
+MANUAL_ACTION_HEADERS = [
+    "Company", "Role", "ATS", "Action", "URL", "Age", "Attempt state",
+    "Prepared resume", "Prepared screenshot", "Latest reason",
+]
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    if not _table_exists(conn, table):
+        return set()
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _safe_reason(reason: str) -> str:
+    text = re.sub(r"/Users/\S+", "[local path omitted]", reason or "")
+    text = re.sub(r"raw answer\s*[:=]?\s*\S+", "[answer omitted]", text, flags=re.IGNORECASE)
+    return text[:300]
+
+
+def _manual_action(reason: str, click_attempted: int | None, confirmed: int | None) -> str | None:
+    lower = (reason or "").lower()
+    if click_attempted and not confirmed:
+        return "Verify before retrying"
+    if "captcha" in lower or "datadome" in lower:
+        return "Complete CAPTCHA"
+    if "manual" in lower and ("completion" in lower or "field" in lower or "location" in lower or "trusted-browser" in lower):
+        return "Finish manually"
+    return None
+
+
+def _collect_manual_actions(conn: sqlite3.Connection) -> list[list]:
+    has_attempts = _table_exists(conn, "submission_attempts")
+    email_cols = _columns(conn, "emails")
+    resume_col = "resume_pdf" if "resume_pdf" in email_cols else "resume_path" if "resume_path" in email_cols else None
+    resume_select = f"EXISTS (SELECT 1 FROM emails e WHERE e.posting_id = p.posting_id AND COALESCE(e.{resume_col}, '') != '')" if resume_col else "0"
+    latest_attempt = """
+        LEFT JOIN (
+            SELECT sa.* FROM submission_attempts sa
+            JOIN (
+                SELECT posting_id, MAX(started_at) AS started_at
+                FROM submission_attempts GROUP BY posting_id
+            ) latest USING (posting_id, started_at)
+        ) sa ON sa.posting_id = p.posting_id
+    """ if has_attempts else ""
+    attempt_fields = "sa.outcome, sa.reason_code, sa.raw_reason, sa.click_attempted, sa.confirmation_observed, sa.artifact_refs_json," if has_attempts else "NULL AS outcome, NULL AS reason_code, NULL AS raw_reason, NULL AS click_attempted, NULL AS confirmation_observed, NULL AS artifact_refs_json,"
+    rows = conn.execute(f"""
+        SELECT p.company, p.title, p.ats, p.url, p.last_error, p.first_seen, p.last_attempt_at,
+               {resume_select} AS prepared_resume,
+               {attempt_fields}
+               p.posting_id
+        FROM postings p
+        {latest_attempt}
+        WHERE p.status = 'manual'
+        ORDER BY COALESCE(p.last_attempt_at, p.first_seen, 0) DESC, p.rowid DESC
+    """).fetchall()
+
+    now = int(time.time())
+    output = [MANUAL_ACTION_HEADERS[:]]
+    for row in rows:
+        reason = row["last_error"] or row["raw_reason"] or row["reason_code"] or ""
+        action_reason = " ".join(filter(None, [row["reason_code"], row["last_error"], row["raw_reason"]]))
+        action = _manual_action(action_reason, row["click_attempted"], row["confirmation_observed"])
+        if not action:
+            continue
+        artifacts = json.loads(row["artifact_refs_json"] or "{}") if row["artifact_refs_json"] else {}
+        prepared_screenshot = any("screenshot" in key and value for key, value in artifacts.items())
+        age_source = row["last_attempt_at"] or row["first_seen"] or 0
+        age_days = max(0, (now - int(age_source)) // 86400) if age_source else ""
+        output.append([
+            row["company"] or "?",
+            row["title"] or "?",
+            row["ats"] or "",
+            action,
+            row["url"] or "",
+            f"{age_days}d" if age_days != "" else "",
+            row["outcome"] or row["reason_code"] or "manual",
+            bool(row["prepared_resume"]),
+            bool(prepared_screenshot),
+            _safe_reason(reason),
+        ])
+    return output
 
 
 def _status_for(company: str, submitted_at: int, events: list[tuple[str, int]]) -> tuple[str, str]:
@@ -177,8 +273,13 @@ def _collect() -> tuple[list[list], list[list], dict]:
 
 def sync() -> str:
     sid = _spreadsheet_id()
+    manual_sheet_id = _ensure_sheet(sid, "Manual Actions")
     ids = _sheet_ids(sid)
     apps, pipeline, s = _collect()
+    conn = sqlite3.connect(DB)
+    conn.row_factory = sqlite3.Row
+    manual_actions = _collect_manual_actions(conn)
+    conn.close()
     now = datetime.datetime.now(ET).strftime("%b %-d, %-I:%M %p ET")
 
     resp_rate = f"{100 * s['responded'] // s['total']}%" if s["total"] else "0%"
@@ -200,19 +301,21 @@ def sync() -> str:
     pipe_rows = [["Company", "Role", "Stage", "Source", "Link"]] + pipeline
 
     # Full clear + rewrite (one-way view; cheap at this scale).
-    _api("POST", f"/{sid}/values:batchClear", {"ranges": ["Dashboard!A1:Z100", "Applications!A1:Z5000", "Pipeline!A1:Z5000"]})
+    _api("POST", f"/{sid}/values:batchClear", {"ranges": ["Dashboard!A1:Z100", "Applications!A1:Z5000", "Pipeline!A1:Z5000", "Manual Actions!A:J"]})
     _api("POST", f"/{sid}/values:batchUpdate", {
         "valueInputOption": "RAW",
         "data": [
             {"range": "Dashboard!A1", "values": dashboard},
             {"range": "Applications!A1", "values": app_rows},
             {"range": "Pipeline!A1", "values": pipe_rows},
+            {"range": "Manual Actions!A1", "values": manual_actions},
         ],
     })
 
     # Formatting: header bold, badge conditional colors, sensible widths.
     fmt: list[dict] = []
-    for tab in ("Dashboard", "Applications", "Pipeline"):
+    ids["Manual Actions"] = manual_sheet_id
+    for tab in ("Dashboard", "Applications", "Pipeline", "Manual Actions"):
         fmt.append({"repeatCell": {
             "range": {"sheetId": ids[tab], "startRowIndex": 0, "endRowIndex": 1},
             "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
@@ -236,6 +339,21 @@ def sync() -> str:
     fmt.append({"updateDimensionProperties": {
         "range": {"sheetId": ids["Applications"], "dimension": "COLUMNS", "startIndex": 0, "endIndex": 2},
         "properties": {"pixelSize": 190}, "fields": "pixelSize"}})
+    fmt.extend([
+        {"setBasicFilter": {"filter": {"range": {"sheetId": manual_sheet_id, "startRowIndex": 0, "startColumnIndex": 0, "endColumnIndex": 10}}}},
+        {"repeatCell": {
+            "range": {"sheetId": manual_sheet_id, "startColumnIndex": 3, "endColumnIndex": 4},
+            "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.89, "green": 0.95, "blue": 1.0}, "wrapStrategy": "WRAP"}},
+            "fields": "userEnteredFormat(backgroundColor,wrapStrategy)"}},
+        {"repeatCell": {
+            "range": {"sheetId": manual_sheet_id, "startColumnIndex": 6, "endColumnIndex": 7},
+            "cell": {"userEnteredFormat": {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.80}, "wrapStrategy": "WRAP"}},
+            "fields": "userEnteredFormat(backgroundColor,wrapStrategy)"}},
+        {"repeatCell": {
+            "range": {"sheetId": manual_sheet_id, "startColumnIndex": 0, "endColumnIndex": 10},
+            "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+            "fields": "userEnteredFormat.wrapStrategy"}},
+    ])
     _api("POST", f"/{sid}:batchUpdate", {"requests": fmt})
 
     url = json.loads(STATE.read_text()).get("url") or f"https://docs.google.com/spreadsheets/d/{sid}"
