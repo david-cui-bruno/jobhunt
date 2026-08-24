@@ -70,11 +70,12 @@ def test_lever_thanks_path_is_confirmation():
 
 
 class FakeLocator:
-    def __init__(self, page, selector, count=0, visible=False):
+    def __init__(self, page, selector, count=0, visible=False, visibilities=None):
         self.page = page
         self.selector = selector
         self._count = count
-        self._visible = visible
+        self._visibilities = list(visibilities) if visibilities is not None else [visible] * count
+        self._visible = visible if visibilities is None else any(self._visibilities)
         self.first = self
 
     def count(self):
@@ -82,6 +83,14 @@ class FakeLocator:
 
     def is_visible(self):
         return self._visible
+
+    def nth(self, index):
+        return FakeLocator(
+            self.page,
+            self.selector,
+            count=1,
+            visible=self._visibilities[index],
+        )
 
     def set_input_files(self, _path):
         self.page.resume_uploaded = True
@@ -101,9 +110,13 @@ class FakeLeverCaptchaPage:
         self.submit_clicks = 0
         self.resume_uploaded = False
         self.visible_iframes = []
+        self.hidden_iframes = []
 
     def add_visible_iframe(self, src):
         self.visible_iframes.append(src)
+
+    def add_hidden_iframe(self, src):
+        self.hidden_iframes.append(src)
 
     def goto(self, *_args, **_kwargs):
         pass
@@ -121,7 +134,13 @@ class FakeLeverCaptchaPage:
         if selector == "input[type=file]":
             return FakeLocator(self, selector, count=1, visible=True)
         if "hcaptcha.com" in selector:
-            return FakeLocator(self, selector, count=len(self.visible_iframes), visible=bool(self.visible_iframes))
+            visibilities = [False] * len(self.hidden_iframes) + [True] * len(self.visible_iframes)
+            return FakeLocator(
+                self,
+                selector,
+                count=len(visibilities),
+                visibilities=visibilities,
+            )
         if "h-captcha" in selector or "h-captcha-response" in selector:
             return FakeLocator(self, selector, count=0)
         if "btn-submit" in selector or "Submit application" in selector:
@@ -159,6 +178,20 @@ class FakeBrowser:
 @contextmanager
 def fake_playwright():
     yield object()
+
+
+def test_lever_captcha_present_ignores_hidden_passive_hcaptcha_markup():
+    fake_page = FakeLeverCaptchaPage()
+    fake_page.add_hidden_iframe("https://newassets.hcaptcha.com/captcha/v1/passive")
+
+    assert not lever.lever_captcha_present(fake_page)
+
+
+def test_lever_captcha_present_detects_visible_hcaptcha_challenge():
+    fake_page = FakeLeverCaptchaPage()
+    fake_page.add_visible_iframe("https://newassets.hcaptcha.com/captcha/v1/abc")
+
+    assert lever.lever_captcha_present(fake_page)
 
 
 def test_lever_hcaptcha_stops_before_submit():

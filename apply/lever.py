@@ -74,7 +74,12 @@ def lever_captcha_present(page) -> bool:
         "textarea[name='h-captcha-response']",
         "[data-sitekey][class*='h-captcha']",
     )
-    return any(page.locator(selector).count() > 0 for selector in selectors)
+    for selector in selectors:
+        locator = page.locator(selector)
+        for index in range(locator.count()):
+            if locator.nth(index).is_visible():
+                return True
+    return False
 
 
 def _shot(page, slug, stage):
