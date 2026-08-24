@@ -669,5 +669,66 @@ def test_saved_draft_entry_bypasses_initial_upload_and_refreshes_resume(monkeypa
     refresh.assert_called_once_with(page, resume)
 
 
+class _FakePlaywrightContext:
+    def __init__(self, page):
+        self.page = page
+        self.chromium = self
+        self.browser = self
+        self.context = self
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def launch(self, **_kwargs):
+        return self.browser
+
+    def new_context(self, **_kwargs):
+        return self.context
+
+    def new_page(self):
+        return self.page
+
+    def close(self):
+        self.closed = True
+
+
+def _apply_with_second_entry_gate(monkeypatch, tmp_path, verification_required):
+    page = mock.Mock()
+    entries = [
+        workday.WorkdayEntryResult("auth_required", "workday account access required"),
+        workday.WorkdayEntryResult("auth_required", "still blocked detail"),
+    ]
+    monkeypatch.setattr(workday, "sync_playwright", lambda: _FakePlaywrightContext(page))
+    monkeypatch.setattr(workday, "configure_page", lambda page: page)
+    monkeypatch.setattr(workday, "enter_application_form", lambda page, apply_url: entries.pop(0))
+    monkeypatch.setattr(workday, "ensure_workday_account_access", lambda *args: (True, ""))
+    monkeypatch.setattr(workday, "_verification_required", lambda page: verification_required)
+    monkeypatch.setattr(workday, "_shot", lambda *args, **kwargs: None)
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"pdf")
+
+    return workday.apply_workday(APPLY_URL, resume, "slug", dry_run=True)
+
+
+def test_second_entry_auth_required_labels_verification_gate(monkeypatch, tmp_path):
+    result = _apply_with_second_entry_gate(monkeypatch, tmp_path, verification_required=True)
+
+    assert result["ok"] is True
+    assert result["reason"] == "still blocked detail"
+    assert result["unanswered"] == ["Workday account verification"]
+
+
+def test_second_entry_auth_required_labels_sign_in_gate(monkeypatch, tmp_path):
+    result = _apply_with_second_entry_gate(monkeypatch, tmp_path, verification_required=False)
+
+    assert result["ok"] is True
+    assert result["reason"] == "still blocked detail"
+    assert result["unanswered"] == ["Workday account sign-in"]
+
+
 if __name__ == "__main__":
     unittest.main()

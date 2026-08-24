@@ -1481,8 +1481,12 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
             browser.close()
             return result
         if entry.state == "auth_required":
-            result.update(ok=True, reason=entry.reason,
-                          unanswered=["Workday account verification"])
+            unanswered = (
+                "Workday account verification"
+                if _verification_required(page)
+                else "Workday account sign-in"
+            )
+            result.update(ok=True, reason=entry.reason, unanswered=[unanswered])
             _shot(page, slug, "account_gate")
             browser.close()
             return result
