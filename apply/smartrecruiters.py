@@ -27,10 +27,14 @@ def _preflight_outcome(body_text: str, captcha_present: bool = False) -> dict | 
     body = body_text.lower()
     if "job has expired" in body or "job is no longer available" in body:
         return {"outcome": "stale", "reason": "posting expired"}
-    if captcha_present:
+    datadome_markers = ("datadome", "captcha-delivery.com", "verify you are human")
+    if captcha_present or any(marker in body for marker in datadome_markers):
         return {
             "ok": True,
             "outcome": "manual",
+            "retryable": False,
+            "click_attempted": False,
+            "submission_uncertain": False,
             "reason": "SmartRecruiters CAPTCHA requires manual completion",
             "unanswered": ["SmartRecruiters CAPTCHA"],
         }

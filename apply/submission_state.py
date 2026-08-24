@@ -11,6 +11,7 @@ import os
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 MARKER_ENV = "JOBHUNT_SUBMISSION_ATTEMPT_MARKER"
@@ -23,7 +24,7 @@ _CONFIRMATION_RE = re.compile(
     re.IGNORECASE,
 )
 _CONFIRMATION_URL_RE = re.compile(
-    r"(?:confirmation|thank[-_]?you|application[-_]?submitted)",
+    r"(?:confirmation|thank[-_]?you|application[-_]?submitted|(?:^|/)thanks(?:/|$))",
     re.IGNORECASE,
 )
 
@@ -46,9 +47,15 @@ def submit_was_attempted() -> bool:
 
 def confirmation_observed(body_text: str, url: str = "") -> bool:
     """Require an application-specific confirmation, not generic page copy."""
+    parsed = urlparse(url or "")
+    path = parsed.path or ""
+    compatibility_url = ""
+    if url:
+        compatibility_url = f"{parsed.scheme}://{parsed.netloc}{path}" if parsed.netloc else path
     return bool(
         _CONFIRMATION_RE.search(body_text or "")
-        or _CONFIRMATION_URL_RE.search(url or "")
+        or _CONFIRMATION_URL_RE.search(path)
+        or _CONFIRMATION_URL_RE.search(compatibility_url)
     )
 
 

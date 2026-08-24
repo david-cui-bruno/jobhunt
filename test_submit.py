@@ -210,6 +210,10 @@ class SubmitSafetyTests(unittest.TestCase):
         captcha = smartrecruiters._preflight_outcome("Active job", captcha_present=True)
         self.assertEqual("manual", captcha["outcome"])
         self.assertEqual(["SmartRecruiters CAPTCHA"], captcha["unanswered"])
+        datadome = smartrecruiters._preflight_outcome("Please wait while datadome verifies your browser")
+        self.assertEqual("manual", datadome["outcome"])
+        self.assertFalse(datadome["retryable"])
+        self.assertEqual(["SmartRecruiters CAPTCHA"], datadome["unanswered"])
         self.assertIn("job has expired", submit.DEAD_MARKERS)
 
     def test_greenhouse_wrapper_urls_are_canonicalized_and_routed(self) -> None:

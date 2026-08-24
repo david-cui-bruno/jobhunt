@@ -67,6 +67,16 @@ def _lever_required_reason(required_empty: list[str]) -> str:
     return f"needs answers: {required_empty[:6]}"
 
 
+def lever_captcha_present(page) -> bool:
+    selectors = (
+        "iframe[src*='hcaptcha.com']",
+        "iframe[title*='hcaptcha' i]",
+        "textarea[name='h-captcha-response']",
+        "[data-sitekey][class*='h-captcha']",
+    )
+    return any(page.locator(selector).count() > 0 for selector in selectors)
+
+
 def _shot(page, slug, stage):
     SHOTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(SHOTS / f"{slug}_{stage}.png"), full_page=True)
@@ -166,6 +176,20 @@ def apply_lever(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
         if dry_run:
             result["ok"] = True
             result["reason"] = "dry run — did not submit"
+            browser.close()
+            return result
+
+        if lever_captcha_present(page):
+            result.update(
+                ok=True,
+                submitted=False,
+                outcome="manual",
+                retryable=False,
+                click_attempted=False,
+                submission_uncertain=False,
+                reason="Lever hCaptcha requires manual completion",
+                unanswered=["Lever hCaptcha"],
+            )
             browser.close()
             return result
 

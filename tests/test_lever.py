@@ -1,9 +1,12 @@
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apply"))
 
 import lever  # noqa: E402
+from submission_state import confirmation_observed  # noqa: E402
 
 
 class FakeLeverLocationPage:
@@ -58,3 +61,122 @@ def test_mixed_blockers_keep_generic_needs_answers_reason():
     assert lever._lever_required_reason(["Current location ✱", "Work authorization ✱"]) == (
         "needs answers: ['Current location ✱', 'Work authorization ✱']"
     )
+
+
+def test_lever_thanks_path_is_confirmation():
+    assert confirmation_observed("", "https://jobs.lever.co/acme/id/thanks")
+    assert not confirmation_observed("", "https://example.com/thanksgiving")
+    assert not confirmation_observed("", "https://jobs.lever.co/acme/id?next=/thanks")
+
+
+class FakeLocator:
+    def __init__(self, page, selector, count=0, visible=False):
+        self.page = page
+        self.selector = selector
+        self._count = count
+        self._visible = visible
+        self.first = self
+
+    def count(self):
+        return self._count
+
+    def is_visible(self):
+        return self._visible
+
+    def set_input_files(self, _path):
+        self.page.resume_uploaded = True
+
+    def fill(self, _value):
+        pass
+
+    def click(self, timeout=None):
+        if "Submit application" in self.selector or "btn-submit" in self.selector:
+            self.page.submit_clicks += 1
+
+
+class FakeLeverCaptchaPage:
+    url = "https://jobs.lever.co/acme/id/apply"
+
+    def __init__(self):
+        self.submit_clicks = 0
+        self.resume_uploaded = False
+        self.visible_iframes = []
+
+    def add_visible_iframe(self, src):
+        self.visible_iframes.append(src)
+
+    def goto(self, *_args, **_kwargs):
+        pass
+
+    def set_default_timeout(self, _timeout):
+        pass
+
+    def set_default_navigation_timeout(self, _timeout):
+        pass
+
+    def wait_for_timeout(self, _timeout):
+        pass
+
+    def locator(self, selector):
+        if selector == "input[type=file]":
+            return FakeLocator(self, selector, count=1, visible=True)
+        if "hcaptcha.com" in selector:
+            return FakeLocator(self, selector, count=len(self.visible_iframes), visible=bool(self.visible_iframes))
+        if "h-captcha" in selector or "h-captcha-response" in selector:
+            return FakeLocator(self, selector, count=0)
+        if "btn-submit" in selector or "Submit application" in selector:
+            return FakeLocator(self, selector, count=1, visible=True)
+        return FakeLocator(self, selector, count=0)
+
+    def evaluate(self, script):
+        if "querySelectorAll('.application-question.required" in script:
+            return []
+        return []
+
+    def screenshot(self, **_kwargs):
+        pass
+
+    def inner_text(self, _selector):
+        return ""
+
+
+class FakeContext:
+    def __init__(self, page):
+        self.page = page
+
+    def new_page(self):
+        return self.page
+
+
+class FakeBrowser:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+@contextmanager
+def fake_playwright():
+    yield object()
+
+
+def test_lever_hcaptcha_stops_before_submit():
+    fake_page = FakeLeverCaptchaPage()
+    fake_page.add_visible_iframe("https://newassets.hcaptcha.com/captcha/v1/abc")
+    fake_browser = FakeBrowser()
+
+    with mock.patch.object(lever, "sync_playwright", fake_playwright), mock.patch.object(
+        lever.stealth, "launch_stealth_context", return_value=(fake_browser, FakeContext(fake_page))
+    ), mock.patch.object(lever.qa, "EXTRACT_JS", ""), mock.patch.object(
+        lever.qa, "harvest_select_options"
+    ), mock.patch.object(lever.qa, "get_answers", return_value=[]), mock.patch.object(
+        lever.qa, "fill_answers", return_value=([], [])
+    ), mock.patch.object(lever, "mark_submit_attempted") as mark_submit_attempted:
+        result = lever.apply_lever("https://jobs.lever.co/acme/id", Path("resume.pdf"), "lever-captcha", dry_run=False)
+
+    assert result["outcome"] == "manual"
+    assert result["click_attempted"] is False
+    assert result["submission_uncertain"] is False
+    assert fake_page.submit_clicks == 0
+    mark_submit_attempted.assert_not_called()
