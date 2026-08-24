@@ -117,11 +117,14 @@ A-D startup scout        no P26 batch           never fabricate)    by ATS lane 
   repaired Workday entry failure prefixes: `resume upload zone never appeared`
   and `apply button not found (posting closed?)`. Preview is the default and
   opens the database read-only, returning only safe fields: posting ID, company,
-  title, tenant, reason, attempt count, and URL. It excludes application ledger
-  rows, any finished click-attempted or confirmed attempt, stale or submitted
-  rows, active or applied canonical aliases, non-Workday URLs, and unrelated
-  failures. It supports legacy databases without `submission_attempts`, while
-  retaining all attempt exclusions when the ledger exists:
+  title, tenant, reason, attempt count, and URL. It excludes rows present in the
+  production `applications` ledger, any click-attempted or confirmation-observed
+  submission attempt, stale or submitted rows, active or applied URL aliases,
+  non-Workday URLs, and unrelated failures. It requires the production
+  `applications(posting_id)` safety ledger and fails closed when required
+  exclusion columns cannot be checked. It supports legacy databases without
+  `submission_attempts`, while retaining all attempt exclusions when the ledger
+  exists:
 
   ```bash
   python3 scripts/requeue_workday_recoverable.py --db out/tracker.db --preview --json

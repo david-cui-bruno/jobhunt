@@ -39,10 +39,18 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def _require_postings(conn: sqlite3.Connection) -> None:
     cols = _columns(conn, "postings")
-    required = {"id", "url"}
+    required = {"posting_id", "url", "status", "last_error", "attempt_count"}
     missing = sorted(required - cols)
     if missing:
         raise sqlite3.OperationalError("postings table missing required columns: " + ", ".join(missing))
+
+
+def _require_applications(conn: sqlite3.Connection) -> None:
+    cols = _columns(conn, "applications")
+    required = {"posting_id"}
+    missing = sorted(required - cols)
+    if missing:
+        raise sqlite3.OperationalError("applications table missing required columns: " + ", ".join(missing))
 
 
 def _value(row: sqlite3.Row, columns: set[str], name: str, default=None):
@@ -50,22 +58,15 @@ def _value(row: sqlite3.Row, columns: set[str], name: str, default=None):
 
 
 def _source_state(row: sqlite3.Row, columns: set[str]) -> str:
-    value = _value(row, columns, "source_status")
-    if value is None:
-        value = _value(row, columns, "status")
-    return str(value or "")
+    return str(_value(row, columns, "status") or "")
 
 
 def _reason(row: sqlite3.Row, columns: set[str]) -> str:
-    value = _value(row, columns, "last_error")
-    if value is None:
-        value = _value(row, columns, "outcome")
-    return str(value or "")
+    return str(_value(row, columns, "last_error") or "")
 
 
 def _canonical(row: sqlite3.Row, columns: set[str]) -> str:
-    value = _value(row, columns, "canonical_url") or _value(row, columns, "url") or ""
-    return str(value)
+    return str(_value(row, columns, "url") or "")
 
 
 def _attempt_count(row: sqlite3.Row, columns: set[str]) -> int:
@@ -79,14 +80,9 @@ def _covered_reason(reason: str) -> bool:
     return any(reason.startswith(prefix) for prefix in COVERED_REASONS)
 
 
-def _has_application_ledger(conn: sqlite3.Connection, posting_id: str) -> bool:
-    if not _table_exists(conn, "application_ledger"):
-        return False
-    cols = _columns(conn, "application_ledger")
-    if "posting_id" not in cols:
-        return False
+def _has_application(conn: sqlite3.Connection, posting_id: str) -> bool:
     return conn.execute(
-        "SELECT 1 FROM application_ledger WHERE posting_id=? LIMIT 1", (posting_id,)
+        "SELECT 1 FROM applications WHERE posting_id=? LIMIT 1", (posting_id,)
     ).fetchone() is not None
 
 
@@ -94,15 +90,17 @@ def _has_finished_click_or_confirmation(conn: sqlite3.Connection, posting_id: st
     if not _table_exists(conn, "submission_attempts"):
         return False
     cols = _columns(conn, "submission_attempts")
-    if "posting_id" not in cols:
-        return False
-    click_col = "click_attempted" if "click_attempted" in cols else "0"
-    confirm_col = "confirmation_observed" if "confirmation_observed" in cols else "0"
+    required = {"posting_id", "click_attempted", "confirmation_observed"}
+    missing = sorted(required - cols)
+    if missing:
+        raise sqlite3.OperationalError(
+            "submission_attempts table missing required columns: " + ", ".join(missing)
+        )
     return conn.execute(
-        f"""
+        """
         SELECT 1 FROM submission_attempts
         WHERE posting_id=?
-          AND (COALESCE({click_col}, 0)=1 OR COALESCE({confirm_col}, 0)=1)
+          AND (COALESCE(click_attempted, 0)=1 OR COALESCE(confirmation_observed, 0)=1)
         LIMIT 1
         """,
         (posting_id,),
@@ -113,22 +111,14 @@ def _active_alias_exists(conn: sqlite3.Connection, row: sqlite3.Row, columns: se
     canonical = _canonical(row, columns)
     if not canonical:
         return False
-    status_expr = "COALESCE(source_status, status, '')"
-    if "source_status" not in columns and "status" in columns:
-        status_expr = "COALESCE(status, '')"
-    elif "status" not in columns and "source_status" in columns:
-        status_expr = "COALESCE(source_status, '')"
-    elif "status" not in columns and "source_status" not in columns:
-        return False
-    canonical_expr = "COALESCE(canonical_url, url, '')" if "canonical_url" in columns else "COALESCE(url, '')"
     placeholders = ",".join("?" for _ in ACTIVE_OR_APPLIED_STATES)
-    params = [row["id"], canonical, *sorted(ACTIVE_OR_APPLIED_STATES)]
+    params = [row["posting_id"], canonical, *sorted(ACTIVE_OR_APPLIED_STATES)]
     return conn.execute(
         f"""
         SELECT 1 FROM postings
-        WHERE id<>?
-          AND {canonical_expr}=?
-          AND {status_expr} IN ({placeholders})
+        WHERE posting_id<>?
+          AND COALESCE(url, '')=?
+          AND COALESCE(status, '') IN ({placeholders})
         LIMIT 1
         """,
         params,
@@ -144,8 +134,8 @@ def _is_eligible(conn: sqlite3.Connection, row: sqlite3.Row, columns: set[str]) 
         return False
     if not _covered_reason(_reason(row, columns)):
         return False
-    posting_id = str(row["id"])
-    if _has_application_ledger(conn, posting_id):
+    posting_id = str(row["posting_id"])
+    if _has_application(conn, posting_id):
         return False
     if _has_finished_click_or_confirmation(conn, posting_id):
         return False
@@ -157,6 +147,7 @@ def _is_eligible(conn: sqlite3.Connection, row: sqlite3.Row, columns: set[str]) 
 def recoverable_workday_rows(conn: sqlite3.Connection) -> list[dict]:
     conn.row_factory = sqlite3.Row
     _require_postings(conn)
+    _require_applications(conn)
     columns = _columns(conn, "postings")
     rows = conn.execute("SELECT * FROM postings ORDER BY rowid").fetchall()
     safe = []
@@ -166,7 +157,7 @@ def recoverable_workday_rows(conn: sqlite3.Connection) -> list[dict]:
         url = str(_value(row, columns, "url", "") or "")
         safe.append(
             {
-                "posting_id": str(row["id"]),
+                "posting_id": str(row["posting_id"]),
                 "company": str(_value(row, columns, "company", "") or ""),
                 "title": str(_value(row, columns, "title", "") or ""),
                 "tenant": workday_tenant_key(url),
@@ -185,17 +176,16 @@ def apply_requeue(conn: sqlite3.Connection, posting_ids: Iterable[str]) -> dict:
         conn.execute("BEGIN IMMEDIATE")
         eligible = {row["posting_id"] for row in recoverable_workday_rows(conn)}
         columns = _columns(conn, "postings")
-        status_col = "source_status" if "source_status" in columns else "status"
-        if status_col not in columns:
-            raise sqlite3.OperationalError("postings table missing source_status or status")
+        if "status" not in columns:
+            raise sqlite3.OperationalError("postings table missing required columns: status")
         for posting_id in requested:
             if posting_id not in eligible:
                 continue
             changed = conn.execute(
-                f"""
+                """
                 UPDATE postings
-                SET {status_col}='ready', outcome=NULL, last_error=?
-                WHERE id=? AND {status_col} IN ('failed', 'manual')
+                SET status='ready', outcome=NULL, last_error=?
+                WHERE posting_id=? AND status IN ('failed', 'manual')
                 """,
                 (REQUEUE_ERROR, posting_id),
             ).rowcount
