@@ -236,7 +236,10 @@ def _check_oracle_legal_disclaimer(page, legal) -> bool:
             label = page.locator("label[for='legal-disclaimer-checkbox']")
             if label.count() != 1 or not label.is_visible():
                 return False
-            label.click(timeout=5000)
+            proxy = page.locator("label[for='legal-disclaimer-checkbox'] .apply-flow-input-checkbox__button")
+            if proxy.count() != 1 or not proxy.is_visible():
+                return False
+            proxy.click(timeout=5000)
             return legal.is_checked()
         except Exception:
             return False
