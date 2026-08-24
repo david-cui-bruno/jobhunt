@@ -52,6 +52,10 @@ def _canonical_identity_material(posting_id: str, url: str) -> str:
 
     host = parsed.netloc.lower()
     path = parsed.path.rstrip("/")
+    if host.endswith("dreamworkhq.com"):
+        # The old watcher removed ?utm_source but left &utm_campaign in the
+        # path, producing a 404 URL for the same Dreamwork job UUID.
+        path = re.sub(r"&utm_[^/]*$", "", path, flags=re.I)
     if host.endswith("ashbyhq.com"):
         return urllib.parse.urlunparse(
             (parsed.scheme, host, path.removesuffix("/application"), "", "", "")

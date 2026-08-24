@@ -30,6 +30,91 @@ class SourceCoverageTests(unittest.TestCase):
             "https://jobs.example.com/apply?job=123&lang=en#form",
         )
 
+    def test_current_dreamwork_url_repairs_malformed_stale_legacy_row(self) -> None:
+        clean_url = "https://www.dreamworkhq.com/job/11111111-1111-1111-1111-111111111111"
+        malformed_url = clean_url + "&utm_campaign=gh-tech-internships"
+        posting = watch.Posting(
+            source="dreamwork-2027",
+            company="Acme",
+            title="Software Engineer Intern",
+            locations="NYC",
+            url=clean_url,
+            posting_id="dreamwork-2027:acme:swe:new",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "tracker.db"
+            conn = sqlite3.connect(db)
+            watch.init_db(conn)
+            conn.execute(
+                "INSERT INTO postings "
+                "(posting_id,source,company,title,locations,url,sponsorship,"
+                "citizenship_required,closed,first_seen,status,outcome,last_error) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("legacy", "dreamwork-2027", "Acme", posting.title, "NYC", malformed_url,
+                 "", 0, 0, 1, "filtered_out", "stale", "liveness check marked posting stale"),
+            )
+            conn.commit()
+
+            self.assertEqual(watch.upsert(conn, [posting]), [])
+            repaired = conn.execute(
+                "SELECT url,status,outcome,last_error FROM postings WHERE posting_id='legacy'"
+            ).fetchone()
+            conn.close()
+
+            with mock.patch.object(filt, "DB_PATH", db):
+                result = filt.run(current_posting_ids={"legacy"})
+
+            conn = sqlite3.connect(db)
+            status = conn.execute(
+                "SELECT status FROM postings WHERE posting_id='legacy'"
+            ).fetchone()[0]
+            conn.close()
+
+        self.assertEqual(repaired, (clean_url, "filtered_out", None, None))
+        self.assertEqual(result, {"queued": 1, "filtered_out": 0})
+        self.assertEqual(status, "queued")
+
+    def test_current_dreamwork_row_retires_existing_malformed_alias(self) -> None:
+        clean_url = "https://www.dreamworkhq.com/job/22222222-2222-2222-2222-222222222222"
+        posting = watch.Posting(
+            source="dreamwork-2027",
+            company="Acme",
+            title="Software Engineer Intern",
+            locations="NYC",
+            url=clean_url,
+            posting_id="current",
+        )
+        conn = sqlite3.connect(":memory:")
+        watch.init_db(conn)
+        conn.executemany(
+            "INSERT INTO postings "
+            "(posting_id,source,company,title,locations,url,sponsorship,"
+            "citizenship_required,closed,first_seen,status,outcome,last_error) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                ("legacy", "dreamwork-2027", "Acme", posting.title, "NYC",
+                 clean_url + "&utm_campaign=gh-tech-internships", "", 0, 0, 1,
+                 "manual", "manual", "no adapter for other"),
+                ("current", "dreamwork-2027", "Acme", posting.title, "NYC", clean_url,
+                 "", 0, 0, 2, "manual", "manual", "no adapter for other"),
+            ],
+        )
+        conn.commit()
+
+        self.assertEqual(watch.upsert(conn, [posting]), [])
+        rows = {
+            row[0]: row[1:]
+            for row in conn.execute(
+                "SELECT posting_id,status,outcome,last_error FROM postings ORDER BY posting_id"
+            )
+        }
+        conn.close()
+
+        self.assertEqual(rows["current"][0], "manual")
+        self.assertEqual(rows["legacy"], (
+            "filtered_out", "deduplicated", "replaced malformed Dreamwork URL"
+        ))
+
     def test_simplify_keeps_only_summer_and_winter_2027_terms(self) -> None:
         rows = []
         for index, term in enumerate(("Summer 2027", "Fall 2026", "Spring 2027", "Winter 2027")):

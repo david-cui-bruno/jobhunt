@@ -52,3 +52,9 @@ def test_tracking_query_does_not_change_canonical_posting_key() -> None:
     direct = "https://jobs.lever.co/acme/11111111-1111-1111-1111-111111111111"
     tracked = direct + "?lever-source=github&utm_source=listing"
     assert canonical_posting_key("direct", direct) == canonical_posting_key("tracked", tracked)
+
+
+def test_malformed_legacy_dreamwork_tracking_suffix_is_canonicalized() -> None:
+    direct = "https://www.dreamworkhq.com/job/11111111-1111-1111-1111-111111111111"
+    malformed = direct + "&utm_campaign=gh-tech-internships"
+    assert canonical_posting_key("direct", direct) == canonical_posting_key("legacy", malformed)

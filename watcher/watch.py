@@ -197,11 +197,65 @@ def init_db(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _reconcile_dreamwork_alias(conn: sqlite3.Connection, posting: Posting) -> bool:
+    """Repair or retire the malformed Dreamwork URL form emitted by old code."""
+    if posting.source != "dreamwork-2027":
+        return False
+    match = re.search(r"/job/([0-9a-f-]{36})", posting.url, re.I)
+    if not match:
+        return False
+    clean_url = posting.url[:match.end()]
+    rows = conn.execute(
+        """
+        SELECT p.posting_id,p.url,p.status,p.outcome,p.last_error,
+               EXISTS(SELECT 1 FROM applications a WHERE a.posting_id=p.posting_id)
+        FROM postings p
+        WHERE p.source='dreamwork-2027' AND (p.url=? OR p.url LIKE ?)
+        ORDER BY p.rowid
+        """,
+        (clean_url, clean_url + "&utm%"),
+    ).fetchall()
+    if not rows:
+        return False
+
+    primary = next((row for row in rows if row[5]), None)
+    if primary is None:
+        primary = next((row for row in rows if row[0] == posting.posting_id), rows[0])
+
+    if primary[1] != clean_url:
+        false_stale = (
+            primary[3] == "stale"
+            and "liveness check marked posting stale" in (primary[4] or "")
+        )
+        conn.execute(
+            "UPDATE postings SET url=?, outcome=?, last_error=? WHERE posting_id=?",
+            (
+                clean_url,
+                None if false_stale else primary[3],
+                None if false_stale else primary[4],
+                primary[0],
+            ),
+        )
+
+    for row in rows:
+        if row[0] == primary[0] or row[5]:
+            continue
+        conn.execute(
+            "UPDATE postings SET status='filtered_out', outcome='deduplicated', "
+            "last_error='replaced malformed Dreamwork URL' WHERE posting_id=?",
+            (row[0],),
+        )
+    conn.commit()
+    return True
+
+
 def upsert(conn: sqlite3.Connection, postings: list[Posting]) -> list[Posting]:
     """Insert unseen postings, return the genuinely new ones."""
     new = []
     now = int(time.time())
     for p in postings:
+        if _reconcile_dreamwork_alias(conn, p):
+            continue
         cur = conn.execute("SELECT 1 FROM postings WHERE posting_id=?", (p.posting_id,))
         if cur.fetchone():
             continue
