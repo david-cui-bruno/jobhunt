@@ -227,6 +227,18 @@ class _FakePage:
         self.submit_clicks += 1
 
 
+def test_find_resume_input_ignores_cover_letter_pdf_before_contextual_resume():
+    page = _FakePage("anonymous")
+    page.file_inputs = [
+        _FakeLocator(page, "cover_letter", attrs={"accept": "application/pdf", "near_text": "Cover letter upload"}),
+        _FakeLocator(page, "resume", attrs={"accept": "application/pdf", "near_text": "Resume upload"}),
+    ]
+
+    found = oraclecloud._find_resume_input(page)
+
+    assert found is page.file_inputs[1]
+
+
 class _FakeBrowser:
     def __init__(self):
         self.closed = False

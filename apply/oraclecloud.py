@@ -166,6 +166,7 @@ def _find_visible_apply(page):
 
 def _find_resume_input(page):
     best = None
+    best_score = -1
     try:
         files = page.locator("input[type=file]")
         for index in range(files.count()):
@@ -178,10 +179,12 @@ def _find_resume_input(page):
                 ) or ""
             except Exception:
                 near = ""
-            context = f"{accept} {near}".lower()
-            if re.search(r"\b(resume|cv|curriculum vitae)\b", context) or "pdf" in accept or "msword" in accept or "document" in accept:
+            if not re.search(r"\b(resume|cv|curriculum[- ]vitae)\b", near.lower()):
+                continue
+            score = 1 if ("pdf" in accept or "msword" in accept or "document" in accept) else 0
+            if score > best_score:
                 best = cand
-                break
+                best_score = score
     except Exception:
         best = None
     if best is not None:
