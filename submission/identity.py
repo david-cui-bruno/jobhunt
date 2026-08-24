@@ -79,22 +79,49 @@ def canonical_posting_key(posting_id: str, url: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-def posting_already_applied(conn: sqlite3.Connection, posting_id: str, url: str) -> bool:
+def canonical_conflict_reason(conn: sqlite3.Connection, posting_id: str, url: str) -> str | None:
     wanted = canonical_posting_key(posting_id, url)
+
     rows = conn.execute(
-        "SELECT p.posting_id,p.url FROM applications a JOIN postings p USING(posting_id)"
+        "SELECT p.posting_id,p.url FROM applications a JOIN postings p USING(posting_id) "
+        "WHERE p.posting_id<>?",
+        (posting_id,),
     ).fetchall()
-    return any(canonical_posting_key(row[0], row[1]) == wanted for row in rows)
+    if any(canonical_posting_key(row[0], row[1]) == wanted for row in rows):
+        return "canonical posting already applied"
 
-
-def _active_posting_claimed(conn: sqlite3.Connection, posting_id: str, url: str) -> bool:
-    wanted = canonical_posting_key(posting_id, url)
     rows = conn.execute(
         "SELECT posting_id,url FROM postings "
         "WHERE posting_id<>? AND status IN ('submitting','sprinting')",
         (posting_id,),
     ).fetchall()
-    return any(canonical_posting_key(row[0], row[1]) == wanted for row in rows)
+    if any(canonical_posting_key(row[0], row[1]) == wanted for row in rows):
+        return "canonical posting already claimed"
+
+    terminal_clause = "status IN ('submitted','skipped')"
+    if _has_postings_column(conn, "outcome"):
+        terminal_clause = "(outcome IN ('stale','submitted','deduplicated') OR " + terminal_clause + ")"
+    rows = conn.execute(
+        "SELECT posting_id,url FROM postings "
+        f"WHERE posting_id<>? AND {terminal_clause}",
+        (posting_id,),
+    ).fetchall()
+    if any(canonical_posting_key(row[0], row[1]) == wanted for row in rows):
+        return "canonical posting already terminal"
+
+    return None
+
+
+def posting_already_applied(conn: sqlite3.Connection, posting_id: str, url: str) -> bool:
+    return canonical_conflict_reason(conn, posting_id, url) == "canonical posting already applied"
+
+
+def _active_posting_claimed(conn: sqlite3.Connection, posting_id: str, url: str) -> bool:
+    return canonical_conflict_reason(conn, posting_id, url) == "canonical posting already claimed"
+
+
+def _has_postings_column(conn: sqlite3.Connection, name: str) -> bool:
+    return any(row[1] == name for row in conn.execute("PRAGMA table_info(postings)").fetchall())
 
 
 def claim_submission(

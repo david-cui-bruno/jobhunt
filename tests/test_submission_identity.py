@@ -1,7 +1,7 @@
 import sqlite3
 
 import apply.jd
-from submission.identity import canonical_posting_key, posting_already_applied
+from submission.identity import canonical_conflict_reason, canonical_posting_key, posting_already_applied
 
 
 def db() -> sqlite3.Connection:
@@ -85,3 +85,22 @@ def test_malformed_legacy_dreamwork_tracking_suffix_is_canonicalized() -> None:
     direct = "https://www.dreamworkhq.com/job/11111111-1111-1111-1111-111111111111"
     malformed = direct + "&utm_campaign=gh-tech-internships"
     assert canonical_posting_key("direct", direct) == canonical_posting_key("legacy", malformed)
+
+
+def test_canonical_conflict_reason_does_not_fetch_for_greenhouse_alias(monkeypatch) -> None:
+    def fail_fetch(url: str, timeout: int = 25) -> str:
+        raise AssertionError(f"unexpected network fetch: {url}")
+
+    conn = db()
+    conn.executemany("INSERT INTO postings VALUES (?,?,?,?)", [
+        ("submitted", "Figma", "https://boards.greenhouse.io/figma/jobs/6131089004", "submitted"),
+        ("alias", "Figma", "https://job-boards.greenhouse.io/figma/jobs/6131089004", "ready"),
+    ])
+    conn.execute("INSERT INTO applications VALUES ('submitted')")
+    monkeypatch.setattr(apply.jd, "_get", fail_fetch)
+
+    assert canonical_conflict_reason(
+        conn,
+        "alias",
+        "https://job-boards.greenhouse.io/figma/jobs/6131089004",
+    ) == "canonical posting already applied"

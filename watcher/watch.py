@@ -20,6 +20,8 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+from submission.resolutions import ensure_resolution_schema
+
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "out" / "tracker.db"
 
@@ -177,24 +179,29 @@ WATCH_SOURCES = (
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
-    CREATE TABLE IF NOT EXISTS postings (
-        posting_id TEXT PRIMARY KEY,
-        source TEXT, company TEXT, title TEXT, locations TEXT, url TEXT,
-        sponsorship TEXT, citizenship_required INTEGER, closed INTEGER,
-        first_seen INTEGER, status TEXT DEFAULT 'new'
-        , outcome TEXT
-        , last_attempt_at INTEGER
-        , attempt_count INTEGER NOT NULL DEFAULT 0
-        , last_error TEXT
-        -- status: new -> filtered_out | queued -> tailoring/sprinting -> ready/submitting -> submitted/manual/failed
-    );
-    CREATE TABLE IF NOT EXISTS applications (
-        posting_id TEXT PRIMARY KEY REFERENCES postings(posting_id),
-        resume_path TEXT, ats TEXT, submitted_at INTEGER, confirmation TEXT, notes TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_company ON postings(company);
-    """)
+    for statement in [part.strip() for part in WATCH_SCHEMA.split(";") if part.strip()]:
+        conn.execute(statement)
+    ensure_resolution_schema(conn)
+
+
+WATCH_SCHEMA = """
+CREATE TABLE IF NOT EXISTS postings (
+    posting_id TEXT PRIMARY KEY,
+    source TEXT, company TEXT, title TEXT, locations TEXT, url TEXT,
+    sponsorship TEXT, citizenship_required INTEGER, closed INTEGER,
+    first_seen INTEGER, status TEXT DEFAULT 'new'
+    , outcome TEXT
+    , last_attempt_at INTEGER
+    , attempt_count INTEGER NOT NULL DEFAULT 0
+    , last_error TEXT
+    -- status: new -> filtered_out | queued -> tailoring/sprinting -> ready/submitting -> submitted/manual/failed
+);
+CREATE TABLE IF NOT EXISTS applications (
+    posting_id TEXT PRIMARY KEY REFERENCES postings(posting_id),
+    resume_path TEXT, ats TEXT, submitted_at INTEGER, confirmation TEXT, notes TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_company ON postings(company);
+"""
 
 
 def _reconcile_dreamwork_alias(conn: sqlite3.Connection, posting: Posting) -> bool:
