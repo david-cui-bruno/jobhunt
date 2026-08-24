@@ -21,26 +21,50 @@ PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
 SHOTS = ROOT / "out" / "screenshots"
 
 
-def _lever_required_empty_from_controls(controls: list[dict]) -> list[str]:
-    """Required-control backstop for Lever widgets QA can type into but not select."""
-    bad = []
-    for control in controls:
-        if not control.get("required"):
-            continue
-        label = str(control.get("label") or control.get("name") or control.get("id") or "unknown")
-        text = " ".join(str(control.get(k) or "") for k in ("label", "name", "id", "cls")).lower()
-        value = str(control.get("value") or "").strip()
-        chosen = str(control.get("chosen") or "").strip()
-        is_location_typeahead = "location" in text and (
-            control.get("name") == "location" or "typeahead" in text or "autocomplete" in text
-        )
-        if is_location_typeahead:
-            if not chosen:
-                bad.append(label)
-            continue
-        if not value and not chosen:
-            bad.append(label)
-    return list(dict.fromkeys(bad))
+def _lever_location_required_empty(page) -> list[str]:
+    """Validate Lever's real location selection state, not the visible typeahead text."""
+    return page.evaluate(r"""
+        () => {
+            const loc = document.querySelector('input#location-input[name="location"][required], input[name="location"][required]');
+            if (!loc || loc.type === 'hidden' || loc.offsetParent === null) return [];
+            const selected = document.querySelector('input#selected-location[name="selectedLocation"], input[name="selectedLocation"]');
+            if ((selected?.value || '').trim()) return [];
+            const lbl = (loc.closest('.application-question')?.querySelector('.application-label')?.innerText
+                || loc.labels?.[0]?.innerText || 'Current location ✱');
+            return [lbl.replace(/\s+/g, ' ').trim().slice(0, 80) || 'Current location ✱'];
+        }
+    """)
+
+
+def _lever_generic_required_empty(page) -> list[str]:
+    return page.evaluate(r"""
+        () => {
+            const bad = [];
+            document.querySelectorAll('.application-question.required, [required], [aria-required="true"]').forEach(el => {
+                const root = el.classList?.contains('application-question') ? el : null;
+                const inp = root ? root.querySelector('input, select, textarea') : el;
+                if (!inp || inp.type === 'file' || inp.getAttribute('aria-hidden') === 'true') return;
+                if (inp.type === 'checkbox' || inp.type === 'radio') {
+                    if ([...document.querySelectorAll('input')].filter(x => x.name === inp.name).some(x => x.checked)) return;
+                } else if ((inp.value || '').trim()) return;
+                const lbl = (el.closest('.application-question')?.querySelector('.application-label')?.innerText
+                    || root?.querySelector('.application-label')?.innerText
+                    || inp.labels?.[0]?.innerText || inp.name || inp.id || 'unknown');
+                bad.push(lbl.replace(/\s+/g, ' ').trim().slice(0, 80));
+            });
+            return [...new Set(bad)];
+        }
+    """)
+
+
+def _lever_required_empty(page) -> list[str]:
+    return list(dict.fromkeys(_lever_generic_required_empty(page) + _lever_location_required_empty(page)))
+
+
+def _lever_required_reason(required_empty: list[str]) -> str:
+    if len(required_empty) == 1 and "current location" in required_empty[0].lower():
+        return "needs manual Lever location selection: location typeahead is hCaptcha-gated"
+    return f"needs answers: {required_empty[:6]}"
 
 
 def _shot(page, slug, stage):
@@ -130,35 +154,13 @@ def apply_lever(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
         result["qa_filled"] = sorted(set(filled_qa))
         result["qa_failed"] = failed_qa
 
-        required_empty = page.evaluate("""
-            () => {
-                const bad = [];
-                document.querySelectorAll('.application-question.required, [required], [aria-required="true"]').forEach(el => {
-                    const root = el.classList?.contains('application-question') ? el : null;
-                    const inp = root ? root.querySelector('input, select, textarea') : el;
-                    if (!inp || inp.type === 'file' || inp.getAttribute('aria-hidden') === 'true') return;
-                    if (inp.type === 'checkbox' || inp.type === 'radio') {
-                        if ([...document.querySelectorAll('input')].filter(x => x.name === inp.name).some(x => x.checked)) return;
-                    } else if ((inp.value || '').trim()) return;
-                    const lbl = (el.closest('.application-question')?.querySelector('.application-label')?.innerText
-                        || root?.querySelector('.application-label')?.innerText
-                        || inp.labels?.[0]?.innerText || inp.name || inp.id || 'unknown');
-                    bad.push(lbl.replace(/\\s+/g, ' ').trim().slice(0, 80));
-                });
-                return [...new Set(bad)];
-            }
-        """)
-        try:
-            required_empty += _lever_required_empty_from_controls(page.evaluate(qa.EXTRACT_JS))
-            required_empty = list(dict.fromkeys(required_empty))
-        except Exception:
-            pass
+        required_empty = _lever_required_empty(page)
         result["unanswered"] = required_empty
         _shot(page, slug, "filled")
 
         if required_empty:
             result["ok"] = True
-            result["reason"] = f"needs answers: {required_empty[:6]}"
+            result["reason"] = _lever_required_reason(required_empty)
             browser.close()
             return result
         if dry_run:
