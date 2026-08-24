@@ -1365,7 +1365,7 @@ ALREADY_APPLIED_REASON = (
 
 
 def _workday_already_applied(body_text: str) -> bool:
-    text = re.sub(r"\s+", " ", body_text.lower())
+    text = re.sub(r"\s+", " ", body_text.lower()).replace("’", "'")
     return "you've already applied for this job" in text
 
 

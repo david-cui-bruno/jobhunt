@@ -942,6 +942,10 @@ def test_already_applied_evidence_stops_before_apply_click():
     assert page.apply_clicks == 0
 
 
+def test_already_applied_evidence_matches_curly_apostrophe_ocr():
+    assert workday._workday_already_applied("You’ve already applied for this job.")
+
+
 def test_successful_recovery_reenters_apply_and_autofill():
     page = RecoveryThenApplicationPage()
     first = workday.enter_application_form(page, APPLY_URL)
