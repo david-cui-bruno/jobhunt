@@ -3,11 +3,26 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import apply.jd
+import watcher.abc_startups
+import watcher.bigco
+import watcher.startups
 from submission.identity import canonical_conflict_reason
 from submission.database import connect_tracker
 from submission.resolutions import cached_resolution, ensure_resolution_schema, record_resolution
+from submission.lanes import classify_url
+from submission.identity import canonical_posting_key, posting_already_applied
 from watcher import watch
 from watcher.url_resolver import ResolutionResult
+
+
+GREENHOUSE_HTML = """
+<html><body>
+<a class="job-cta-secondary" href="https://job-boards.greenhouse.io/acme/jobs/1234567">
+View original posting
+</a>
+</body></html>
+"""
 
 
 GREENHOUSE_URL = "https://job-boards.greenhouse.io/acme/jobs/1234567"
@@ -189,3 +204,59 @@ def test_canonical_conflict_ignores_distinct_ats_id() -> None:
     db = conn()
     seed_applied(db, "done", DISTINCT_GREENHOUSE_URL)
     assert canonical_conflict_reason(db, "wrapper", GREENHOUSE_ALIAS) is None
+
+
+def test_dreamwork_watcher_reapplies_cached_resolution_before_filter() -> None:
+    db = conn()
+    ensure_resolution_schema(db)
+    seed_posting(db, "dw-1", SOURCE_URL, "manual", "manual")
+    record_resolution(
+        db,
+        ResolutionResult(SOURCE_URL, GREENHOUSE_URL, "dreamwork-original-v1", "e" * 64, ""),
+        posting_id="dw-1",
+    )
+
+    def fail_fetch(url: str) -> str:
+        raise AssertionError(f"unexpected page fetch: {url}")
+
+    result = watch.resolve_dreamwork_postings(db, fetch_page=fail_fetch)
+
+    assert result == {"cached": 1, "resolved": 0, "failed": 0, "conflicts": 0}
+    assert db.execute("SELECT url FROM postings WHERE posting_id='dw-1'").fetchone()[0] == GREENHOUSE_URL
+    assert db.execute("SELECT status FROM postings WHERE posting_id='dw-1'").fetchone()[0] == "manual"
+
+
+def test_dreamwork_watcher_resolution_conflict_never_rewrites_or_requeues() -> None:
+    db = conn()
+    ensure_resolution_schema(db)
+    seed_applied(db, "done", GREENHOUSE_URL)
+    seed_posting(db, "dw-1", SOURCE_URL, "manual", "manual")
+
+    result = watch.resolve_dreamwork_postings(db, fetch_page=lambda _: GREENHOUSE_HTML)
+
+    assert result["conflicts"] == 1
+    assert db.execute("SELECT url FROM postings WHERE posting_id='dw-1'").fetchone()[0] == SOURCE_URL
+    assert db.execute("SELECT status FROM postings WHERE posting_id='dw-1'").fetchone()[0] == "manual"
+
+
+def test_classify_identity_and_duplicate_hot_paths_never_fetch(monkeypatch) -> None:
+    invoked = []
+
+    def fail_network(url: str, timeout: int = 25) -> str:
+        invoked.append(url)
+        raise AssertionError(f"unexpected network fetch: {url}")
+
+    monkeypatch.setattr(apply.jd, "_get", fail_network)
+    monkeypatch.setattr(watcher.abc_startups, "_get", fail_network)
+    monkeypatch.setattr(watcher.bigco, "_get", fail_network)
+    monkeypatch.setattr(watcher.startups, "_get", fail_network)
+    monkeypatch.setattr(watch, "_fetch", fail_network)
+    db = conn()
+    seed_applied(db, "done", GREENHOUSE_URL)
+
+    for url in (SOURCE_URL, GREENHOUSE_URL):
+        classify_url(url)
+        canonical_posting_key("dw-1", url)
+        posting_already_applied(db, "dw-1", url)
+
+    assert invoked == []

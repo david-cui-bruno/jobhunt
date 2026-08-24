@@ -20,7 +20,9 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-from submission.resolutions import ensure_resolution_schema
+from submission.identity import canonical_conflict_reason
+from submission.resolutions import cached_resolution, ensure_resolution_schema, record_resolution
+from watcher.url_resolver import resolve_dreamwork_html
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "out" / "tracker.db"
@@ -284,6 +286,52 @@ def upsert(conn: sqlite3.Connection, postings: list[Posting]) -> list[Posting]:
     return new
 
 
+def _is_dreamwork_wrapper(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    return parsed.netloc.lower().endswith("dreamworkhq.com") and "/job/" in parsed.path
+
+
+def _has_postings_column(conn: sqlite3.Connection, name: str) -> bool:
+    return any(row[1] == name for row in conn.execute("PRAGMA table_info(postings)").fetchall())
+
+
+def resolve_dreamwork_postings(conn: sqlite3.Connection, fetch_page=_fetch) -> dict[str, int]:
+    summary = {"cached": 0, "resolved": 0, "failed": 0, "conflicts": 0}
+    source_filter = "WHERE source='dreamwork-2027'" if _has_postings_column(conn, "source") else ""
+    rows = conn.execute(
+        f"SELECT posting_id,url FROM postings {source_filter} ORDER BY rowid"
+    ).fetchall()
+    for row in rows:
+        posting_id = row["posting_id"] if isinstance(row, sqlite3.Row) else row[0]
+        source_url = row["url"] if isinstance(row, sqlite3.Row) else row[1]
+        if not source_url or not _is_dreamwork_wrapper(source_url):
+            continue
+        try:
+            target_url = cached_resolution(conn, posting_id, source_url)
+            used_cache = target_url is not None
+            if target_url is None:
+                result = resolve_dreamwork_html(source_url, fetch_page(source_url))
+                record_resolution(conn, result, posting_id=posting_id)
+                target_url = result.resolved_url
+                if target_url is None:
+                    conn.commit()
+                    summary["failed"] += 1
+                    continue
+
+            conflict = canonical_conflict_reason(conn, posting_id, target_url)
+            if conflict:
+                conn.commit()
+                summary["conflicts"] += 1
+                continue
+            conn.execute("UPDATE postings SET url=? WHERE posting_id=?", (target_url, posting_id))
+            conn.commit()
+            summary["cached" if used_cache else "resolved"] += 1
+        except Exception:
+            conn.rollback()
+            summary["failed"] += 1
+    return summary
+
+
 def run() -> dict:
     DB_PATH.parent.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -300,6 +348,8 @@ def run() -> dict:
             all_new += upsert(conn, postings)
         except Exception as e:  # keep other sources alive
             errors[name] = str(e)
+    resolution_summary = resolve_dreamwork_postings(conn)
+    print(f"dreamwork_resolution={resolution_summary}")
     current_ids: set[str] = set()
     for posting in current_postings:
         row = conn.execute(
@@ -319,6 +369,7 @@ def run() -> dict:
         "new": [asdict(p) for p in all_new],
         "current_posting_ids": sorted(current_ids),
         "errors": errors,
+        "dreamwork_resolution": resolution_summary,
         "source_counts": source_counts,
         "total_tracked": conn.execute("SELECT COUNT(*) FROM postings").fetchone()[0],
     }

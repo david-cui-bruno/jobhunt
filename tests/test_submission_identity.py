@@ -1,7 +1,12 @@
 import sqlite3
 
 import apply.jd
+import watcher.abc_startups
+import watcher.bigco
+import watcher.startups
+from submission.lanes import classify_url
 from submission.identity import canonical_conflict_reason, canonical_posting_key, posting_already_applied
+from watcher import watch
 
 
 def db() -> sqlite3.Connection:
@@ -85,6 +90,36 @@ def test_malformed_legacy_dreamwork_tracking_suffix_is_canonicalized() -> None:
     direct = "https://www.dreamworkhq.com/job/11111111-1111-1111-1111-111111111111"
     malformed = direct + "&utm_campaign=gh-tech-internships"
     assert canonical_posting_key("direct", direct) == canonical_posting_key("legacy", malformed)
+
+
+def test_classify_identity_and_duplicate_hot_paths_never_fetch(monkeypatch) -> None:
+    invoked = []
+
+    def fail_network(url: str, timeout: int = 25) -> str:
+        invoked.append(url)
+        raise AssertionError(f"unexpected network fetch: {url}")
+
+    monkeypatch.setattr(apply.jd, "_get", fail_network)
+    monkeypatch.setattr(watcher.abc_startups, "_get", fail_network)
+    monkeypatch.setattr(watcher.bigco, "_get", fail_network)
+    monkeypatch.setattr(watcher.startups, "_get", fail_network)
+    monkeypatch.setattr(watch, "_fetch", fail_network)
+    conn = db()
+    conn.executemany("INSERT INTO postings VALUES (?,?,?,?)", [
+        ("done", "Acme", "https://job-boards.greenhouse.io/acme/jobs/1234567", "submitted"),
+        ("dw-1", "Acme", "https://www.dreamworkhq.com/job/11111111-1111-1111-1111-111111111111", "ready"),
+    ])
+    conn.execute("INSERT INTO applications VALUES ('done')")
+
+    for url in (
+        "https://www.dreamworkhq.com/job/11111111-1111-1111-1111-111111111111",
+        "https://job-boards.greenhouse.io/acme/jobs/1234567",
+    ):
+        classify_url(url)
+        canonical_posting_key("dw-1", url)
+        posting_already_applied(conn, "dw-1", url)
+
+    assert invoked == []
 
 
 def test_canonical_conflict_reason_does_not_fetch_for_greenhouse_alias(monkeypatch) -> None:
