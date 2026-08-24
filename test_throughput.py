@@ -507,11 +507,71 @@ class BacklogPriorityTests(unittest.TestCase):
         self.assertEqual(drip.pick_next(conn)["posting_id"], "smart")
         conn.close()
 
-    def test_tailoring_batch_is_bounded_but_material(self) -> None:
-        # raised 2026-08-19 (David: tailor must never be the bottleneck;
-        # submit capacity is ~176/day)
-        self.assertEqual(drip.TAILOR_PER_RUN, 8)
-        self.assertEqual(drip.DAILY_CAP, 160)
+    def test_tailoring_batch_drains_all_currently_claimable_supported_rows(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE postings (posting_id TEXT, status TEXT, url TEXT, "
+            "locations TEXT, first_seen INTEGER, last_attempt_at INTEGER)"
+        )
+        rows = [
+            (f"p{i}", "queued", f"https://boards.greenhouse.io/acme/jobs/{i}", "Remote", i, None)
+            for i in range(9)
+        ]
+        conn.executemany("INSERT INTO postings VALUES (?,?,?,?,?,?)", rows)
+        processed = []
+
+        def mark_ready(process_conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+            processed.append(row["posting_id"])
+            return drip.transition_claim(
+                process_conn, row["posting_id"], "tailoring", "ready"
+            )
+
+        self.assertEqual(9, drip.drain_tailoring_queue(conn, mark_ready))
+        self.assertEqual([f"p{i}" for i in reversed(range(9))], processed)
+        self.assertEqual(
+            9,
+            conn.execute("SELECT COUNT(*) FROM postings WHERE status='ready'").fetchone()[0],
+        )
+        conn.close()
+
+    def test_tailoring_batch_has_no_artificial_daily_or_per_run_cap(self) -> None:
+        self.assertFalse(hasattr(drip, "DAILY_CAP"))
+        self.assertFalse(hasattr(drip, "TAILOR_PER_RUN"))
+
+    def test_tailoring_drain_excludes_released_none_results_during_same_run(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE postings (posting_id TEXT, status TEXT, url TEXT, "
+            "locations TEXT, first_seen INTEGER, last_attempt_at INTEGER)"
+        )
+        conn.executemany(
+            "INSERT INTO postings VALUES (?,?,?,?,?,?)",
+            [
+                ("first", "queued", "https://boards.greenhouse.io/acme/jobs/1", "Remote", 10, None),
+                ("second", "queued", "https://boards.greenhouse.io/acme/jobs/2", "Remote", 9, None),
+            ],
+        )
+        processed = []
+
+        def maybe_none(process_conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+            processed.append(row["posting_id"])
+            if row["posting_id"] == "first":
+                return False
+            return drip.transition_claim(
+                process_conn, row["posting_id"], "tailoring", "ready"
+            )
+
+        self.assertEqual(1, drip.drain_tailoring_queue(conn, maybe_none))
+        self.assertEqual(["first", "second"], processed)
+        self.assertEqual(
+            [("first", "queued"), ("second", "ready")],
+            [tuple(row) for row in conn.execute(
+                "SELECT posting_id,status FROM postings ORDER BY posting_id"
+            ).fetchall()],
+        )
+        conn.close()
 
     def test_live_pipeline_is_not_artificially_capped_at_three_per_hour(self) -> None:
         self.assertEqual(submit.SUBMISSIONS_PER_RUN, 8)

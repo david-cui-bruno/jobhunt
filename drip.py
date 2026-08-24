@@ -21,15 +21,6 @@ sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT /
 
 DB = ROOT / "out" / "tracker.db"
 ET = ZoneInfo("America/New_York")
-# David 2026-08-19: "you should be able to submit all the applications you
-# find". Submit capacity is ~176/day (8 x 22 runs); tailor must not be the
-# bottleneck, so cap 100->160 and per-run 5->8 (hourly drip + sprint lane).
-DAILY_CAP = int(os.environ.get("JOBHUNT_DAILY_TAILOR_CAP", "160"))
-TAILOR_PER_RUN = int(os.environ.get("JOBHUNT_TAILOR_PER_RUN", "8"))
-
-if DAILY_CAP < 1 or TAILOR_PER_RUN < 1:
-    raise ValueError("jobhunt tailoring limits must be at least 1")
-
 LOC_PRIORITY = ["san francisco", "sf", "bay area", "palo alto", "mountain view", "menlo",
                 "new york", "nyc", "manhattan", "brooklyn", "remote"]
 SUPPORTED_ATS = ("greenhouse", "lever", "workable", "workday", "smartrecruiters", "rippling")
@@ -84,6 +75,28 @@ def pick_next(conn: sqlite3.Connection, excluded: set[str] | None = None):
 def sent_today(conn) -> int:
     midnight = datetime.datetime.now(ET).replace(hour=0, minute=0, second=0).timestamp()
     return conn.execute("SELECT COUNT(*) FROM emails WHERE sent_at > ?", (midnight,)).fetchone()[0]
+
+
+def drain_tailoring_queue(conn: sqlite3.Connection, tailor_one) -> int:
+    """Tailor every currently claimable supported posting once per drip run."""
+    completed = 0
+    excluded: set[str] = set()
+    while True:
+        row = pick_next(conn, excluded)
+        if not row:
+            return completed
+        posting_id = row["posting_id"]
+        excluded.add(posting_id)
+        if not claim_posting(conn, posting_id, "tailoring"):
+            continue
+        try:
+            if tailor_one(conn, row):
+                completed += 1
+            else:
+                release_claim(conn, posting_id, "tailoring")
+        except Exception:
+            release_claim(conn, posting_id, "tailoring")
+            raise
 
 
 def transition_claim(conn: sqlite3.Connection, posting_id: str, expected_status: str,
@@ -255,53 +268,45 @@ def run():
     quarantined = quarantine_unsupported(conn)
     if quarantined:
         print(f"[drip] quarantined unsupported ATS rows: {quarantined}")
-    attempts = min(TAILOR_PER_RUN, max(0, DAILY_CAP - sent_today(conn)))
-    excluded: set[str] = set()
-    for _ in range(attempts):
-        row = pick_next(conn, excluded)
-        if row:
-            excluded.add(row["posting_id"])
-            if not claim_posting(conn, row["posting_id"], "tailoring"):
-                continue
-            try:
-                import batch
-                from jd import fetch_jd
-                from tailor import tailor
-                batch.ensure_email_table(conn)
-                jd_text = fetch_jd(row["url"])
-                pdf = tailor(row["posting_id"], row["company"], row["title"], jd_text)
-                if pdf:
-                    import submit as submit_mod
-                    quality_ok, quality_reason = submit_mod._resume_quality_ready(
-                        Path(pdf), row["posting_id"]
-                    )
-                    if not quality_ok:
-                        conn.execute(
-                            "UPDATE postings SET status='manual', outcome='manual', last_error=? "
-                            "WHERE posting_id=? AND status='tailoring'",
-                            (f"resume quality gate: {quality_reason}", row["posting_id"]),
-                        )
-                        conn.commit()
-                        print(
-                            f"[drip] resume quarantined for {row['company']}: {quality_reason}"
-                        )
-                        continue
-                    conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
-                                 (row["posting_id"], None, None,
-                                  str(pdf), str(pdf.with_suffix('.tex')), int(time.time())))
-                    if transition_claim(conn, row["posting_id"], "tailoring", "ready",
-                                        commit=False):
-                        conn.commit()
-                        print(f"[drip] tailored and queued: {row['company']} — {row['title']}")
-                    else:
-                        conn.rollback()
-                        print(f"[drip] claim lost; discarded late result: {row['company']}")
-                else:
-                    release_claim(conn, row["posting_id"], "tailoring")
-            except Exception as e:
-                # One bad JD or model call must not block the other four slots.
-                release_claim(conn, row["posting_id"], "tailoring")
-                print(f"[drip] tailoring failed for {row['company']}: {type(e).__name__}: {e}")
+    def tailor_one(tailor_conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+        try:
+            import batch
+            from jd import fetch_jd
+            from tailor import tailor
+            batch.ensure_email_table(tailor_conn)
+            jd_text = fetch_jd(row["url"])
+            pdf = tailor(row["posting_id"], row["company"], row["title"], jd_text)
+            if not pdf:
+                return False
+            import submit as submit_mod
+            quality_ok, quality_reason = submit_mod._resume_quality_ready(
+                Path(pdf), row["posting_id"]
+            )
+            if not quality_ok:
+                tailor_conn.execute(
+                    "UPDATE postings SET status='manual', outcome='manual', last_error=? "
+                    "WHERE posting_id=? AND status='tailoring'",
+                    (f"resume quality gate: {quality_reason}", row["posting_id"]),
+                )
+                tailor_conn.commit()
+                print(f"[drip] resume quarantined for {row['company']}: {quality_reason}")
+                return True
+            tailor_conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
+                                (row["posting_id"], None, None,
+                                 str(pdf), str(pdf.with_suffix('.tex')), int(time.time())))
+            if transition_claim(tailor_conn, row["posting_id"], "tailoring", "ready",
+                                commit=False):
+                tailor_conn.commit()
+                print(f"[drip] tailored and queued: {row['company']} — {row['title']}")
+                return True
+            tailor_conn.rollback()
+            print(f"[drip] claim lost; discarded late result: {row['company']}")
+            return True
+        except Exception as e:
+            print(f"[drip] tailoring failed for {row['company']}: {type(e).__name__}: {e}")
+            return False
+
+    drain_tailoring_queue(conn, tailor_one)
 
     # 4) Legacy rows may reference pre-deterministic resumes. Never queue one
     # without the same quality metadata required by the submit lane.
