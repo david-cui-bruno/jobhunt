@@ -713,8 +713,14 @@ def _fill_oracle_zip(page) -> bool:
         visible = []
         for index in range(fields.count()):
             candidate = fields.first if fields.count() == 1 else fields.nth(index)
-            if candidate.is_visible():
-                visible.append(candidate)
+            if not candidate.is_visible():
+                continue
+            tag_name = str(candidate.evaluate("element => element.tagName") or "").lower()
+            if tag_name != "input" or _control_attr(candidate, "role").lower() != "combobox":
+                continue
+            if not _control_attr(candidate, "aria-controls"):
+                continue
+            visible.append(candidate)
         if len(visible) != 1:
             return False
         field = visible[0]

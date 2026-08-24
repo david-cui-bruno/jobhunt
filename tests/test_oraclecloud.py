@@ -1701,6 +1701,39 @@ def test_oracle_zip_types_profile_value_and_selects_unique_controlled_gridcell(m
     assert page.events[-1] == "wait:250"
 
 
+def test_oracle_zip_ignores_visible_label_associated_button(monkeypatch):
+    class DuplicateZipLabelPage(_OracleControlsPage):
+        def __init__(self):
+            super().__init__(postal="12345")
+            self.zip_button = _OracleControlLocator(
+                self,
+                "zip-button",
+                attrs={
+                    "type": "button",
+                    "aria-controls": "zip-listbox",
+                    "tagName": "BUTTON",
+                },
+            )
+
+        def get_by_label(self, label, exact=False):
+            if not exact and str(label).lower() in self.zip_label.lower():
+                self.collection = [self.zip_control, self.zip_button]
+                return _OracleControlLocator(self, "collection", count=2)
+            return super().get_by_label(label, exact=exact)
+
+    page = DuplicateZipLabelPage()
+    page.zip_suggestions = [
+        _OracleControlLocator(page, "zip-suggestion-1", text="12345, Example City, ST")
+    ]
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"location": {"zip": "12345"}})
+
+    assert oraclecloud._fill_oracle_zip(page) is True
+
+    assert page.zip_control.input_value() == "12345"
+    assert "click:zip-suggestion-1" in page.events
+    assert "click:zip-button" not in page.events
+
+
 def test_oracle_zip_preserves_matching_existing_value(monkeypatch):
     page = _OracleControlsPage(postal="12345")
     page.zip_control._value = "12345, Example City, ST"
