@@ -225,7 +225,7 @@ def _candidate_query(conn: sqlite3.Connection, posting_ids: list[str] | None = N
                COALESCE(r.source_url, p.url, '') AS source_url,
                COALESCE(NULLIF(r.resolved_url, ''), p.url, '') AS resolved_url,
                COALESCE(p.last_error, '') AS last_error,
-               r.posting_id IS NOT NULL AS has_resolution
+               COALESCE(r.resolved_url, '')<>'' AS has_resolution
         FROM postings p
         LEFT JOIN posting_url_resolutions r USING(posting_id)
         WHERE p.status='manual'

@@ -622,6 +622,54 @@ def test_apply_retriage_updates_only_selected_safe_rows_and_preserves_manual_sma
     assert {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded} == before
 
 
+def test_failed_resolution_mapping_with_prefix_reason_uses_strict_current_url_gates() -> None:
+    from submission.resolutions import apply_retriage, retriage_candidates
+
+    db = retriage_conn()
+    seed_retriage_current_url_row(
+        db,
+        "failed-greenhouse",
+        GREENHOUSE_URL,
+        last_error="no adapter for other host xyz",
+    )
+    record_resolution(
+        db,
+        ResolutionResult(SOURCE_URL, None, "dreamwork-original-v1", "z" * 64, "original posting link not found"),
+        posting_id="failed-greenhouse",
+    )
+    before = posting_snapshot(db, "failed-greenhouse")
+    db.commit()
+
+    candidates = retriage_candidates(db)
+    result = apply_retriage(db, ["failed-greenhouse"])
+
+    assert [candidate["posting_id"] for candidate in candidates] == []
+    assert result == {"requested": 1, "updated": 0, "skipped": 1}
+    assert posting_snapshot(db, "failed-greenhouse") == before
+
+
+def test_failed_resolution_mapping_with_exact_reason_allows_strict_oracle_current_url() -> None:
+    from submission.resolutions import apply_retriage, retriage_candidates
+
+    db = retriage_conn()
+    seed_retriage_current_url_row(db, "failed-oracle", ORACLE_JOB_URL, last_error="no adapter for oraclecloud")
+    record_resolution(
+        db,
+        ResolutionResult(SOURCE_URL, "", "dreamwork-original-v1", "y" * 64, "original posting link not found"),
+        posting_id="failed-oracle",
+    )
+    db.commit()
+
+    candidates = retriage_candidates(db, ats="oraclecloud")
+    result = apply_retriage(db, ["failed-oracle"], ats="oraclecloud")
+
+    assert [candidate["posting_id"] for candidate in candidates] == ["failed-oracle"]
+    assert candidates[0]["ats"] == "oraclecloud"
+    assert candidates[0]["resolved_url"] == ORACLE_JOB_URL
+    assert result == {"requested": 1, "updated": 1, "skipped": 0}
+    assert posting_snapshot(db, "failed-oracle")[4:7] == ("queued", None, "")
+
+
 def test_oracle_current_url_technical_debt_retriage_without_resolution_mapping() -> None:
     from submission.resolutions import apply_retriage, retriage_candidates
 
