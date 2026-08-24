@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html as htmllib
+from html.parser import HTMLParser
 import json
 import re
 import urllib.parse
@@ -23,6 +24,43 @@ def _strip_html(s: str) -> str:
     s = re.sub(r"<[^>]+>", " ", s)
     s = htmllib.unescape(s)
     return re.sub(r"\s+", " ", s).strip()
+
+
+class _OpenGraphDescriptionParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.description: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.description is not None or tag.lower() != "meta":
+            return
+        values = {name.lower(): value for name, value in attrs if value is not None}
+        if values.get("property", "").lower() == "og:description":
+            self.description = values.get("content", "")
+
+
+def _og_description(page_html: str) -> str:
+    parser = _OpenGraphDescriptionParser()
+    parser.feed(page_html)
+    if parser.description is None:
+        raise ValueError("missing og:description")
+    return re.sub(r"\s+", " ", htmllib.unescape(parser.description)).strip()[:12000]
+
+
+ORACLE_CLOSED_MARKERS = (
+    "job is no longer available",
+    "position is no longer available",
+    "job posting has been removed",
+    "job not found",
+)
+
+
+def oracle_closed_marker(body_text: str) -> str | None:
+    normalized = re.sub(r"\s+", " ", _strip_html(body_text)).lower()
+    for marker in ORACLE_CLOSED_MARKERS:
+        if marker in normalized:
+            return marker
+    return None
 
 
 def _greenhouse_board_slug(page_html: str) -> str | None:
@@ -159,6 +197,12 @@ def _workday(url: str) -> str:
     return _strip_html(info.get("jobDescription", ""))
 
 
+def _oraclecloud(url: str) -> str:
+    if parse_oracle_posting_url(url) is None:
+        raise ValueError("unrecognized oraclecloud url")
+    return _og_description(_get(url))
+
+
 def fetch_jd(url: str) -> str:
     """Best-effort JD text. Returns '' on total failure (tailor still works, generic)."""
     url = canonical_application_url(url)
@@ -168,6 +212,7 @@ def fetch_jd(url: str) -> str:
         if ats == "lever": return _lever(url)[:12000]
         if ats == "ashby": return _ashby(url)[:12000]
         if ats == "workday": return _workday(url)[:12000]
+        if ats == "oraclecloud": return _oraclecloud(url)[:12000]
         return _strip_html(_get(url))[:12000]
     except Exception:
         try:
