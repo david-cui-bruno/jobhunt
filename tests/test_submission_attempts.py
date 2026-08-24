@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 
@@ -57,6 +58,7 @@ def test_connect_tracker_initializes_submission_attempts_schema(tmp_path: Path) 
             "click_attempted": "INTEGER",
             "confirmation_observed": "INTEGER",
             "artifact_refs_json": "TEXT",
+            "unanswered_json": "TEXT",
         }
         indexes = {
             row[1]
@@ -124,6 +126,39 @@ def test_ensure_submission_attempts_preserves_caller_transaction() -> None:
     ).fetchone() is None
 
 
+def test_ensure_submission_attempts_adds_unanswered_json_to_existing_schema() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE submission_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            posting_id TEXT NOT NULL,
+            ats TEXT NOT NULL,
+            lane TEXT NOT NULL,
+            worker_id TEXT NOT NULL,
+            browser_mode TEXT NOT NULL,
+            policy_revision TEXT NOT NULL,
+            started_at INTEGER NOT NULL,
+            finished_at INTEGER,
+            duration_ms INTEGER,
+            outcome TEXT,
+            reason_code TEXT,
+            raw_reason TEXT,
+            click_attempted INTEGER NOT NULL DEFAULT 0,
+            confirmation_observed INTEGER NOT NULL DEFAULT 0,
+            artifact_refs_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    conn.commit()
+
+    ensure_submission_attempts(conn)
+    ensure_submission_attempts(conn)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(submission_attempts)").fetchall()}
+    assert "unanswered_json" in columns
+
+
 def test_attempt_ledger_is_append_only_and_finishes_once() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_submission_attempts(conn)
@@ -147,13 +182,15 @@ def test_attempt_ledger_is_append_only_and_finishes_once() -> None:
         click_attempted=True,
         confirmation_observed=True,
         artifact_refs={"screenshot": "out/screenshots/p1.png"},
+        unanswered=["Current location"],
         finished_at=110,
     )
     row = conn.execute(
-        "SELECT posting_id,ats,lane,outcome,reason_code,click_attempted,confirmation_observed "
+        "SELECT posting_id,ats,lane,outcome,reason_code,click_attempted,confirmation_observed,unanswered_json "
         "FROM submission_attempts WHERE attempt_id='a1'"
     ).fetchone()
-    assert row == ("p1", "greenhouse", "direct", "submitted", "confirmed", 1, 1)
+    assert row[:7] == ("p1", "greenhouse", "direct", "submitted", "confirmed", 1, 1)
+    assert json.loads(row[7]) == ["Current location"]
     with pytest.raises(sqlite3.IntegrityError):
         start_attempt(conn, attempt_id="a1", posting_id="p1", ats="greenhouse", lane="direct",
                       worker_id="worker-2", browser_mode="isolated-headless",

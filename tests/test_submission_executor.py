@@ -77,12 +77,17 @@ def test_executor_records_manual_attempt_and_releases_other_lanes(tmp_path, monk
         "reason": "needs answers: ['Current location']",
         "unanswered": ["Current location"],
         "click_attempted": False,
+        "artifact_refs": {"filled_form_screenshot": "/local/shot.png"},
     })
-    monkeypatch.setattr("submission.executor._send_notice", lambda *args, **kwargs: True)
+    notices: list[tuple[str, str]] = []
+    monkeypatch.setattr("submission.executor._send_notice", lambda subject, body: notices.append((subject, body)) or True)
 
     result = execute_claimed_posting(conn, row, lane=DIRECT, dry_run=False, worker_id="direct-1")
 
     assert result["outcome"] == "manual"
+    assert result["unanswered"] == ["Current location"]
+    assert result["artifact_refs"] == {"filled_form_screenshot": "/local/shot.png"}
+    assert notices and "/local/shot.png" not in notices[0][1]
     assert conn.execute("SELECT status FROM postings WHERE posting_id=?", (row["posting_id"],)).fetchone()[0] == "manual"
     assert conn.execute("SELECT COUNT(*) FROM submission_attempts").fetchone()[0] == 1
     rec = attempt(conn)
@@ -90,6 +95,8 @@ def test_executor_records_manual_attempt_and_releases_other_lanes(tmp_path, monk
     assert rec["worker_id"] == "direct-1"
     assert rec["outcome"] == "manual"
     assert rec["click_attempted"] == 0
+    assert json.loads(rec["unanswered_json"]) == ["Current location"]
+    assert json.loads(rec["artifact_refs_json"]) == {"filled_form_screenshot": "/local/shot.png"}
 
 
 def test_executor_records_confirmed_submission_and_application(tmp_path, monkeypatch) -> None:

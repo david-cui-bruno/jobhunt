@@ -75,6 +75,7 @@ def _finish_attempt_once(conn: sqlite3.Connection, *, attempt_id: str, result: d
         click_attempted=bool(result.get("click_attempted")),
         confirmation_observed=bool(result.get("submitted") or outcome == "submitted"),
         artifact_refs=result.get("artifact_refs") or {},
+        unanswered=result.get("unanswered") or [],
     )
 
 
@@ -248,7 +249,7 @@ def execute_claimed_posting(
         output = {"company": company, "ats": res.get("detected_ats", ats), "outcome": outcome, "reason": reason}
         if launched and not dry_run:
             output["attempt_id"] = attempt_id
-        for key in ("submission_uncertain", "click_attempted", "definitive_rejection", "unanswered"):
+        for key in ("submission_uncertain", "click_attempted", "definitive_rejection", "unanswered", "artifact_refs"):
             if key in res:
                 output[key] = res[key]
         return output

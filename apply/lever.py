@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
+from artifacts import safe_screenshot
 import qa
 import stealth
 from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
@@ -83,8 +84,14 @@ def lever_captcha_present(page) -> bool:
 
 
 def _shot(page, slug, stage):
-    SHOTS.mkdir(parents=True, exist_ok=True)
-    page.screenshot(path=str(SHOTS / f"{slug}_{stage}.png"), full_page=True)
+    shot = safe_screenshot(page, slug, stage, root=SHOTS)
+    return shot
+
+
+def _record_filled_screenshot(result: dict, page, slug: str) -> None:
+    shot = safe_screenshot(page, slug, "filled", root=SHOTS)
+    if shot:
+        result.setdefault("artifact_refs", {})["filled_form_screenshot"] = shot
 
 
 def apply_lever(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
@@ -171,7 +178,7 @@ def apply_lever(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
 
         required_empty = _lever_required_empty(page)
         result["unanswered"] = required_empty
-        _shot(page, slug, "filled")
+        _record_filled_screenshot(result, page, slug)
 
         if required_empty:
             result["ok"] = True
@@ -195,6 +202,7 @@ def apply_lever(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
                 reason="Lever hCaptcha requires manual completion",
                 unanswered=["Lever hCaptcha"],
             )
+            _record_filled_screenshot(result, page, slug)
             browser.close()
             return result
 

@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS submission_attempts (
     raw_reason TEXT,
     click_attempted INTEGER NOT NULL DEFAULT 0,
     confirmation_observed INTEGER NOT NULL DEFAULT 0,
-    artifact_refs_json TEXT NOT NULL DEFAULT '{}'
+    artifact_refs_json TEXT NOT NULL DEFAULT '{}',
+    unanswered_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS submission_attempts_posting_idx
 ON submission_attempts(posting_id, started_at);
@@ -32,6 +33,12 @@ def ensure_submission_attempts(conn: sqlite3.Connection) -> None:
     should_commit = not conn.in_transaction
     for statement in [part.strip() for part in SCHEMA.split(";") if part.strip()]:
         conn.execute(statement)
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(submission_attempts)").fetchall()
+    }
+    if "unanswered_json" not in columns:
+        conn.execute("ALTER TABLE submission_attempts ADD COLUMN unanswered_json TEXT NOT NULL DEFAULT '[]'")
     if should_commit:
         conn.commit()
 
@@ -50,15 +57,16 @@ def start_attempt(conn, *, attempt_id, posting_id, ats, lane, worker_id,
 
 def finish_attempt(conn, *, attempt_id, outcome, reason_code, raw_reason,
                    click_attempted, confirmation_observed, artifact_refs=None,
-                   finished_at=None) -> None:
+                   unanswered=None, finished_at=None) -> None:
     end = finished_at or int(time.time())
     changed = conn.execute(
         "UPDATE submission_attempts SET finished_at=?, "
         "duration_ms=(?-started_at)*1000, outcome=?, reason_code=?, raw_reason=?, "
-        "click_attempted=?, confirmation_observed=?, artifact_refs_json=? "
+        "click_attempted=?, confirmation_observed=?, artifact_refs_json=?, unanswered_json=? "
         "WHERE attempt_id=? AND finished_at IS NULL",
         (end, end, outcome, reason_code, raw_reason[:1000], int(click_attempted),
-         int(confirmation_observed), json.dumps(artifact_refs or {}, sort_keys=True), attempt_id),
+         int(confirmation_observed), json.dumps(artifact_refs or {}, sort_keys=True),
+         json.dumps(unanswered or [], sort_keys=True), attempt_id),
     ).rowcount
     if changed != 1:
         conn.rollback()

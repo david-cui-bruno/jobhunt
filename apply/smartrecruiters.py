@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
+from artifacts import safe_screenshot
 import qa
 import stealth
 from submission_state import confirmation_observed, mark_submit_attempted, mark_unconfirmed
@@ -52,8 +53,14 @@ def _hiring_team_message(profile: dict) -> str:
 
 
 def _shot(page, slug, stage):
-    SHOTS.mkdir(parents=True, exist_ok=True)
-    page.screenshot(path=str(SHOTS / f"{slug}_{stage}.png"), full_page=True)
+    shot = safe_screenshot(page, slug, stage, root=SHOTS)
+    return shot
+
+
+def _record_filled_screenshot(result: dict, page, slug: str) -> None:
+    shot = safe_screenshot(page, slug, "filled", root=SHOTS)
+    if shot:
+        result.setdefault("artifact_refs", {})["filled_form_screenshot"] = shot
 
 
 def apply_smartrecruiters(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
@@ -68,6 +75,7 @@ def apply_smartrecruiters(url: str, resume_pdf: Path, slug: str, dry_run: bool =
         blocked = _preflight_outcome(page.inner_text("body"))
         if blocked:
             result.update(blocked)
+            _record_filled_screenshot(result, page, slug)
             browser.close()
             return result
 
@@ -100,7 +108,7 @@ def apply_smartrecruiters(url: str, resume_pdf: Path, slug: str, dry_run: bool =
         blocked = _preflight_outcome(page.inner_text("body"), captcha.count() > 0)
         if blocked:
             result.update(blocked)
-            _shot(page, slug, "captcha")
+            _record_filled_screenshot(result, page, slug)
             browser.close()
             return result
 
@@ -125,7 +133,7 @@ def apply_smartrecruiters(url: str, resume_pdf: Path, slug: str, dry_run: bool =
             page.wait_for_timeout(6000)
         except Exception as e:
             result["reason"] = f"resume upload not found: {e}"
-            _shot(page, slug, "fail_upload")
+            _record_filled_screenshot(result, page, slug)
             browser.close()
             return result
 
@@ -205,7 +213,7 @@ def apply_smartrecruiters(url: str, resume_pdf: Path, slug: str, dry_run: bool =
             }
         """)
         result["unanswered"] = required_empty
-        _shot(page, slug, "filled")
+        _record_filled_screenshot(result, page, slug)
 
         if required_empty:
             result["ok"] = True
