@@ -66,6 +66,54 @@ def seed_many_workday(db: Path, *, count: int) -> None:
         seed_ready(db, f"wd-{idx}", f"https://acme.wd1.myworkdayjobs.com/jobs/job/{idx}")
 
 
+def test_workday_tenant_key_is_host_and_site():
+    from submission.workday_tenant import workday_tenant_key
+
+    assert (
+        workday_tenant_key("https://acme.wd5.myworkdayjobs.com/en-US/External/job/NYC/Role_R123")
+        == "acme.wd5.myworkdayjobs.com/external"
+    )
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://acme.wd5.myworkdayjobs.com/External/job/NYC/Role_R123", "acme.wd5.myworkdayjobs.com/external"),
+        ("https://acme.wd5.myworkdayjobs.com/en-US/Internal/job/NYC/Role_R123", "acme.wd5.myworkdayjobs.com/internal"),
+        ("https://acme.wd5.myworkdayjobs.com/en-US/External/job/A_R1", "acme.wd5.myworkdayjobs.com/external"),
+        ("https://acme.wd5.myworkdayjobs.com/en-US/Jobs/job/B_R2", "acme.wd5.myworkdayjobs.com/jobs"),
+        ("https://boards.greenhouse.io/acme/jobs/1", ""),
+        ("not a url", ""),
+    ],
+)
+def test_workday_tenant_key_covers_url_shapes(url: str, expected: str) -> None:
+    from submission.workday_tenant import workday_tenant_key
+
+    assert workday_tenant_key(url) == expected
+
+
+def test_selection_key_returns_workday_tenant_only():
+    from submission.dispatcher import selection_key
+    from submission.lanes import DIRECT, WORKDAY
+
+    assert (
+        selection_key(WORKDAY, "https://acme.wd5.myworkdayjobs.com/en-US/External/job/A_R1")
+        == "acme.wd5.myworkdayjobs.com/external"
+    )
+    assert selection_key(DIRECT, "https://boards.greenhouse.io/acme/jobs/1") is None
+
+
+def test_workday_cycle_never_selects_same_tenant_twice(dispatch_db):
+    from submission.dispatcher import select_for_lane
+    from submission.lanes import WORKDAY
+
+    seed_ready(dispatch_db, "a", "https://acme.wd5.myworkdayjobs.com/en-US/External/job/A_R1")
+    seed_ready(dispatch_db, "b", "https://acme.wd5.myworkdayjobs.com/en-US/External/job/B_R2")
+    seed_ready(dispatch_db, "c", "https://other.wd5.myworkdayjobs.com/en-US/Jobs/job/C_R3")
+
+    assert select_for_lane(dispatch_db, WORKDAY, limit=4) == ["a", "c"]
+
+
 def test_blocked_ashby_does_not_block_direct_lane(dispatch_db, monkeypatch) -> None:
     from submission.dispatcher import dispatch_cycle
 
@@ -158,20 +206,32 @@ def test_direct_and_workday_failures_are_isolated(dispatch_db, monkeypatch) -> N
 
     seed_ready(dispatch_db, "gh-1", "https://boards.greenhouse.io/acme/jobs/1")
     seed_ready(dispatch_db, "wd-1", "https://acme.wd1.myworkdayjobs.com/jobs/job/1")
+    seed_ready(dispatch_db, "wd-2", "https://acme.wd1.myworkdayjobs.com/jobs/job/2")
+    seed_ready(dispatch_db, "wd-3", "https://other.wd1.myworkdayjobs.com/jobs/job/3")
 
-    def fake_execute(posting_id, lane, **kwargs):
+    worker_calls = []
+
+    def fake_execute_claimed_posting(conn, row, *, lane, **kwargs):
+        worker_calls.append((row["posting_id"], lane.name, conn))
         if lane.name == "direct":
             raise RuntimeError("direct boom")
-        return {"outcome": "submitted"}
+        return {"outcome": "submitted", "posting_id": row["posting_id"], "lane": lane.name}
 
-    monkeypatch.setattr("submission.dispatcher.execute", fake_execute)
+    monkeypatch.setattr("submission.dispatcher.execute_claimed_posting", fake_execute_claimed_posting)
 
     results = sorted(dispatch_cycle(dispatch_db), key=lambda result: result["posting_id"])
 
-    assert [result["posting_id"] for result in results] == ["gh-1", "wd-1"]
+    assert [result["posting_id"] for result in results] == ["gh-1", "wd-1", "wd-3"]
     assert results[0]["outcome"] == "failed"
     assert "direct boom" in results[0]["reason"]
     assert results[1]["outcome"] == "submitted"
+    assert results[2]["outcome"] == "submitted"
+    assert sorted((posting_id, lane) for posting_id, lane, _conn in worker_calls) == [
+        ("gh-1", "direct"),
+        ("wd-1", "workday"),
+        ("wd-3", "workday"),
+    ]
+    assert len({id(conn) for _posting_id, _lane, conn in worker_calls}) == len(worker_calls)
 
 
 def test_run_forever_recovers_from_cycle_exception(monkeypatch) -> None:
