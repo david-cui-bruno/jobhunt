@@ -34,6 +34,8 @@ GREENHOUSE_ALIAS = "https://boards.greenhouse.io/acme/jobs/1234567"
 DISTINCT_GREENHOUSE_URL = "https://job-boards.greenhouse.io/acme/jobs/7654321"
 SOURCE_URL = "https://www.dreamworkhq.com/job/11111111-1111-1111-1111-111111111111"
 ORACLE_JOB_URL = "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992"
+ORACLE_SPOOFED_HOST_URL = "https://evil-oraclecloud.example.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992"
+ORACLE_SPOOFED_PATH_URL = "https://example.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011992"
 
 
 def conn() -> sqlite3.Connection:
@@ -475,13 +477,24 @@ def seed_retriage_current_url_row(
     status: str = "manual",
     outcome: str | None = "manual",
     title: str | None = None,
+    source: str = "dreamwork-2027",
 ) -> None:
-    db.execute(
-        "INSERT INTO postings "
-        "(posting_id, company, title, url, status, outcome, last_error, last_attempt_at, first_seen) "
-        "VALUES (?, 'Acme', ?, ?, ?, ?, ?, 100, 50)",
-        (posting_id, title or f"Role {posting_id}", url, status, outcome, last_error),
-    )
+    columns = {row[1] for row in db.execute("PRAGMA table_info(postings)")}
+    if "source" in columns:
+        db.execute(
+            "INSERT INTO postings "
+            "(posting_id, source, company, title, url, status, outcome, last_error, last_attempt_at, first_seen) "
+            "VALUES (?, ?, 'Acme', ?, ?, ?, ?, ?, 100, 50)",
+            (posting_id, source, title or f"Role {posting_id}", url, status, outcome, last_error),
+        )
+    else:
+        db.execute(
+            "INSERT INTO postings "
+            "(posting_id, company, title, url, status, outcome, last_error, last_attempt_at, first_seen) "
+            "VALUES (?, 'Acme', ?, ?, ?, ?, ?, 100, 50)",
+            (posting_id, title or f"Role {posting_id}", url, status, outcome, last_error),
+        )
+
 
 def seed_retriage_row(
     db: sqlite3.Connection,
@@ -674,7 +687,7 @@ def test_oracle_current_url_technical_debt_retriage_without_resolution_mapping()
     from submission.resolutions import apply_retriage, retriage_candidates
 
     db = retriage_conn()
-    seed_retriage_current_url_row(db, "oracle", ORACLE_JOB_URL)
+    seed_retriage_current_url_row(db, "oracle", ORACLE_JOB_URL, title="Software Engineer Intern Summer 2027")
     db.commit()
 
     candidates = retriage_candidates(db, ats="oraclecloud")
@@ -691,7 +704,7 @@ def test_oracle_current_url_retriage_preserves_excluded_rows_without_resolution_
     from submission.resolutions import apply_retriage, retriage_candidates
 
     db = retriage_conn()
-    seed_retriage_current_url_row(db, "eligible", ORACLE_JOB_URL)
+    seed_retriage_current_url_row(db, "eligible", ORACLE_JOB_URL, title="Software Engineer Intern Summer 2027")
     seed_retriage_current_url_row(db, "oraclecloud-reason", ORACLE_JOB_URL.replace("26011992", "26011993"), last_error="no adapter for oraclecloud")
     seed_retriage_current_url_row(db, "click", ORACLE_JOB_URL.replace("26011992", "26011994"), last_error="click uncertainty after submit")
     seed_retriage_current_url_row(db, "stale", ORACLE_JOB_URL.replace("26011992", "26011995"), outcome="stale")
@@ -718,9 +731,81 @@ def test_oracle_current_url_retriage_preserves_excluded_rows_without_resolution_
     assert {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded} == before
 
 
+def test_oracle_current_url_retriage_excludes_spoofs_off_season_and_other_ats_debt() -> None:
+    from submission.resolutions import apply_retriage, retriage_candidates
+
+    db = retriage_conn()
+    db.execute("ALTER TABLE postings ADD COLUMN source TEXT")
+    seed_retriage_current_url_row(db, "eligible", ORACLE_JOB_URL, title="Software Engineer Intern Summer 2027")
+    seed_retriage_current_url_row(db, "spoofed-host", ORACLE_SPOOFED_HOST_URL)
+    seed_retriage_current_url_row(db, "spoofed-path", ORACLE_SPOOFED_PATH_URL)
+    seed_retriage_current_url_row(
+        db,
+        "off-season",
+        ORACLE_JOB_URL.replace("26011992", "26012000"),
+        title="Software Engineer Intern Summer 2026",
+    )
+    seed_retriage_current_url_row(db, "greenhouse-debt", GREENHOUSE_URL, last_error="no adapter for other")
+    excluded = ["spoofed-host", "spoofed-path", "off-season", "greenhouse-debt"]
+    before = {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded}
+    db.commit()
+
+    candidates = retriage_candidates(db, ats="oraclecloud")
+    result = apply_retriage(db, ["eligible", *excluded], ats="oraclecloud")
+
+    assert [candidate["posting_id"] for candidate in candidates] == ["eligible"]
+    assert result == {"requested": 5, "updated": 1, "skipped": 4}
+    assert posting_snapshot(db, "eligible")[4:7] == ("queued", None, "")
+    assert {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded} == before
+
+
+def test_oracle_current_url_apply_is_idempotent() -> None:
+    from submission.resolutions import apply_retriage
+
+    db = retriage_conn()
+    seed_retriage_current_url_row(db, "oracle", ORACLE_JOB_URL, title="Software Engineer Intern Summer 2027")
+    db.commit()
+
+    first = apply_retriage(db, ["oracle"], ats="oraclecloud")
+    second = apply_retriage(db, ["oracle"], ats="oraclecloud")
+
+    assert first == {"requested": 1, "updated": 1, "skipped": 0}
+    assert second == {"requested": 1, "updated": 0, "skipped": 1}
+    assert posting_snapshot(db, "oracle")[4:7] == ("queued", None, "")
+
+
+def test_oracle_current_url_retriage_preserves_safe_exclusions_without_attempts_ledger() -> None:
+    from submission.resolutions import apply_retriage, retriage_candidates
+
+    db = retriage_conn()
+    db.execute("ALTER TABLE postings ADD COLUMN source TEXT")
+    db.execute("DROP TABLE submission_attempts")
+    seed_retriage_current_url_row(db, "eligible", ORACLE_JOB_URL, title="Software Engineer Intern Summer 2027")
+    seed_retriage_current_url_row(db, "alias", ORACLE_JOB_URL.replace("26011992", "26012001"))
+    seed_applied(db, "done", ORACLE_JOB_URL.replace("26011992", "26012001"))
+    seed_retriage_current_url_row(db, "stale", ORACLE_JOB_URL.replace("26011992", "26012002"), outcome="stale")
+    seed_retriage_current_url_row(
+        db,
+        "off-season",
+        ORACLE_JOB_URL.replace("26011992", "26012003"),
+        title="Software Engineer Intern Fall 2026",
+    )
+    excluded = ["alias", "done", "stale", "off-season"]
+    before = {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded}
+    db.commit()
+
+    candidates = retriage_candidates(db, ats="oraclecloud")
+    result = apply_retriage(db, ["eligible", *excluded], ats="oraclecloud")
+
+    assert [candidate["posting_id"] for candidate in candidates] == ["eligible"]
+    assert result == {"requested": 5, "updated": 1, "skipped": 4}
+    assert posting_snapshot(db, "eligible")[4:7] == ("queued", None, "")
+    assert {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded} == before
+
+
 def test_retriage_cli_ats_filter_limits_safe_json_to_oracle(tmp_path: Path) -> None:
     db = retriage_conn(tmp_path)
-    seed_retriage_current_url_row(db, "oracle", ORACLE_JOB_URL)
+    seed_retriage_current_url_row(db, "oracle", ORACLE_JOB_URL, title="Software Engineer Intern Summer 2027")
     seed_retriage_row(db, "greenhouse", GREENHOUSE_URL)
     db.commit()
     db.close()
@@ -754,7 +839,7 @@ def test_retriage_cli_ats_filter_limits_safe_json_to_oracle(tmp_path: Path) -> N
             {
                 "posting_id": "oracle",
                 "company": "Acme",
-                "title": "Role oracle",
+                "title": "Software Engineer Intern Summer 2027",
                 "source_url": ORACLE_JOB_URL,
                 "resolved_url": ORACLE_JOB_URL,
                 "ats": "oraclecloud",
@@ -763,6 +848,35 @@ def test_retriage_cli_ats_filter_limits_safe_json_to_oracle(tmp_path: Path) -> N
             }
         ],
     }
+
+
+def test_retriage_cli_rejects_unsupported_ats_typo_without_mutating(tmp_path: Path) -> None:
+    db = retriage_conn(tmp_path)
+    seed_retriage_current_url_row(db, "oracle", ORACLE_JOB_URL, title="Software Engineer Intern Summer 2027")
+    db.commit()
+    db.close()
+    db_path = tmp_path / "tracker.db"
+    before = db_hash(db_path)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/retriage_resolved_postings.py",
+            "--db",
+            str(db_path),
+            "--preview",
+            "--ats",
+            "oracle",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert db_hash(db_path) == before
+    assert json.loads(completed.stdout)["error"] == "unsupported ats: oracle"
+
 
 def db_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()

@@ -53,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=DEFAULT_APPLY_LIMIT, help="maximum rows to apply, default 25")
     parser.add_argument("--ats", help="restrict candidates to one detected ATS")
     args = parser.parse_args(argv)
+    if args.ats and args.ats != "oraclecloud":
+        return emit_error(f"unsupported ats: {args.ats}")
     if args.limit < 1:
         return emit_error("limit must be at least 1")
 
