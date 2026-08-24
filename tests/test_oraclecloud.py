@@ -635,11 +635,16 @@ def test_oracle_refills_owned_controls_after_shared_qa_can_rerender_page(fake_or
         "_fill_oracle_address_line1",
         lambda page: calls.append("address") or True,
     )
+    monkeypatch.setattr(
+        oraclecloud,
+        "_fill_oracle_zip",
+        lambda page: calls.append("zip") or True,
+    )
 
     result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-owned-after-qa", dry_run=True)
 
     assert result["reason"] == "dry run - did not submit"
-    assert calls == ["shared_qa", "basics", "address"]
+    assert calls == ["shared_qa", "basics", "address", "zip"]
 
 
 def test_oracle_required_field_on_page_two_stops_before_next(fake_oracle, pdf):
@@ -1383,6 +1388,8 @@ class _OracleControlLocator:
             return self.page.collection[index]
         if self.name == "suggestions":
             return self.page.suggestions[index]
+        if self.name == "zip-suggestions":
+            return self.page.zip_suggestions[index]
         return self
 
     def count(self): return self._count
@@ -1396,7 +1403,9 @@ class _OracleControlLocator:
         self._value = value
     def click(self, timeout=None):
         self.page.events.append(f"click:{self.name}")
-        if self.name.startswith("suggestion"):
+        if self.name.startswith("zip-suggestion"):
+            self.page.zip_control._value = self.page.postal
+        elif self.name.startswith("suggestion"):
             self.page.address._value = self.page.street
     def get_attribute(self, name): return self.attrs.get(name)
     def inner_text(self, timeout=None): return self.text
@@ -1404,14 +1413,31 @@ class _OracleControlLocator:
 
 
 class _OracleControlsPage:
-    def __init__(self, controls=None, suggestions=None, street="123 Example Ave", address_label="Address Line 1"):
+    def __init__(
+        self,
+        controls=None,
+        suggestions=None,
+        street="123 Example Ave",
+        address_label="Address Line 1",
+        postal="12345",
+        zip_label="ZIP Code *",
+    ):
         self.events = []
         self.street = street
         self.address_label = address_label
+        self.postal = postal
+        self.zip_label = zip_label
         self.all_controls = controls or []
         self.collection = list(self.all_controls)
         self.suggestions = suggestions or []
+        self.zip_suggestions = []
         self.address = _OracleControlLocator(self, "address", value="", attrs={"type": "text"})
+        self.zip_control = _OracleControlLocator(
+            self,
+            "zip",
+            value="",
+            attrs={"type": "text", "role": "combobox", "aria-controls": "zip-listbox"},
+        )
 
     def get_by_label(self, label, exact=False):
         if hasattr(label, "search"):
@@ -1423,6 +1449,9 @@ class _OracleControlsPage:
         if normalized in {"phone", "phone number", "mobile"}:
             self.collection = [control for control in self.all_controls if "phone" in control.attrs.get("label", "").lower()]
             return _OracleControlLocator(self, "collection", count=len(self.collection))
+        if not exact and normalized in self.zip_label.lower():
+            self.collection = [self.zip_control]
+            return _OracleControlLocator(self, "collection", count=1)
         if exact and normalized == self.address_label.lower():
             self.collection = [self.address]
             return _OracleControlLocator(self, "collection", count=1)
@@ -1432,6 +1461,8 @@ class _OracleControlsPage:
         return _OracleControlLocator(self, label, visible=False, count=0)
 
     def locator(self, selector):
+        if selector == "#zip-listbox div[role='gridcell'].cx-select__list-item":
+            return _OracleControlLocator(self, "zip-suggestions", count=len(self.zip_suggestions))
         if "role='option'" in selector or 'role="option"' in selector or "[role=option]" in selector:
             return _OracleControlLocator(self, "suggestions", count=len(self.suggestions))
         return _OracleControlLocator(self, selector, count=0, visible=False)
@@ -1653,6 +1684,73 @@ def test_oracle_address_suggestion_zero_nonmatching_or_ambiguous_fails_closed(mo
 
     assert page.address.input_value() == ""
     assert not any(event.startswith("click:suggestion") for event in page.events)
+
+
+def test_oracle_zip_types_profile_value_and_selects_unique_controlled_gridcell(monkeypatch):
+    page = _OracleControlsPage(postal="12345")
+    page.zip_suggestions = [
+        _OracleControlLocator(page, "zip-suggestion-1", text="12345, Example City, ST")
+    ]
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"location": {"zip": "12345"}})
+
+    assert oraclecloud._fill_oracle_zip(page) is True
+
+    assert page.zip_control.input_value() == "12345"
+    assert "press:zip:12345" in page.events
+    assert "click:zip-suggestion-1" in page.events
+    assert page.events[-1] == "wait:250"
+
+
+def test_oracle_zip_preserves_matching_existing_value(monkeypatch):
+    page = _OracleControlsPage(postal="12345")
+    page.zip_control._value = "12345, Example City, ST"
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"location": {"zip": "12345"}})
+
+    assert oraclecloud._fill_oracle_zip(page) is True
+    assert page.zip_control.input_value() == "12345, Example City, ST"
+    assert page.events == []
+
+
+def test_oracle_zip_clears_mismatched_existing_value(monkeypatch):
+    page = _OracleControlsPage(postal="12345")
+    page.zip_control._value = "99999, Other City, ST"
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"location": {"zip": "12345"}})
+
+    assert oraclecloud._fill_oracle_zip(page) is False
+    assert page.zip_control.input_value() == ""
+    assert page.events == ["fill:zip:"]
+
+
+@pytest.mark.parametrize(
+    "suggestions",
+    [[], ["99999, Other City, ST"], ["12345, Example City, ST", "12345, Other City, ST"]],
+)
+def test_oracle_zip_missing_nonmatching_or_ambiguous_option_clears_and_fails_closed(monkeypatch, suggestions):
+    page = _OracleControlsPage(postal="12345")
+    page.zip_suggestions = [
+        _OracleControlLocator(page, f"zip-suggestion-{i}", text=text)
+        for i, text in enumerate(suggestions)
+    ]
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"location": {"zip": "12345"}})
+
+    assert oraclecloud._fill_oracle_zip(page) is False
+
+    assert page.zip_control.input_value() == ""
+    assert not any(event.startswith("click:zip-suggestion") for event in page.events)
+
+
+def test_oracle_zip_rejects_untrusted_aria_controls_id(monkeypatch):
+    page = _OracleControlsPage(postal="12345")
+    page.zip_control.attrs["aria-controls"] = "unsafe:id"
+    page.zip_suggestions = [
+        _OracleControlLocator(page, "zip-suggestion-1", text="12345, Example City, ST")
+    ]
+    monkeypatch.setattr(oraclecloud, "PROFILE", {"location": {"zip": "12345"}})
+
+    assert oraclecloud._fill_oracle_zip(page) is False
+
+    assert page.zip_control.input_value() == ""
+    assert not any(event.startswith("click:zip-suggestion") for event in page.events)
 
 
 def test_oracle_address_failed_commit_blocks_adapter_before_next_and_surfaces_required_label(fake_oracle, pdf, monkeypatch):

@@ -701,6 +701,76 @@ def _fill_oracle_address_line1(page) -> bool:
             pass
 
 
+def _fill_oracle_zip(page) -> bool:
+    postal = str((PROFILE.get("location") or {}).get("zip") or "").strip()
+    if not postal:
+        return False
+    field = None
+    committed = False
+    attempted = False
+    try:
+        fields = page.get_by_label("ZIP Code", exact=False)
+        visible = []
+        for index in range(fields.count()):
+            candidate = fields.first if fields.count() == 1 else fields.nth(index)
+            if candidate.is_visible():
+                visible.append(candidate)
+        if len(visible) != 1:
+            return False
+        field = visible[0]
+        existing = str(field.input_value() or "").strip()
+        target = _normal_control_text(postal)
+        if existing:
+            existing_value = _normal_control_text(existing)
+            committed = existing_value == target or existing_value.startswith(target + " ")
+            if not committed:
+                field.fill("")
+            return committed
+
+        controlled_id = _control_attr(field, "aria-controls")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", controlled_id):
+            return False
+
+        attempted = True
+        field.press_sequentially(postal, delay=20)
+        selector = f"#{controlled_id} div[role='gridcell'].cx-select__list-item"
+        matches = []
+        for _ in range(6):
+            try:
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
+            matches = []
+            options = page.locator(selector)
+            for index in range(options.count()):
+                option = options.nth(index)
+                if not option.is_visible():
+                    continue
+                option_text = _normal_control_text(option.inner_text(timeout=500))
+                if option_text == target or option_text.startswith(target + " "):
+                    matches.append(option)
+            if matches:
+                break
+        if len(matches) != 1:
+            return False
+        matches[0].click(timeout=1000)
+        try:
+            page.wait_for_timeout(250)
+        except Exception:
+            pass
+        committed_value = _normal_control_text(field.input_value() or "")
+        committed = bool(committed_value) and (committed_value == target or committed_value.startswith(target + " "))
+        return committed
+    except Exception:
+        return False
+    finally:
+        if field is not None and attempted and not committed:
+            try:
+                field.fill("")
+            except Exception:
+                pass
+
+
 def _fill_basics(page) -> None:
     p = PROFILE
     name = p.get("name") or {}
@@ -833,6 +903,7 @@ def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = Tru
                 result["qa_failed"] = _merge_unique(result["qa_failed"], qa_failed)
                 _fill_basics(page)
                 _fill_oracle_address_line1(page)
+                _fill_oracle_zip(page)
 
                 body = _body_text(page)
                 closed = _closed_reason(body)
