@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import apply.jd
@@ -260,3 +264,195 @@ def test_classify_identity_and_duplicate_hot_paths_never_fetch(monkeypatch) -> N
         posting_already_applied(db, "dw-1", url)
 
     assert invoked == []
+
+
+def retriage_conn(tmp_path: Path | None = None) -> sqlite3.Connection:
+    path = ':memory:' if tmp_path is None else str(tmp_path / 'tracker.db')
+    db = sqlite3.connect(path)
+    db.row_factory = sqlite3.Row
+    db.execute(
+        "CREATE TABLE postings ("
+        "posting_id TEXT PRIMARY KEY, company TEXT, title TEXT, url TEXT, status TEXT, "
+        "outcome TEXT, last_error TEXT, last_attempt_at INTEGER, first_seen INTEGER"
+        ")"
+    )
+    db.execute("CREATE TABLE applications (posting_id TEXT PRIMARY KEY)")
+    db.execute(
+        "CREATE TABLE submission_attempts ("
+        "attempt_id TEXT PRIMARY KEY, posting_id TEXT NOT NULL, ats TEXT NOT NULL, lane TEXT NOT NULL, "
+        "worker_id TEXT NOT NULL, browser_mode TEXT NOT NULL, policy_revision TEXT NOT NULL, "
+        "started_at INTEGER NOT NULL, finished_at INTEGER"
+        ")"
+    )
+    ensure_resolution_schema(db)
+    return db
+
+
+def seed_retriage_row(
+    db: sqlite3.Connection,
+    posting_id: str,
+    resolved_url: str,
+    *,
+    last_error: str = "no adapter for other",
+    status: str = "manual",
+    outcome: str | None = "manual",
+) -> None:
+    db.execute(
+        "INSERT INTO postings "
+        "(posting_id, company, title, url, status, outcome, last_error, last_attempt_at, first_seen) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 100, 50)",
+        (posting_id, "Acme", f"Role {posting_id}", SOURCE_URL + '/' + posting_id, status, outcome, last_error),
+    )
+    record_resolution(
+        db,
+        ResolutionResult(SOURCE_URL + '/' + posting_id, resolved_url, "dreamwork-original-v1", posting_id[:1] * 64, ""),
+        posting_id=posting_id,
+    )
+
+
+def posting_snapshot(db: sqlite3.Connection, posting_id: str) -> tuple:
+    return tuple(
+        db.execute(
+            "SELECT posting_id, company, title, url, status, outcome, last_error, last_attempt_at, first_seen "
+            "FROM postings WHERE posting_id=?",
+            (posting_id,),
+        ).fetchone()
+    )
+
+
+def seed_retriage_fixture(db: sqlite3.Connection) -> list[str]:
+    from submission.resolutions import retriage_candidates
+
+    del retriage_candidates
+    seed_retriage_row(db, "greenhouse", GREENHOUSE_URL)
+    seed_retriage_row(db, "smart", "https://jobs.smartrecruiters.com/acme/123-engineer")
+    seed_retriage_row(db, "click", "https://jobs.lever.co/acme/123", last_error="click uncertainty after submit")
+    seed_retriage_row(db, "stale", "https://jobs.lever.co/acme/124", outcome="stale")
+    seed_retriage_row(db, "finished", "https://jobs.lever.co/acme/125")
+    db.execute(
+        "INSERT INTO submission_attempts "
+        "(attempt_id, posting_id, ats, lane, worker_id, browser_mode, policy_revision, started_at, finished_at) "
+        "VALUES ('attempt-finished', 'finished', 'lever', 'direct', 'worker', 'browser', 'v1', 1, 2)"
+    )
+    seed_retriage_row(db, "alias", "https://jobs.lever.co/acme/applied-alias")
+    seed_applied(db, "done", "https://jobs.lever.co/acme/applied-alias")
+    seed_retriage_row(db, "nontechnical", "https://jobs.lever.co/acme/126", last_error="needs resume revision")
+    return ["click", "stale", "finished", "alias", "nontechnical", "done"]
+
+
+def test_retriage_candidates_preview_only_safe_resolved_manual_rows() -> None:
+    from submission.resolutions import retriage_candidates
+
+    db = retriage_conn()
+    seed_retriage_fixture(db)
+
+    candidates = retriage_candidates(db)
+
+    assert [candidate["posting_id"] for candidate in candidates] == ["greenhouse", "smart"]
+    assert candidates[0]["destination"] == "ready"
+    assert candidates[0]["ats"] == "greenhouse"
+    assert candidates[0]["reason"] == "no adapter for other"
+    assert candidates[1]["destination"] == "manual"
+    assert candidates[1]["ats"] == "smartrecruiters"
+
+
+def test_apply_retriage_updates_only_selected_safe_rows_and_preserves_manual_smartrecruiters() -> None:
+    from submission.resolutions import apply_retriage
+
+    db = retriage_conn()
+    excluded = seed_retriage_fixture(db)
+    before = {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded}
+    db.commit()
+
+    result = apply_retriage(db, ["greenhouse", "smart", "click", "stale", "finished", "alias", "nontechnical"])
+
+    assert result == {"requested": 7, "updated": 2, "skipped": 5}
+    assert posting_snapshot(db, "greenhouse")[4:7] == ("queued", None, "")
+    assert posting_snapshot(db, "smart")[4:7] == (
+        "manual",
+        "manual",
+        "prepared for manual completion: smartrecruiters",
+    )
+    assert {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded} == before
+
+
+def db_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_retriage_cli_preview_json_does_not_mutate_database_hash(tmp_path: Path) -> None:
+    db = retriage_conn(tmp_path)
+    seed_retriage_fixture(db)
+    db.commit()
+    db.close()
+    db_path = tmp_path / "tracker.db"
+    before = db_hash(db_path)
+
+    completed = subprocess.run(
+        [sys.executable, "scripts/retriage_resolved_postings.py", "--db", str(db_path), "--preview", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert db_hash(db_path) == before
+    payload = json.loads(completed.stdout)
+    assert payload == {
+        "mode": "preview",
+        "count": 2,
+        "candidates": [
+            {
+                "posting_id": "greenhouse",
+                "company": "Acme",
+                "title": "Role greenhouse",
+                "source_url": SOURCE_URL + "/greenhouse",
+                "resolved_url": GREENHOUSE_URL,
+                "ats": "greenhouse",
+                "destination": "ready",
+                "reason": "no adapter for other",
+            },
+            {
+                "posting_id": "smart",
+                "company": "Acme",
+                "title": "Role smart",
+                "source_url": SOURCE_URL + "/smart",
+                "resolved_url": "https://jobs.smartrecruiters.com/acme/123-engineer",
+                "ats": "smartrecruiters",
+                "destination": "manual",
+                "reason": "no adapter for other",
+            },
+        ],
+    }
+
+
+def test_retriage_cli_apply_scope_and_idempotence(tmp_path: Path) -> None:
+    db = retriage_conn(tmp_path)
+    excluded = seed_retriage_fixture(db)
+    before = {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded}
+    db.commit()
+    db.close()
+    db_path = tmp_path / "tracker.db"
+
+    first = subprocess.run(
+        [sys.executable, "scripts/retriage_resolved_postings.py", "--db", str(db_path), "--apply", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    second = subprocess.run(
+        [sys.executable, "scripts/retriage_resolved_postings.py", "--db", str(db_path), "--apply", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(first.stdout)["result"] == {"requested": 2, "updated": 2, "skipped": 0}
+    assert json.loads(second.stdout)["result"] == {"requested": 0, "updated": 0, "skipped": 0}
+    db = sqlite3.connect(db_path)
+    assert posting_snapshot(db, "greenhouse")[4:7] == ("queued", None, "")
+    assert posting_snapshot(db, "smart")[4:7] == (
+        "manual",
+        "manual",
+        "prepared for manual completion: smartrecruiters",
+    )
+    assert {posting_id: posting_snapshot(db, posting_id) for posting_id in excluded} == before

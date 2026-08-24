@@ -77,3 +77,122 @@ def record_resolution(conn: sqlite3.Connection, result: ResolutionLike, posting_
 
 def _sanitize_error(error: str) -> str:
     return re.sub(r"\s+", " ", error).strip()[:500]
+
+
+TECHNICAL_MANUAL_PREFIXES = (
+    "no adapter for other",
+    "no adapter for icims",
+)
+TERMINAL_OUTCOMES = frozenset({"stale", "submitted", "deduplicated"})
+TERMINAL_STATUSES = frozenset({"submitted", "skipped"})
+
+
+def retriage_candidates(conn: sqlite3.Connection) -> list[dict]:
+    from submission.identity import canonical_conflict_reason
+    from submission.lanes import classify_url, preparation_destination
+
+    candidates: list[dict] = []
+    for row in conn.execute(_candidate_query()):
+        posting_id = row["posting_id"] if isinstance(row, sqlite3.Row) else row[0]
+        company = row["company"] if isinstance(row, sqlite3.Row) else row[1]
+        title = row["title"] if isinstance(row, sqlite3.Row) else row[2]
+        source_url = row["source_url"] if isinstance(row, sqlite3.Row) else row[3]
+        resolved_url = row["resolved_url"] if isinstance(row, sqlite3.Row) else row[4]
+        reason = row["last_error"] if isinstance(row, sqlite3.Row) else row[5]
+        if not resolved_url or not _technical_reason(reason):
+            continue
+        if "click" in reason.lower():
+            continue
+        if _has_finished_attempt(conn, posting_id):
+            continue
+        if canonical_conflict_reason(conn, posting_id, resolved_url):
+            continue
+        destination, destination_reason = preparation_destination(conn, resolved_url)
+        ats, lane = classify_url(resolved_url)
+        if lane.name == "unsupported":
+            continue
+        candidates.append({
+            "posting_id": posting_id,
+            "company": company or "",
+            "title": title or "",
+            "source_url": source_url or "",
+            "resolved_url": resolved_url,
+            "ats": ats,
+            "destination": destination,
+            "reason": reason,
+            "last_error": reason,
+            "next_error": destination_reason or "",
+        })
+    candidates.sort(key=lambda item: item["posting_id"])
+    return candidates
+
+
+def apply_retriage(conn: sqlite3.Connection, posting_ids: list[str]) -> dict:
+    requested_ids = list(dict.fromkeys(posting_ids))
+    requested = len(requested_ids)
+    if not requested_ids:
+        return {"requested": 0, "updated": 0, "skipped": 0}
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = {
+            candidate["posting_id"]: candidate
+            for candidate in retriage_candidates(conn)
+            if candidate["posting_id"] in requested_ids
+        }
+        updated = 0
+        for posting_id in requested_ids:
+            candidate = current.get(posting_id)
+            if candidate is None:
+                continue
+            changed = conn.execute(
+                "UPDATE postings SET status=?, outcome=?, last_error=?, last_attempt_at=? "
+                "WHERE posting_id=? AND status='manual' AND COALESCE(last_error, '')=?",
+                (
+                    "queued" if candidate["destination"] == "ready" else "manual",
+                    None if candidate["destination"] == "ready" else "manual",
+                    "" if candidate["destination"] == "ready" else candidate["next_error"],
+                    int(time.time()),
+                    posting_id,
+                    candidate["last_error"],
+                ),
+            ).rowcount
+            updated += changed
+        conn.commit()
+        return {"requested": requested, "updated": updated, "skipped": requested - updated}
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _candidate_query() -> str:
+    return """
+        SELECT p.posting_id,
+               COALESCE(p.company, '') AS company,
+               COALESCE(p.title, '') AS title,
+               r.source_url,
+               r.resolved_url,
+               COALESCE(p.last_error, '') AS last_error
+        FROM postings p
+        JOIN posting_url_resolutions r USING(posting_id)
+        WHERE p.status='manual'
+          AND COALESCE(r.resolved_url, '')<>''
+          AND COALESCE(p.outcome, '') NOT IN ('stale', 'submitted', 'deduplicated')
+          AND COALESCE(p.status, '') NOT IN ('submitted', 'skipped')
+        ORDER BY p.posting_id
+    """
+
+
+def _technical_reason(reason: str) -> bool:
+    return any(reason.startswith(prefix) for prefix in TECHNICAL_MANUAL_PREFIXES)
+
+
+def _has_finished_attempt(conn: sqlite3.Connection, posting_id: str) -> bool:
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='submission_attempts'"
+    ).fetchone()
+    if not exists:
+        return False
+    return conn.execute(
+        "SELECT 1 FROM submission_attempts WHERE posting_id=? AND finished_at IS NOT NULL LIMIT 1",
+        (posting_id,),
+    ).fetchone() is not None
