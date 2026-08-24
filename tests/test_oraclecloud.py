@@ -1235,3 +1235,56 @@ def test_oracle_click_timeout_after_marker_is_uncertain_non_retryable(fake_oracl
     assert result["retryable"] is False
     assert result["click_attempted"] is True
     assert result["submission_uncertain"] is True
+
+
+def test_shared_qa_passes_skip_populated_controls_but_fill_empty_and_label_only(monkeypatch):
+    controls = [
+        {"id": "address-line-1", "name": "", "label": "Address Line 1", "value": "Imported tenant address", "chosen": ""},
+        {"id": "city", "name": "city", "label": "City", "value": "", "chosen": ""},
+        {"id": "", "name": "", "label": "Start date", "value": "", "chosen": ""},
+    ]
+    answers = [
+        {"id_or_name": "address-line-1", "label": "Address Line 1", "answer": "Generated address must not overwrite"},
+        {"id_or_name": "city", "label": "City", "answer": "Austin"},
+        {"id_or_name": "Start date", "label": "Start date", "answer": "Immediately"},
+    ]
+    fill_calls = []
+
+    class Page:
+        def __init__(self):
+            self.pass_index = 0
+
+        def evaluate(self, script):
+            assert script == oraclecloud.qa.EXTRACT_JS
+            return [dict(control) for control in controls]
+
+        def wait_for_timeout(self, value):
+            self.pass_index += 1
+
+    def fake_get_answers(seen_controls, context):
+        assert seen_controls == controls
+        assert context == {"slug": "oracle-task-2", "url": ORACLE_JOB_URL}
+        return list(answers)
+
+    def fake_fill_answers(page, seen_controls, todo):
+        fill_calls.append([answer["label"] for answer in todo])
+        for answer in todo:
+            matched = next(
+                control for control in controls
+                if answer["id_or_name"] in {control["id"], control["name"]}
+                or answer["label"] == control["label"]
+            )
+            matched["value"] = answer["answer"]
+        return [answer["label"] for answer in todo], []
+
+    monkeypatch.setattr(oraclecloud.qa, "get_answers", fake_get_answers)
+    monkeypatch.setattr(oraclecloud.qa, "fill_answers", fake_fill_answers)
+
+    filled, failed = oraclecloud._run_shared_qa_passes(Page(), "oracle-task-2", ORACLE_JOB_URL)
+
+    assert fill_calls == [["City", "Start date"], [], []]
+    assert controls[0]["value"] == "Imported tenant address"
+    assert controls[1]["value"] == "Austin"
+    assert controls[2]["value"] == "Immediately"
+    assert filled == ["City", "Start date"]
+    assert failed == []

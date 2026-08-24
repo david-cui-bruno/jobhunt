@@ -525,8 +525,24 @@ def _run_shared_qa_passes(page, slug: str, url: str) -> tuple[list[str], list[st
         controls = page.evaluate(qa.EXTRACT_JS)
         if answers is None:
             answers = qa.get_answers(controls, context={"slug": slug, "url": url})
-        live = {c.get("id") or c.get("name") for c in controls if not c.get("value") and not c.get("chosen")}
-        todo = answers if qa_pass == 0 else [a for a in answers if a.get("id_or_name") in live]
+        by_key = {}
+        by_label = {}
+        for control in controls:
+            if control.get("id"):
+                by_key[control.get("id")] = control
+            if control.get("name"):
+                by_key.setdefault(control.get("name"), control)
+            if control.get("label"):
+                by_label.setdefault(str(control.get("label")).lower().strip(), control)
+
+        todo = []
+        for answer in answers:
+            control = by_key.get(answer.get("id_or_name"))
+            if control is None:
+                label = str(answer.get("label") or answer.get("id_or_name") or "").lower().strip()
+                control = by_label.get(label)
+            if control is None or (not control.get("value") and not control.get("chosen")):
+                todo.append(answer)
         newly_filled, failed = qa.fill_answers(page, controls, todo)
         filled.extend(newly_filled)
         try:
