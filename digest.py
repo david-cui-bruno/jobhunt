@@ -96,11 +96,16 @@ def collect(conn, since: int) -> dict:
     manual_ask = []   # needs David's actual input
     manual_finish = []
     manual_debt = {}  # agent-fixable, count by reason prefix
-    uncertain_sql = (
-        "EXISTS (SELECT 1 FROM submission_attempts sa "
-        "WHERE sa.posting_id=postings.posting_id AND sa.finished_at IS NOT NULL "
-        "AND sa.click_attempted=1 AND sa.confirmation_observed=0)"
-    )
+    has_attempts = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='submission_attempts'"
+    ).fetchone() is not None
+    uncertain_sql = "0"
+    if has_attempts:
+        uncertain_sql = (
+            "EXISTS (SELECT 1 FROM submission_attempts sa "
+            "WHERE sa.posting_id=postings.posting_id AND sa.finished_at IS NOT NULL "
+            "AND sa.click_attempted=1 AND sa.confirmation_observed=0)"
+        )
     for posting_id, company, title, url, err in conn.execute(
         "SELECT posting_id, company, title, url, COALESCE(last_error,'') FROM postings "
         "WHERE status='manual' AND COALESCE(last_attempt_at, first_seen) > ? "

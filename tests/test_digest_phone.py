@@ -90,6 +90,32 @@ class CollectClassificationTest(unittest.TestCase):
         self.assertNotIn("Lever hCaptcha requires manual completion", short)
         self.assertLessEqual(len(short), digest.SHORT_LIMIT)
 
+    def test_pre_ledger_db_without_submission_attempts_does_not_crash(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("""
+            CREATE TABLE postings (
+                posting_id TEXT PRIMARY KEY, company TEXT, title TEXT, url TEXT,
+                status TEXT, last_error TEXT, first_seen INTEGER, last_attempt_at INTEGER,
+                outcome TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE inbox_events (
+                category TEXT, company TEXT, role TEXT, deadline TEXT,
+                action_url TEXT, summary TEXT, ts INTEGER
+            )
+        """)
+        conn.execute(
+            "INSERT INTO postings VALUES (?,?,?,?,?,?,?,?,?)",
+            ("p1", "Legacy Co", "SWE", "https://legacy.example/job", "manual",
+             "Lever hCaptcha requires manual completion", 20, 20, ""),
+        )
+
+        data = digest.collect(conn, since=10)
+
+        self.assertEqual([row[0] for row in data["manual_finish"]], ["Legacy Co"])
+        self.assertEqual(data["verify"], [])
+
 
 class ComposeShortTest(unittest.TestCase):
     def test_empty_is_none(self):
