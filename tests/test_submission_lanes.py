@@ -3,7 +3,46 @@ import sys
 import types
 
 import drip
-from submission.lanes import classify_url, quarantine_unsupported
+from submission.lanes import classify_url, quarantine_unsupported, reconcile_nonautomatic_ready
+
+
+import pytest
+
+
+@pytest.fixture
+def conn() -> sqlite3.Connection:
+    connection = sqlite3.connect(":memory:")
+    connection.execute(
+        "CREATE TABLE postings (posting_id TEXT PRIMARY KEY, status TEXT, url TEXT, "
+        "last_attempt_at INTEGER, outcome TEXT, last_error TEXT)"
+    )
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+def test_manual_lane_is_preparable_but_not_automatic():
+    ats, lane = classify_url("https://jobs.smartrecruiters.com/acme/1")
+    assert ats == "smartrecruiters"
+    assert lane.preparable is True
+    assert lane.automatic is False
+
+
+def test_reconcile_nonautomatic_ready_moves_smartrecruiters_to_manual(conn):
+    conn.execute(
+        "INSERT INTO postings(posting_id,status,url) VALUES (?,?,?)",
+        ("sr-1", "ready", "https://jobs.smartrecruiters.com/acme/1"),
+    )
+    conn.commit()
+    assert reconcile_nonautomatic_ready(conn) == 1
+    assert conn.execute(
+        "SELECT status,outcome,last_error FROM postings WHERE posting_id='sr-1'"
+    ).fetchone() == (
+        "manual",
+        "manual",
+        "prepared for manual completion: smartrecruiters",
+    )
 
 
 def test_lane_mapping_is_explicit() -> None:

@@ -535,6 +535,67 @@ class BacklogPriorityTests(unittest.TestCase):
         )
         conn.close()
 
+    def test_tailoring_batch_drains_mixed_ready_and_manual_lanes_once(self) -> None:
+        from submission.lanes import preparation_destination
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE postings (posting_id TEXT, status TEXT, url TEXT, "
+            "locations TEXT, first_seen INTEGER, last_attempt_at INTEGER, "
+            "outcome TEXT, last_error TEXT)"
+        )
+        rows = [
+            (
+                f"gh{i}", "queued", f"https://boards.greenhouse.io/acme/jobs/{i}",
+                "Remote", i, None, None, None,
+            )
+            for i in range(5)
+        ] + [
+            (
+                f"sr{i}", "queued", f"https://jobs.smartrecruiters.com/acme/{i}",
+                "Remote", i + 5, None, None, None,
+            )
+            for i in range(4)
+        ]
+        conn.executemany("INSERT INTO postings VALUES (?,?,?,?,?,?,?,?)", rows)
+        processed = []
+
+        def mark_destination(process_conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+            processed.append(row["posting_id"])
+            destination, reason = preparation_destination(process_conn, row["url"])
+            if not drip.transition_claim(
+                process_conn, row["posting_id"], "tailoring", destination, commit=False
+            ):
+                process_conn.rollback()
+                return False
+            if destination == "manual":
+                process_conn.execute(
+                    "UPDATE postings SET outcome='manual', last_error=? WHERE posting_id=?",
+                    (reason, row["posting_id"]),
+                )
+            process_conn.commit()
+            return True
+
+        self.assertEqual(9, drip.drain_tailoring_queue(conn, mark_destination))
+        self.assertEqual(9, len(processed))
+        self.assertEqual(9, len(set(processed)))
+        self.assertEqual(
+            5,
+            conn.execute(
+                "SELECT COUNT(*) FROM postings WHERE posting_id LIKE 'gh%' AND status='ready'"
+            ).fetchone()[0],
+        )
+        self.assertEqual(
+            4,
+            conn.execute(
+                "SELECT COUNT(*) FROM postings WHERE posting_id LIKE 'sr%' "
+                "AND status='manual' AND outcome='manual' "
+                "AND last_error='prepared for manual completion: smartrecruiters'"
+            ).fetchone()[0],
+        )
+        conn.close()
+
     def test_tailoring_batch_has_no_artificial_daily_or_per_run_cap(self) -> None:
         self.assertFalse(hasattr(drip, "DAILY_CAP"))
         self.assertFalse(hasattr(drip, "TAILOR_PER_RUN"))

@@ -14,7 +14,13 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from submission.database import connect_tracker
-from submission.lanes import ashby_enabled, classify_url, quarantine_unsupported
+from submission.lanes import (
+    ashby_enabled,
+    classify_url,
+    preparation_destination,
+    quarantine_unsupported,
+    reconcile_nonautomatic_ready,
+)
 
 ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT), str(ROOT / "apply"), str(ROOT / "tailor"), str(ROOT / "notify")]
@@ -268,6 +274,9 @@ def run():
     quarantined = quarantine_unsupported(conn)
     if quarantined:
         print(f"[drip] quarantined unsupported ATS rows: {quarantined}")
+    reconciled = reconcile_nonautomatic_ready(conn)
+    if reconciled:
+        print(f"[drip] reconciled nonautomatic ready ATS rows: {reconciled}")
     def tailor_one(tailor_conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
         try:
             import batch
@@ -294,10 +303,20 @@ def run():
             tailor_conn.execute("INSERT OR REPLACE INTO emails VALUES (?,?,?,?,?,?,0)",
                                 (row["posting_id"], None, None,
                                  str(pdf), str(pdf.with_suffix('.tex')), int(time.time())))
-            if transition_claim(tailor_conn, row["posting_id"], "tailoring", "ready",
+            destination, reason = preparation_destination(tailor_conn, row["url"])
+            if transition_claim(tailor_conn, row["posting_id"], "tailoring", destination,
                                 commit=False):
+                if destination == "manual":
+                    tailor_conn.execute(
+                        "UPDATE postings SET outcome='manual', last_error=? "
+                        "WHERE posting_id=? AND status='manual'",
+                        (reason, row["posting_id"]),
+                    )
                 tailor_conn.commit()
-                print(f"[drip] tailored and queued: {row['company']} — {row['title']}")
+                if destination == "manual":
+                    print(f"[drip] tailored for manual completion: {row['company']} - {row['title']}")
+                else:
+                    print(f"[drip] tailored and queued: {row['company']} - {row['title']}")
                 return True
             tailor_conn.rollback()
             print(f"[drip] claim lost; discarded late result: {row['company']}")
