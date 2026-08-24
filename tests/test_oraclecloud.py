@@ -264,6 +264,11 @@ class _FakePage:
                 "Confirm Your Identity The verification code was sent to this email address: "
                 "Send New Code VERIFY"
             )
+        if self.variant == "email_gate_identity_rate_limited" and self.verify_clicks:
+            return (
+                "Too Many Attempts. Try Again Later. "
+                "You reached the maximum number of attempts. Try again in 30 minutes. CONTINUE"
+            )
         return "Example application form"
 
     def locator(self, selector):
@@ -298,6 +303,7 @@ class _FakePage:
                 "email_gate_identity_ambiguous_verify",
                 "email_gate_identity_unchanged",
                 "email_gate_identity_delayed_resume",
+                "email_gate_identity_rate_limited",
                 "email_gate_identity_pin_fill_raises",
                 "email_gate_identity_verify_click_raises",
             } and not self.next_clicks
@@ -324,6 +330,7 @@ class _FakePage:
                 "email_gate_identity_ambiguous_verify",
                 "email_gate_identity_unchanged",
                 "email_gate_identity_delayed_resume",
+                "email_gate_identity_rate_limited",
                 "email_gate_identity_pin_fill_raises",
                 "email_gate_identity_verify_click_raises",
             } and not self.next_clicks
@@ -807,6 +814,22 @@ def test_oracle_identity_code_gate_rejects_unchanged_gate_after_verify(fake_orac
 
     assert result["outcome"] == "manual"
     assert "Oracle identity verification" in result["reason"]
+    assert page.verify_clicks == 1
+    assert page.uploaded_to is None
+    assert page.submit_clicks == 0
+
+
+def test_oracle_identity_code_gate_classifies_rate_limit_as_retryable_manual(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("email_gate_identity_rate_limited")
+    monkeypatch.setattr(oraclecloud, "_fetch_oracle_identity_code", lambda requested_at_ms, timeout_s=60: "123456")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-rate-limit", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert result["retryable"] is True
+    assert result["click_attempted"] is False
+    assert result["submission_uncertain"] is False
+    assert result["reason"] == "Oracle identity verification rate limited; retry after 30 minutes"
     assert page.verify_clicks == 1
     assert page.uploaded_to is None
     assert page.submit_clicks == 0

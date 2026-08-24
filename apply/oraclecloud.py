@@ -354,6 +354,15 @@ def _handle_oracle_identity_gate(page, requested_at_ms: int) -> dict | None:
         except Exception:
             break
         body = _body_text(page)
+        if (
+            "Too Many Attempts. Try Again Later." in body
+            and "You reached the maximum number of attempts. Try again in 30 minutes." in body
+        ):
+            return _manual(
+                "Oracle identity verification rate limited; retry after 30 minutes",
+                ["Oracle identity verification"],
+                retryable=True,
+            )
         if _has_account_gate(body):
             return _manual("Oracle account required for application", ["Oracle account required"])
         if _has_captcha_gate(page, body):
