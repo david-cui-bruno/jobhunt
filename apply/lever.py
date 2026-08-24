@@ -21,6 +21,28 @@ PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
 SHOTS = ROOT / "out" / "screenshots"
 
 
+def _lever_required_empty_from_controls(controls: list[dict]) -> list[str]:
+    """Required-control backstop for Lever widgets QA can type into but not select."""
+    bad = []
+    for control in controls:
+        if not control.get("required"):
+            continue
+        label = str(control.get("label") or control.get("name") or control.get("id") or "unknown")
+        text = " ".join(str(control.get(k) or "") for k in ("label", "name", "id", "cls")).lower()
+        value = str(control.get("value") or "").strip()
+        chosen = str(control.get("chosen") or "").strip()
+        is_location_typeahead = "location" in text and (
+            control.get("name") == "location" or "typeahead" in text or "autocomplete" in text
+        )
+        if is_location_typeahead:
+            if not chosen:
+                bad.append(label)
+            continue
+        if not value and not chosen:
+            bad.append(label)
+    return list(dict.fromkeys(bad))
+
+
 def _shot(page, slug, stage):
     SHOTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(SHOTS / f"{slug}_{stage}.png"), full_page=True)
@@ -126,6 +148,11 @@ def apply_lever(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> 
                 return [...new Set(bad)];
             }
         """)
+        try:
+            required_empty += _lever_required_empty_from_controls(page.evaluate(qa.EXTRACT_JS))
+            required_empty = list(dict.fromkeys(required_empty))
+        except Exception:
+            pass
         result["unanswered"] = required_empty
         _shot(page, slug, "filled")
 
