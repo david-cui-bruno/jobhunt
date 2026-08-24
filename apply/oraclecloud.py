@@ -336,7 +336,7 @@ def _handle_oracle_identity_gate(page, requested_at_ms: int) -> dict | None:
     pins = _find_identity_pin_inputs(page)
     if pins is None:
         return _manual("Oracle identity verification controls were missing or ambiguous")
-    verify = _single_visible_exact_button(page, "VERIFY")
+    verify = _single_visible_exact_button(page, "Verify")
     if verify is None:
         return _manual("Oracle identity verification Verify control was missing or ambiguous")
     try:

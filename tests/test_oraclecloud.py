@@ -413,7 +413,7 @@ class _FakePage:
                 count = 1
             self.next_buttons = [_FakeLocator(self, "next", visible=True, on_click=self._click_next) for _ in range(count)]
             return _FakeLocator(self, "next_buttons", visible=count > 0, count=count)
-        if role == "button" and str(name).upper() == "VERIFY" and exact is True:
+        if role == "button" and name == "Verify" and exact is True:
             if not self.variant.startswith("email_gate_identity") or not self.next_clicks or self.verify_clicks:
                 return _FakeLocator(self, "verify_buttons", visible=False, count=0)
             count = 2 if self.variant == "email_gate_identity_ambiguous_verify" else 1
@@ -583,6 +583,7 @@ def test_oracle_identity_code_gate_fills_six_digits_and_advances_to_resume(fake_
     assert page.filled["#pin-code-1"] == "1"
     assert page.filled["#pin-code-6"] == "6"
     assert page.verify_clicks == 1
+    assert {"role": "button", "name": "Verify", "exact": True} in page.role_queries
     assert "click:Send New Code" not in page.events
     assert page.uploaded_to == "resume"
     assert result["reason"] == "dry run - did not submit"
