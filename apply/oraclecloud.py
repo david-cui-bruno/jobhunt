@@ -214,7 +214,7 @@ def _find_exact_visible_submit(page):
 
 def _single_visible_exact_button(page, text: str):
     try:
-        loc = page.locator(f"button:text-is('{text}')")
+        loc = page.get_by_role("button", name=text, exact=True)
         visible = []
         for index in range(loc.count()):
             cand = loc.nth(index)

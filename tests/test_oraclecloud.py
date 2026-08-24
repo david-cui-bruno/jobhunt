@@ -189,6 +189,7 @@ class _FakePage:
         self.filled = {}
         self.checked = {}
         self.next_clicks = 0
+        self.role_queries = []
         self.uploaded_to = None
         self.uploaded_file = None
         self.qa_evaluations = 0
@@ -232,13 +233,27 @@ class _FakePage:
         if selector == "input[type=file]":
             return _FakeLocator(self, "files", count=0 if self.variant.startswith("email_gate") and not self.next_clicks else len(self.file_inputs))
         if selector == "input[type=email][name='primary-email']":
-            present = self.variant in {"email_gate", "email_gate_missing_next", "email_gate_ambiguous_next", "email_gate_missing_legal"} and not self.next_clicks
+            present = self.variant in {
+                "email_gate",
+                "email_gate_accessible_next",
+                "email_gate_duplicate_accessible_next",
+                "email_gate_missing_next",
+                "email_gate_ambiguous_next",
+                "email_gate_missing_legal",
+            } and not self.next_clicks
             return _FakeLocator(self, "primary-email", visible=present, count=1 if present else 0)
         if selector == "#legal-disclaimer-checkbox":
-            present = self.variant in {"email_gate", "email_gate_missing_next", "email_gate_ambiguous_next", "email_gate_missing_email"} and not self.next_clicks
+            present = self.variant in {
+                "email_gate",
+                "email_gate_accessible_next",
+                "email_gate_duplicate_accessible_next",
+                "email_gate_missing_next",
+                "email_gate_ambiguous_next",
+                "email_gate_missing_email",
+            } and not self.next_clicks
             return _FakeLocator(self, "legal-disclaimer-checkbox", visible=False, count=1 if present else 0)
         if selector == "button:text-is('Next')":
-            if not self.variant.startswith("email_gate") or self.next_clicks:
+            if not self.variant.startswith("email_gate") or self.next_clicks or self.variant in {"email_gate_accessible_next", "email_gate_duplicate_accessible_next"}:
                 return _FakeLocator(self, "next_buttons", visible=False, count=0)
             count = 0 if self.variant == "email_gate_missing_next" else (2 if self.variant == "email_gate_ambiguous_next" else 1)
             self.next_buttons = [_FakeLocator(self, "next", visible=True, on_click=self._click_next) for _ in range(count)]
@@ -260,6 +275,19 @@ class _FakePage:
             present = self.variant == "captcha"
             return _FakeLocator(self, "captcha", visible=present, count=1 if present else 0)
         return _FakeLocator(self, selector, count=0, visible=False)
+
+    def get_by_role(self, role, name=None, exact=False):
+        self.role_queries.append({"role": role, "name": name, "exact": exact})
+        if role == "button" and name == "Next" and exact is True and self.variant.startswith("email_gate") and not self.next_clicks:
+            if self.variant == "email_gate_missing_next":
+                count = 0
+            elif self.variant in {"email_gate_ambiguous_next", "email_gate_duplicate_accessible_next"}:
+                count = 2
+            else:
+                count = 1
+            self.next_buttons = [_FakeLocator(self, "next", visible=True, on_click=self._click_next) for _ in range(count)]
+            return _FakeLocator(self, "next_buttons", visible=count > 0, count=count)
+        return _FakeLocator(self, str(name or role), count=0, visible=False)
 
     def get_by_label(self, label, exact=False):
         normalized = label.lower()
@@ -397,6 +425,33 @@ def test_oracle_anonymous_email_gate_advances_to_resume_without_submit(fake_orac
     assert result["ok"] is True
     assert result["submitted"] is False
     assert result["reason"] == "dry run - did not submit"
+    assert page.submit_clicks == 0
+
+
+def test_oracle_anonymous_email_gate_uses_exact_accessible_next_button(fake_oracle, pdf):
+    page = fake_oracle("email_gate_accessible_next")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-accessible-next", dry_run=True)
+
+    assert page.role_queries == [{"role": "button", "name": "Next", "exact": True}]
+    assert page.next_clicks == 1
+    assert page.uploaded_to == "resume"
+    assert result["ok"] is True
+    assert result["submitted"] is False
+    assert result["reason"] == "dry run - did not submit"
+    assert page.submit_clicks == 0
+
+
+def test_oracle_anonymous_email_gate_rejects_multiple_visible_exact_accessible_next_buttons(fake_oracle, pdf):
+    page = fake_oracle("email_gate_duplicate_accessible_next")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-duplicate-accessible-next", dry_run=True)
+
+    assert page.role_queries == [{"role": "button", "name": "Next", "exact": True}]
+    assert result["outcome"] == "manual"
+    assert "anonymous email gate" in result["reason"]
+    assert page.next_clicks == 0
+    assert page.uploaded_to is None
     assert page.submit_clicks == 0
 
 
