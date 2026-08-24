@@ -54,6 +54,12 @@ BADGE_COLORS = {
     "🔵 Submitted": {"bg": (0.84, 0.90, 0.97), "fg": (0.08, 0.32, 0.60)},
 }
 
+RESPONSE_EVENTS = {"offer", "interview_invite", "oa_invite", "recruiter_reply", "rejection"}
+
+
+def _is_response_event(category: str) -> bool:
+    return category in RESPONSE_EVENTS
+
 
 def _api(method: str, path: str, body: dict | None = None) -> dict:
     req = urllib.request.Request(
@@ -151,7 +157,7 @@ def _collect() -> tuple[list[list], list[list], dict]:
             stats["offer"] += 1
         elif badge == BADGE["rejected"]:
             stats["rejected"] += 1
-        if ev:
+        if any(_is_response_event(category) for category, _ in ev):
             stats["responded"] += 1
         apps.append([
             r["company"] or "?", r["title"] or "?",
