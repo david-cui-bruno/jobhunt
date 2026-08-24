@@ -129,12 +129,15 @@ class _FakeLocator:
         self.attrs = attrs or {}
         self.on_click = on_click
         self.files = []
+        self.checked = False
 
     @property
     def first(self):
         return self
 
     def nth(self, index):
+        if self.name == "next_buttons":
+            return self.page.next_buttons[index]
         return self.page.file_inputs[index]
 
     def count(self):
@@ -143,10 +146,14 @@ class _FakeLocator:
     def is_visible(self):
         return self._visible
 
-    def click(self, timeout=None):
+    def click(self, timeout=None, force=False):
         self.page.events.append(f"click:{self.name}")
         if self.on_click:
             self.on_click()
+
+    def check(self, timeout=None, force=False):
+        self.checked = True
+        self.page.checked[self.name] = {"force": force, "timeout": timeout}
 
     def scroll_into_view_if_needed(self):
         self.page.scrolled.append(self.name)
@@ -180,6 +187,8 @@ class _FakePage:
         self.apply_clicks = 0
         self.submit_clicks = 0
         self.filled = {}
+        self.checked = {}
+        self.next_clicks = 0
         self.uploaded_to = None
         self.uploaded_file = None
         self.qa_evaluations = 0
@@ -215,11 +224,25 @@ class _FakePage:
             return "Please verify you are human. reCAPTCHA"
         if self.submit_clicks and self.variant == "confirmed":
             return self.confirmation_body
+        if self.variant.startswith("email_gate") and not self.next_clicks:
+            return "You don't need to have an account Email Address I agree with the terms and conditions Next"
         return "Example application form"
 
     def locator(self, selector):
         if selector == "input[type=file]":
-            return _FakeLocator(self, "files", count=len(self.file_inputs))
+            return _FakeLocator(self, "files", count=0 if self.variant.startswith("email_gate") and not self.next_clicks else len(self.file_inputs))
+        if selector == "input[type=email][name='primary-email']":
+            present = self.variant in {"email_gate", "email_gate_missing_next", "email_gate_ambiguous_next", "email_gate_missing_legal"} and not self.next_clicks
+            return _FakeLocator(self, "primary-email", visible=present, count=1 if present else 0)
+        if selector == "#legal-disclaimer-checkbox":
+            present = self.variant in {"email_gate", "email_gate_missing_next", "email_gate_ambiguous_next", "email_gate_missing_email"} and not self.next_clicks
+            return _FakeLocator(self, "legal-disclaimer-checkbox", visible=False, count=1 if present else 0)
+        if selector == "button:text-is('Next')":
+            if not self.variant.startswith("email_gate") or self.next_clicks:
+                return _FakeLocator(self, "next_buttons", visible=False, count=0)
+            count = 0 if self.variant == "email_gate_missing_next" else (2 if self.variant == "email_gate_ambiguous_next" else 1)
+            self.next_buttons = [_FakeLocator(self, "next", visible=True, on_click=self._click_next) for _ in range(count)]
+            return _FakeLocator(self, "next_buttons", visible=count > 0, count=count)
         if selector in oraclecloud.APPLY_SELECTORS:
             delayed_visible = self.variant == "delayed_apply" and len(self.waits) > 1 and selector == "button:has-text('Apply')"
             visible = (
@@ -267,6 +290,12 @@ class _FakePage:
 
     def _click_apply(self):
         self.apply_clicks += 1
+        if self.variant.startswith("email_gate"):
+            self.url = f"{ORACLE_JOB_URL}/apply/email"
+
+    def _click_next(self):
+        self.next_clicks += 1
+        self.url = f"{ORACLE_JOB_URL}/apply/resume"
 
     def _click_submit(self):
         self.submit_clicks += 1
@@ -353,6 +382,39 @@ def test_oracle_dry_run_reaches_submit_boundary_without_click(fake_oracle, pdf):
     assert result["unanswered"] == []
     assert result["artifact_refs"] == {"filled_form_screenshot": str(oraclecloud.SHOTS / "oracle-dry-filled.png")}
     assert page.submit_clicks == 0
+
+
+def test_oracle_anonymous_email_gate_advances_to_resume_without_submit(fake_oracle, pdf):
+    page = fake_oracle("email_gate")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-email-gate", dry_run=True)
+
+    assert page.apply_clicks == 1
+    assert page.filled["primary-email"] == oraclecloud.PROFILE["email"]
+    assert page.checked["legal-disclaimer-checkbox"]["force"] is True
+    assert page.next_clicks == 1
+    assert page.uploaded_to == "resume"
+    assert result["ok"] is True
+    assert result["submitted"] is False
+    assert result["reason"] == "dry run - did not submit"
+    assert page.submit_clicks == 0
+
+
+def test_oracle_email_gate_missing_or_ambiguous_controls_fail_closed_without_next_or_submit(fake_oracle, pdf):
+    for variant in (
+        "email_gate_missing_email",
+        "email_gate_missing_legal",
+        "email_gate_missing_next",
+        "email_gate_ambiguous_next",
+    ):
+        page = fake_oracle(variant)
+
+        result = apply_oraclecloud(ORACLE_JOB_URL, pdf, f"oracle-{variant}", dry_run=True)
+
+        assert result["outcome"] == "manual"
+        assert "anonymous email gate" in result["reason"]
+        assert page.next_clicks == 0
+        assert page.submit_clicks == 0
 
 
 def test_oracle_dry_run_waits_for_delayed_visible_apply(fake_oracle, pdf):

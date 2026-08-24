@@ -212,6 +212,59 @@ def _find_exact_visible_submit(page):
     return None
 
 
+def _single_visible_exact_button(page, text: str):
+    try:
+        loc = page.locator(f"button:text-is('{text}')")
+        visible = []
+        for index in range(loc.count()):
+            cand = loc.nth(index)
+            if cand.is_visible():
+                visible.append(cand)
+        if len(visible) == 1:
+            return visible[0]
+    except Exception:
+        return None
+    return None
+
+
+def _handle_anonymous_email_gate(page) -> dict | None:
+    body = _body_text(page)
+    page_url = getattr(page, "url", "")
+    if not page_url.endswith("/apply/email") and not page_url.endswith("/apply/email/"):
+        return None
+    if "You don't need to have an account" not in body:
+        return None
+    if "Email Address" not in body or "I agree with the terms and conditions" not in body:
+        return _manual("unsupported Oracle anonymous email gate: incomplete gate shape")
+
+    email = page.locator("input[type=email][name='primary-email']")
+    if email.count() != 1 or not email.is_visible():
+        return _manual("unsupported Oracle anonymous email gate: incomplete gate shape")
+    legal = page.locator("#legal-disclaimer-checkbox")
+    if legal.count() != 1:
+        return _manual("unsupported Oracle anonymous email gate: incomplete gate shape")
+    next_button = _single_visible_exact_button(page, "Next")
+    if next_button is None:
+        return _manual("unsupported Oracle anonymous email gate: incomplete or ambiguous Next control")
+
+    email.fill(str(PROFILE.get("email", "")))
+    legal.check(force=True, timeout=5000)
+    next_button.click(timeout=5000)
+    for _ in range(10):
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            break
+        body = _body_text(page)
+        if _has_account_gate(body):
+            return _manual("Oracle account required for application", ["Oracle account required"])
+        if _has_captcha_gate(page, body):
+            return _manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"])
+        if _find_resume_input(page) is not None:
+            return None
+    return None
+
+
 def _uncertain_result(result: dict, reason: str) -> dict:
     result.update(ok=False, submitted=False, reason=reason)
     mark_unconfirmed(result)
@@ -338,6 +391,10 @@ def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = Tru
                 return _manual("Oracle account required for application", ["Oracle account required"])
             if _has_captcha_gate(page, body):
                 return _manual("Oracle CAPTCHA requires manual completion", ["Oracle CAPTCHA"])
+
+            gate_result = _handle_anonymous_email_gate(page)
+            if gate_result is not None:
+                return gate_result
 
             resume_input = _find_resume_input(page)
             if resume_input is None:
