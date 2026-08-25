@@ -2253,7 +2253,11 @@ def answer_requires_manual(control: dict, answer: object, profile_text: str | No
                     )):
                 return True
     if (company_context
-            and re.search(r"\brelative\b.{0,40}\bemployee\b", question)):
+            and re.search(
+                r"\b(member of your household|household member|family member|relative)\b.{0,80}\b(employ(?:ed|ee)?|work(?:s|ed)?)\b|"
+                r"\b(employ(?:ed|ee)?|work(?:s|ed)?)\b.{0,80}\b(member of your household|household member|family member|relative)\b",
+                question,
+            )):
         for company in (approved.get("company_facts") or {}):
             if (_company_matches(company, question, "")
                     and not _company_matches(company, company_context, company_context)):

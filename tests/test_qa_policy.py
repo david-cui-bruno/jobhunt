@@ -1960,10 +1960,13 @@ class QaManualPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            {"referral-no", "household"},
+            {"referral-no"},
             {answer["id_or_name"] for answer in allowed},
         )
-        self.assertEqual(["referral-wrong"], [answer["id_or_name"] for answer in blocked])
+        self.assertEqual(
+            {"referral-wrong", "household"},
+            {answer["id_or_name"] for answer in blocked},
+        )
 
     def test_filter_manual_answers_accepts_company_context_keyword(self):
         controls = [
@@ -1985,7 +1988,9 @@ class QaManualPolicyTest(unittest.TestCase):
 
     def test_company_scoped_household_fact_blocks_mismatched_company_context(self):
         controls = [
-            {"id": "availity", "label": "Are you a relative of an Availity employee? *", "options": ["Yes", "No"]},
+            {"id": "relative", "label": "Are you a relative of an Availity employee? *", "options": ["Yes", "No"]},
+            {"id": "household", "label": "Is any member of your household employed by Availity?", "options": ["Yes", "No"]},
+            {"id": "family", "label": "Do you have a family member who works at Availity?", "options": ["Yes", "No"]},
         ]
         answers = qa.explicit_approved_answers(
             controls,
@@ -2001,7 +2006,35 @@ class QaManualPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual([], allowed)
-        self.assertEqual(["availity"], [answer["id_or_name"] for answer in blocked])
+        self.assertEqual(
+            ["relative", "household", "family"],
+            [answer["id_or_name"] for answer in blocked],
+        )
+
+    def test_company_scoped_household_fact_allows_exact_company_context(self):
+        controls = [
+            {"id": "relative", "label": "Are you a relative of an Availity employee? *", "options": ["Yes", "No"]},
+            {"id": "household", "label": "Is any member of your household employed by Availity?", "options": ["Yes", "No"]},
+            {"id": "family", "label": "Do you have a family member who works at Availity?", "options": ["Yes", "No"]},
+        ]
+        answers = qa.explicit_approved_answers(
+            controls,
+            company_context="Availity",
+            approved_answers=APPROVED_AUG_25,
+        )
+
+        allowed, blocked = qa.filter_manual_answers(
+            controls,
+            answers,
+            company_context="Availity",
+            approved_answers=APPROVED_AUG_25,
+        )
+
+        self.assertEqual(
+            ["relative", "household", "family"],
+            [answer["id_or_name"] for answer in allowed],
+        )
+        self.assertEqual([], blocked)
 
     def test_graduation_month_year_and_approved_estimated_day_must_match(self):
         controls = [
