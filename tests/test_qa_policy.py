@@ -461,7 +461,7 @@ class QaManualPolicyTest(unittest.TestCase):
             [["nested", "list"], "stray string", None,
              {"id_or_name": "q1", "answer": "David"}],
         )
-        self.assertEqual([{"id_or_name": "q1", "answer": "David"}], answers)
+        self.assertEqual([{"id_or_name": "q1", "answer": "David", "label": "Preferred First Name"}], answers)
         self.assertEqual([], blocked)
 
     def test_hours_per_week_quantity_only_approves_forty(self):
@@ -2678,7 +2678,7 @@ class QaManualPolicyTest(unittest.TestCase):
             answers = qa.get_answers(controls, context={"slug": "acme", "url": "https://example.test/job"})
             rows = [(json.loads(line)) for line in (Path(tmp) / "out" / "qa_answers.log").read_text().splitlines()]
 
-        self.assertEqual([model_answers[0]], answers)
+        self.assertEqual([dict(model_answers[0], label="Why us?")], answers)
         self.assertEqual(["allowed", "blocked_manual"], [r["decision"] for r in rows])
         self.assertEqual(["Why us?", "Desired compensation"], [r["question"] for r in rows])
         self.assertEqual(["acme", "acme"], [r["slug"] for r in rows])
@@ -2690,10 +2690,26 @@ if __name__ == "__main__":
 
 
 def test_extract_js_groups_nameless_redwood_radios_by_human_ancestor_label():
-    src = qa.EXTRACT_JS
-    assert 'data-qa-group-key' in src
-    assert 'ownOptionText' in src
-    assert 'label === option' in src
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content("""
+                <div role="radiogroup" aria-labelledby="redwood-question">
+                  <div id="redwood-question">Are you authorized to work in the United States?</div>
+                  <div class="oj-flex"><label><input type="radio"> Yes</label></div>
+                  <div class="oj-flex"><label><input type="radio"> No</label></div>
+                </div>
+            """)
+            controls = page.evaluate(qa.EXTRACT_JS)
+        finally:
+            browser.close()
+
+    assert len(controls) == 1
+    assert controls[0]["label"] == "Are you authorized to work in the United States?"
+    assert controls[0]["options"] == ["Yes", "No"]
 
 
 def test_fill_answers_standalone_radio_no_without_click_is_failed_not_filled():

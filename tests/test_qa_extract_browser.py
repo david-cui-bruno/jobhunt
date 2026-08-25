@@ -1,0 +1,144 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apply"))
+import qa  # noqa: E402
+import oraclecloud  # noqa: E402
+
+
+def _extract_from_html(html):
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            return page.evaluate(qa.EXTRACT_JS)
+        finally:
+            browser.close()
+
+
+def _required_empty_from_html(html):
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            return page.evaluate(oraclecloud.REQUIRED_EMPTY_JS)
+        finally:
+            browser.close()
+
+
+def test_extract_js_is_browser_parseable():
+    assert _extract_from_html("<form></form>") == []
+
+
+def test_nameless_yes_no_radio_pair_uses_outer_question_label_once():
+    controls = _extract_from_html(
+        """
+        <div role="radiogroup" aria-labelledby="q-outside-us">
+          <div id="q-outside-us">Are you authorized to work in the United States?</div>
+          <div class="oj-flex"><label><input type="radio" required> Yes</label></div>
+          <div class="oj-flex"><label><input type="radio" required> No</label></div>
+        </div>
+        """
+    )
+
+    assert controls == [{
+        "id": "", "name": "", "tag": "input", "type": "group-radio", "cls": "",
+        "chosen": "", "label": "Are you authorized to work in the United States?",
+        "required": True, "value": "", "options": ["Yes", "No"],
+    }]
+
+
+def test_inner_oj_flex_option_wrappers_group_by_outer_radiogroup_not_each_option():
+    controls = _extract_from_html(
+        """
+        <section role="radiogroup" aria-labelledby="work-auth-question">
+          <h2 id="work-auth-question">Will you now or in the future require sponsorship?</h2>
+          <div class="oj-flex"><label><input type="radio"> Yes</label></div>
+          <div class="oj-flex"><label><input type="radio"> No</label></div>
+        </section>
+        """
+    )
+
+    assert len(controls) == 1
+    assert controls[0]["label"] == "Will you now or in the future require sponsorship?"
+    assert controls[0]["options"] == ["Yes", "No"]
+
+
+def test_checked_nameless_required_radio_group_is_not_required_empty_but_unchecked_is_human_label():
+    checked = _required_empty_from_html(
+        """
+        <fieldset><legend>Do you agree to the privacy policy?</legend>
+          <label><input type="radio" required checked> Yes</label>
+          <label><input type="radio" required> No</label>
+        </fieldset>
+        """
+    )
+    assert checked == []
+
+    unchecked = _required_empty_from_html(
+        """
+        <fieldset><legend id="agree-question">Do you agree to the privacy policy?</legend>
+          <label><input id="oracle_raw_1" type="radio" required> Yes</label>
+          <label><input id="oracle_raw_2" type="radio" required> No</label>
+        </fieldset>
+        """
+    )
+    assert unchecked == ["Do you agree to the privacy policy?"]
+    assert "oracle_raw" not in unchecked[0]
+
+
+def test_malformed_group_label_equal_to_option_fails_closed_without_invalid_js():
+    controls = _extract_from_html(
+        """
+        <div role="radiogroup">
+          <label><input type="radio"> Yes</label>
+          <label><input type="radio"> No</label>
+        </div>
+        """
+    )
+
+    assert controls == []
+
+
+def test_text_input_role_combobox_is_combobox_without_transient_value():
+    controls = _extract_from_html(
+        """
+        <label for="city">City</label>
+        <input id="city" role="combobox" value="Transient typed text">
+        """
+    )
+
+    assert controls[0]["type"] == "combobox"
+    assert controls[0]["label"] == "City"
+    assert controls[0]["value"] == ""
+
+
+def test_answer_filter_attaches_source_label_for_label_fallback_without_schema_change():
+    controls = [{"id": "current-123", "name": "", "label": "Personal website", "value": ""}]
+    answers = [{"id_or_name": "old-456", "answer": "https://example.com"}]
+
+    allowed, blocked = qa.filter_manual_answers(controls, answers)
+
+    assert blocked == []
+    assert allowed == [{"id_or_name": "old-456", "answer": "https://example.com", "label": "Personal website"}]
+
+
+def test_exact_outside_work_question_is_hard_blocked_but_broader_work_questions_are_not():
+    blocked_control = {"id": "outside", "name": "", "label": "Outside work", "value": "", "options": ["Yes", "No"]}
+    allowed_control = {"id": "auth", "name": "", "label": "Are you authorized to work in the United States?", "value": "", "options": ["Yes", "No"]}
+
+    allowed, blocked = qa.filter_manual_answers(
+        [blocked_control, allowed_control],
+        [{"id_or_name": "outside", "answer": "No"}, {"id_or_name": "auth", "answer": "Yes"}],
+        profile_text="",
+        approved_answers={},
+    )
+
+    assert [a["id_or_name"] for a in blocked] == ["outside"]
+    assert [a["id_or_name"] for a in allowed] == ["auth"]

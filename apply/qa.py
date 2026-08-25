@@ -243,11 +243,13 @@ EXTRACT_JS = """
   };
   const groupInfo = (el) => {
     // checkbox/radio group: same name; group question label = wrapper's first label-ish text
-    const groupWrap = el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question], div[class*=oj-flex]');
-    const groupKey = el.name || el.getAttribute('data-qa-group-key') || (groupWrap?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 120);
-    if (!el.name && groupKey) {
-      [...groupWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`)].forEach(b => b.setAttribute('data-qa-group-key', groupKey));
-    }
+    const stableWrap = el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question]');
+    const fallbackWrap = el.closest('div[class*=oj-flex]');
+    const groupWrap = stableWrap || (
+      fallbackWrap && fallbackWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`).length > 1
+        ? fallbackWrap
+        : null
+    );
     const boxes = el.name ? [...document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)] : [...(groupWrap || el.parentElement).querySelectorAll(`input[type="${CSS.escape(el.type)}"]`)];
     // ARIA standard (Workable et al.): the group or its radiogroup wrapper
     // carries aria-labelledby pointing at the question node
@@ -269,7 +271,7 @@ EXTRACT_JS = """
       const card = el.closest('.application-question, li[class*=question]');
       q = card?.querySelector('.application-label, .text')?.innerText || '';
     }
-    const wrap = el.closest('fieldset, [role=group], div[class*=question], div[class*=checkbox]')
+    const wrap = el.closest('[role=radiogroup], fieldset, [role=group], div[class*=question], div[class*=checkbox]')
       || boxes[0]?.parentElement?.parentElement;
     if (!q) q = wrap?.querySelector('legend, .label, label:not([for])')?.innerText || '';
     if (!q) {
@@ -290,7 +292,13 @@ EXTRACT_JS = """
     const isYesNo = el.type === 'checkbox' && el.closest('[class*=yesno]');
     if (el.offsetParent === null && !isYesNo) return;
     const role = el.getAttribute('role');
-    const groupWrap = (el.type === 'checkbox' || el.type === 'radio') ? el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question], div[class*=oj-flex]') : null;
+    const stableGroupWrap = (el.type === 'checkbox' || el.type === 'radio') ? el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question]') : null;
+    const fallbackGroupWrap = (el.type === 'checkbox' || el.type === 'radio') ? el.closest('div[class*=oj-flex]') : null;
+    const groupWrap = stableGroupWrap || (
+      fallbackGroupWrap && fallbackGroupWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`).length > 1
+        ? fallbackGroupWrap
+        : null
+    );
     const namelessGroup = (el.type === 'checkbox' || el.type === 'radio') && !el.name && groupWrap && groupWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`).length > 1;
     const isGroup = (el.type === 'checkbox' || el.type === 'radio') && (el.name || namelessGroup);
     const key = isGroup ? (el.name || groupWrap.innerText.replace(/\s+/g, ' ').trim().slice(0, 120)) : (el.id || el.name || labelFor(el));
@@ -307,7 +315,7 @@ EXTRACT_JS = """
       const g = groupInfo(el);
       label = g.q || label;
       options = g.opts.slice(0, 60);
-      if (options.some(option => option && option.toLowerCase() === String(label || '').toLowerCase())) continue; // label === option fails closed
+      if (options.some(option => option && option.toLowerCase() === String(label || '').toLowerCase())) return; // label === option fails closed
       // Ashby yes/no widget: hidden checkbox with Yes/No buttons
       if (el.closest('[class*=yesno]')) options = ['Yes', 'No'];
     }
@@ -392,6 +400,7 @@ HARD_BLOCKED_PATTERNS = [
     r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|prior application|previous application)\b",
     r"\b(member of your household|household member|family member|relative)\b.*\b(employed|worked|employee)\b",
     r"\b(non[- ]?compete|notice period|conflict of interest|restrictive (?:agreement|covenant)|moonlighting|outside employment)\b|\bagreement with (?:your )?(?:current|any other) employer\b",
+    r"\b(outside\s+work)\b",
     r"\bpolitical contributions?\b",
     r"\bdriver[\u2019']?s? licen[cs]e\b",
     r"\b(?:professional |employment )?references?\b",
@@ -2093,10 +2102,13 @@ def filter_manual_answers(controls: list[dict], answers: list[dict], profile_tex
                           key_field: str = "id_or_name", approved_answers: dict | None = None) -> tuple[list[dict], list[dict]]:
     """Return (allowed, blocked) answers using only inputs, with no side effects."""
     by_key = {}
+    by_label = {}
     for c in controls:
         for k in (c.get("id"), c.get("name"), c.get("label"), c.get("faid")):
             if k:
                 by_key.setdefault(k, c)
+        if c.get("label"):
+            by_label.setdefault(str(c.get("label")).lower().strip(), c)
     allowed, blocked = [], []
     for a in answers:
         if not isinstance(a, dict):
@@ -2104,7 +2116,15 @@ def filter_manual_answers(controls: list[dict], answers: list[dict], profile_tex
             # 2026-08-17); drop them rather than crash the whole fill.
             continue
         answer_key = a.get(key_field)
-        c = by_key.get(answer_key, {"label": answer_key or ""})
+        c = by_key.get(answer_key)
+        if not c and a.get("label"):
+            c = by_label.get(str(a.get("label")).lower().strip())
+        if not c and len(controls) == 1:
+            c = controls[0]
+        if c and c.get("label") and not a.get("label"):
+            a = dict(a, label=c.get("label"))
+        if not c:
+            c = {"label": answer_key or ""}
         (blocked if answer_requires_manual(c, a.get("answer"), profile_text, approved_answers) else allowed).append(a)
     return allowed, blocked
 

@@ -95,11 +95,19 @@ REQUIRED_EMPTY_JS = r"""
     if (el.getAttribute('aria-hidden') === 'true' || el.type === 'hidden' || el.type === 'file') return;
     if (el.offsetParent === null) return;
     if (el.type === 'checkbox' || el.type === 'radio') {
-      const wrap = el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question], div[class*=oj-flex]');
-      const groupKey = el.name || el.getAttribute('data-qa-group-key') || (wrap?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 120);
-      if (!el.name && groupKey && wrap) [...wrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`)].forEach(x => x.setAttribute('data-qa-group-key', groupKey));
+      const stableWrap = el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question]');
+      const fallbackWrap = el.closest('div[class*=oj-flex]');
+      const wrap = stableWrap || (
+        fallbackWrap && fallbackWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`).length > 1
+          ? fallbackWrap
+          : null
+      );
       const group = el.name ? [...document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)] : [...(wrap || el.parentElement).querySelectorAll(`input[type="${CSS.escape(el.type)}"]`)];
       if (group.some(x => x.checked)) return;
+      if (wrap) {
+        bad.push(labelFor(wrap));
+        return;
+      }
     } else if (String(el.value || '').trim()) {
       return;
     }

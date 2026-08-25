@@ -1889,10 +1889,33 @@ def test_oracle_preferred_full_name_is_owned_by_deterministic_basics_fill():
 
 
 def test_oracle_required_empty_js_groups_nameless_checked_radio_by_stable_label():
-    src = oraclecloud.REQUIRED_EMPTY_JS
-    assert 'data-qa-group-key' in src
-    assert "group.some(x => x.checked)" in src
-    assert "el.name || el.id" not in src
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content("""
+                <fieldset>
+                  <legend>Do you agree to the privacy policy?</legend>
+                  <label><input type="radio" required checked> Yes</label>
+                  <label><input type="radio" required> No</label>
+                </fieldset>
+            """)
+            checked = page.evaluate(oraclecloud.REQUIRED_EMPTY_JS)
+            page.set_content("""
+                <fieldset>
+                  <legend>Do you agree to the privacy policy?</legend>
+                  <label><input id="oracle_raw_1" type="radio" required> Yes</label>
+                  <label><input id="oracle_raw_2" type="radio" required> No</label>
+                </fieldset>
+            """)
+            unchecked = page.evaluate(oraclecloud.REQUIRED_EMPTY_JS)
+        finally:
+            browser.close()
+
+    assert checked == []
+    assert unchecked == ["Do you agree to the privacy policy?"]
 
 
 def test_oracle_optional_qa_failed_does_not_block_progression(fake_oracle, pdf, monkeypatch):

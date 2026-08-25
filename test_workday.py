@@ -308,7 +308,7 @@ class WorkdayAnswerTests(unittest.TestCase):
              mock.patch("urllib.request.urlopen") as urlopen:
             self.assertEqual(
                 workday.wd_answers(fields, "lplfinancial", "Software Engineer Intern"),
-                [{"faid": "referral", "answer": "No"}],
+                [{"faid": "referral", "answer": "No", "label": "Were you referred by a current employee?"}],
             )
         urlopen.assert_not_called()
 
