@@ -1,6 +1,7 @@
 from pathlib import Path
 import sqlite3
 
+from compensation.schema import ensure_compensation_schema
 from submission.ashby_policy import ensure_lane_state
 from submission.attempts import ensure_submission_attempts
 from submission.resolutions import ensure_resolution_schema
@@ -17,4 +18,5 @@ def connect_tracker(path: Path = DB) -> sqlite3.Connection:
     ensure_lane_state(conn)
     ensure_submission_attempts(conn)
     ensure_resolution_schema(conn)
+    ensure_compensation_schema(conn)
     return conn
