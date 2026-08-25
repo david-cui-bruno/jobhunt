@@ -215,14 +215,13 @@ def test_exact_employer_range_midpoint_wins():
     assert result.expires_at == 100 + 30 * 86400
 
 
-def test_multiple_employer_ranges_fall_back_to_market_median():
+def test_multiple_employer_ranges_fail_closed():
     result = resolve_observations(
         context(),
         [employer("42", "58"), employer("43", "59"), market("40", "50"), market("44", "54", domain="indeed.com")],
         now=100,
     )
-    assert result.amount == Decimal("47")
-    assert result.method == "market_median"
+    assert result is None
 
 
 def test_two_independent_domains_resolve_market_median():
@@ -269,3 +268,79 @@ def test_uses_market_points_and_rejects_wide_spread_after_dedupe():
 
     wide = [market_point("25", domain="levels.fyi"), market_point("51", domain="indeed.com")]
     assert resolve_observations(context(), wide, now=100) is None
+
+
+def test_extract_rejects_foreign_and_mixed_currency_markers():
+    for text in (
+        "€50-$60 per hour",
+        "CAD $50-$60 per hour",
+        "A$50-$60 per hour",
+        "C$50-$60 per hour",
+        "AUD $90,000-$110,000 annual",
+    ):
+        assert extract_usd_observations(
+            text,
+            url="https://levels.fyi/x",
+            title="x",
+            source_kind="market",
+            observed_at=100,
+        ) == []
+
+
+def test_extract_preserves_non_www_domain_prefixes():
+    rows = extract_usd_observations(
+        "$40-$50 per hour",
+        url="https://wwww.levels.fyi/x",
+        title="x",
+        source_kind="market",
+        observed_at=100,
+    )
+    assert rows[0].domain == "wwww.levels.fyi"
+
+
+def test_extract_rejects_unspaced_thousands_and_ambiguous_questions_stay_unknown():
+    assert extract_usd_observations(
+        "USD 90000 to 110000 per year",
+        url="https://levels.fyi/x",
+        title="x",
+        source_kind="market",
+        observed_at=100,
+    ) == []
+    assert requested_period("What are your compensation expectations?") is None
+
+
+@pytest.mark.parametrize("row", [
+    employer("58", "42"),
+    employer("0", "42"),
+    employer("4", "6"),
+    employer("501", "600"),
+])
+def test_invalid_employer_ranges_fail_closed_before_midpoint(row):
+    assert resolve_observations(context(), [row], now=100) is None
+
+
+def test_multiple_compatible_employer_ranges_fail_closed():
+    rows = [
+        employer("42", "58"),
+        employer("43", "59"),
+        market("40", "50"),
+        market("44", "54", domain="indeed.com"),
+    ]
+    assert resolve_observations(context(), rows, now=100) is None
+
+
+def test_company_matching_is_token_boundary_based():
+    meta_context = dataclasses.replace(context(), company="Meta")
+    rows = [
+        dataclasses.replace(market("40", "50", domain="metadata.com"), title="Metadata intern New York pay"),
+        market("44", "54", domain="indeed.com"),
+    ]
+    assert resolve_observations(meta_context, rows, now=100) is None
+
+
+def test_role_and_location_compatibility_avoid_substring_false_positives():
+    rows = [
+        dataclasses.replace(market("40", "50", domain="levels.fyi"), title="Acme winter pay New York"),
+        dataclasses.replace(market("44", "54", domain="indeed.com"), title="Acme Software Engineer Intern Newark pay"),
+    ]
+    assert resolve_observations(context(), rows, now=100) is None

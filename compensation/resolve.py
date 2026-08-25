@@ -1,38 +1,65 @@
 from decimal import Decimal, ROUND_HALF_UP
 from statistics import median
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional
 
 from compensation.models import CompensationResolution, EvidenceObservation, JobContext
+from compensation.normalize import canonical_domain
 
 _SECONDS_30_DAYS = 30 * 86400
 _HOURS_PER_YEAR = Decimal("2080")
+_GENERIC_ROLE_TOKENS = {"software", "engineer"}
+_GENERIC_LOCATION_TOKENS = {"ny", "usa", "us"}
 
 
 def _tokens(value: str) -> List[str]:
     return [token for token in "".join(ch.lower() if ch.isalnum() else " " for ch in value).split() if token]
 
 
+def _contains_all_tokens(needles: List[str], haystack: List[str]) -> bool:
+    if not needles:
+        return True
+    haystack_set = set(haystack)
+    return all(token in haystack_set for token in needles)
+
+
 def _compatible(context: JobContext, observation: EvidenceObservation) -> bool:
     if observation.currency != context.currency:
         return False
-    title_tokens = set(_tokens(observation.title))
-    if context.company and context.company.lower() not in (observation.title + " " + observation.domain).lower():
+
+    obs_tokens = _tokens(" ".join([observation.title, observation.domain, observation.url]))
+    company_tokens = _tokens(context.company)
+    if company_tokens and not _contains_all_tokens(company_tokens, obs_tokens):
         return False
-    role_tokens = [token for token in _tokens(context.title) if token not in {"software", "engineer"}]
-    if role_tokens and not any(token in title_tokens for token in role_tokens):
+
+    role_tokens = [token for token in _tokens(context.title) if token not in _GENERIC_ROLE_TOKENS]
+    title_tokens = _tokens(observation.title)
+    if role_tokens and not _contains_all_tokens(role_tokens, title_tokens):
         return False
+
     if observation.source_kind != "employer":
-        location_tokens = [token for token in _tokens(context.location) if token not in {"ny", "usa", "us"}]
-        obs_blob = (observation.title + " " + observation.url).lower()
-        if location_tokens and not any(token in obs_blob for token in location_tokens):
+        location_tokens = [token for token in _tokens(context.location) if token not in _GENERIC_LOCATION_TOKENS]
+        if location_tokens and not _contains_all_tokens(location_tokens, obs_tokens):
             return False
+
     return True
+
+
+def _valid_bounds(low: Decimal, high: Decimal, period: str) -> bool:
+    if low <= 0 or high <= 0 or low > high:
+        return False
+    if period == "hour":
+        return Decimal("5") <= low <= Decimal("500") and Decimal("5") <= high <= Decimal("500")
+    if period == "year":
+        return Decimal("10000") <= low <= Decimal("1000000") and Decimal("10000") <= high <= Decimal("1000000")
+    return False
 
 
 def _estimate(observation: EvidenceObservation) -> Optional[Decimal]:
     if observation.point is not None:
         value = observation.point
     elif observation.low is not None and observation.high is not None:
+        if not _valid_bounds(observation.low, observation.high, observation.period):
+            return None
         value = (observation.low + observation.high) / Decimal("2")
     else:
         return None
@@ -69,7 +96,7 @@ def _resolution(context: JobContext, amount: Decimal, method: str, evidence: Ite
 
 
 def _domain_key(observation: EvidenceObservation) -> str:
-    return observation.domain.lower().lstrip("www.")
+    return canonical_domain(observation.domain)
 
 
 def resolve_observations(context: JobContext, observations: Iterable[EvidenceObservation], *, now: int) -> Optional[CompensationResolution]:
@@ -79,8 +106,12 @@ def resolve_observations(context: JobContext, observations: Iterable[EvidenceObs
         row for row in compatible
         if row.source_kind == "employer" and row.low is not None and row.high is not None and row.period == context.period
     ]
+    if len(employer_ranges) > 1:
+        return None
     if len(employer_ranges) == 1:
         row = employer_ranges[0]
+        if not _valid_bounds(row.low, row.high, row.period):
+            return None
         amount = _round((row.low + row.high) / Decimal("2"), context.period)
         return _resolution(context, amount, "employer_midpoint", [row], now)
 

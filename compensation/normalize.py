@@ -13,8 +13,8 @@ _RANGE = re.compile(
 )
 
 
-def _domain(url: str) -> str:
-    host = urlparse(url).netloc.lower()
+def canonical_domain(value: str) -> str:
+    host = urlparse(value).netloc.lower() or value.lower()
     if host.startswith("www."):
         host = host[4:]
     return host
@@ -31,6 +31,19 @@ def _period(token: str) -> str:
     return "year"
 
 
+def _has_foreign_currency_marker(text: str, start: int, matched: str) -> bool:
+    prefix = text[max(0, start - 8):start].upper()
+    compact_prefix = prefix.replace(" ", "")
+    return (
+        "€" in matched
+        or "€" in prefix
+        or "CAD" in prefix
+        or "AUD" in prefix
+        or compact_prefix.endswith("A")
+        or compact_prefix.endswith("C")
+    )
+
+
 def _valid_bounds(low: Decimal, high: Decimal, period: str) -> bool:
     if low <= 0 or high <= 0 or low > high:
         return False
@@ -43,6 +56,8 @@ def extract_usd_observations(text: str, *, url: str, title: str, source_kind: st
     rows = []
     for match in _RANGE.finditer(text):
         matched = match.group(0)
+        if _has_foreign_currency_marker(text, match.start(), matched):
+            continue
         if "$" not in matched and "USD" not in matched.upper():
             continue
         try:
@@ -56,7 +71,7 @@ def extract_usd_observations(text: str, *, url: str, title: str, source_kind: st
         rows.append(
             EvidenceObservation(
                 url=url,
-                domain=_domain(url),
+                domain=canonical_domain(url),
                 title=title,
                 low=low,
                 high=high,
