@@ -77,6 +77,7 @@ CAPTCHA_PATTERNS = (
 
 REQUIRED_EMPTY_JS = r"""
 () => {
+  const questionWrapperSelector = '[role=radiogroup], [role=group], fieldset, [class~="question"], [class^="question-"], [class*=" question-"], [class^="question_"], [class*=" question_"]';
   const labelFor = (el) => {
     let label = el.labels?.[0]?.innerText || el.getAttribute('aria-label') || '';
     if (!label) {
@@ -84,7 +85,7 @@ REQUIRED_EMPTY_JS = r"""
       if (ref) label = ref.split(/\s+/).map(id => document.getElementById(id)?.innerText || '').join(' ');
     }
     if (!label) {
-      const wrap = el.closest('fieldset, [role=group], div[class*=question], div[class*=field], label');
+      const wrap = el.closest(`${questionWrapperSelector}, div[class*=field], label`);
       label = wrap?.querySelector('legend, label, [class*=label], [class*=question]')?.innerText || '';
       if (!label && wrap) label = (wrap.innerText || '').split('\n')[0] || '';
     }
@@ -95,7 +96,7 @@ REQUIRED_EMPTY_JS = r"""
     if (el.getAttribute('aria-hidden') === 'true' || el.type === 'hidden' || el.type === 'file') return;
     if (el.offsetParent === null) return;
     if (el.type === 'checkbox' || el.type === 'radio') {
-      const stableWrap = el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question]');
+      const stableWrap = el.closest(questionWrapperSelector);
       const fallbackWrap = el.closest('div[class*=oj-flex]');
       const wrap = stableWrap || (
         fallbackWrap && fallbackWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`).length > 1

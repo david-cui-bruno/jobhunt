@@ -212,8 +212,9 @@ def _grounding() -> str:
 MODEL = "claude-sonnet-5"
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
-EXTRACT_JS = """
+EXTRACT_JS = r"""
 () => {
+  const questionWrapperSelector = '[role=radiogroup], [role=group], fieldset, [class~="question"], [class^="question-"], [class*=" question-"], [class^="question_"], [class*=" question_"]';
   const controls = [];
   const seen = new Set();
   const labelFor = (el) => {
@@ -229,7 +230,7 @@ EXTRACT_JS = """
       t = q?.querySelector('.application-label, .text, label')?.innerText || '';
     }
     if (!t) {
-      const wrap = el.closest('div[class*=question], fieldset, .field, [role=group]');
+      const wrap = el.closest(`${questionWrapperSelector}, .field`);
       t = wrap?.querySelector('label, legend, .label')?.innerText || '';
     }
     if (!t) {
@@ -243,7 +244,7 @@ EXTRACT_JS = """
   };
   const groupInfo = (el) => {
     // checkbox/radio group: same name; group question label = wrapper's first label-ish text
-    const stableWrap = el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question]');
+    const stableWrap = el.closest(questionWrapperSelector);
     const fallbackWrap = el.closest('div[class*=oj-flex]');
     const groupWrap = stableWrap || (
       fallbackWrap && fallbackWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`).length > 1
@@ -271,7 +272,7 @@ EXTRACT_JS = """
       const card = el.closest('.application-question, li[class*=question]');
       q = card?.querySelector('.application-label, .text')?.innerText || '';
     }
-    const wrap = el.closest('[role=radiogroup], fieldset, [role=group], div[class*=question], div[class*=checkbox]')
+    const wrap = el.closest(`${questionWrapperSelector}, div[class*=checkbox]`)
       || boxes[0]?.parentElement?.parentElement;
     if (!q) q = wrap?.querySelector('legend, .label, label:not([for])')?.innerText || '';
     if (!q) {
@@ -292,7 +293,7 @@ EXTRACT_JS = """
     const isYesNo = el.type === 'checkbox' && el.closest('[class*=yesno]');
     if (el.offsetParent === null && !isYesNo) return;
     const role = el.getAttribute('role');
-    const stableGroupWrap = (el.type === 'checkbox' || el.type === 'radio') ? el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question]') : null;
+    const stableGroupWrap = (el.type === 'checkbox' || el.type === 'radio') ? el.closest(questionWrapperSelector) : null;
     const fallbackGroupWrap = (el.type === 'checkbox' || el.type === 'radio') ? el.closest('div[class*=oj-flex]') : null;
     const groupWrap = stableGroupWrap || (
       fallbackGroupWrap && fallbackGroupWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`).length > 1
@@ -315,7 +316,7 @@ EXTRACT_JS = """
       const g = groupInfo(el);
       label = g.q || label;
       options = g.opts.slice(0, 60);
-      if (options.some(option => option && option.toLowerCase() === String(label || '').toLowerCase())) return; // label === option fails closed
+      if (options.length > 1 && options.some(option => option && option.toLowerCase() === String(label || '').toLowerCase())) return; // ambiguous malformed group fails closed
       // Ashby yes/no widget: hidden checkbox with Yes/No buttons
       if (el.closest('[class*=yesno]')) options = ['Yes', 'No'];
     }
@@ -324,6 +325,12 @@ EXTRACT_JS = """
     const cvs = shell?.querySelectorAll(
       '.select__single-value, .select__multi-value, [class*=singleValue], [class*=single-value], [class*=multiValue], [class*=multi-value]');
     if (cvs?.length) chosen = [...cvs].map(x => x.innerText.trim()).filter(Boolean).join(' | ').slice(0, 200);
+    if (role === 'combobox') {
+      const expanded = el.getAttribute('aria-expanded') === 'true';
+      const committed = el.getAttribute('data-committed-value') || el.getAttribute('data-value') || '';
+      if (!expanded && String(committed || '').trim()) chosen = String(committed).trim().slice(0, 200);
+      else if (!expanded && el.value && (el.hasAttribute('data-committed-value') || el.hasAttribute('data-value'))) chosen = el.value.slice(0, 200);
+    }
     controls.push({
       id: isGroup ? '' : (el.id || ''), name: el.name || '', tag: el.tagName.toLowerCase(),
       type: isGroup ? 'group-' + el.type : (role || el.type || ''),
@@ -2199,7 +2206,7 @@ def harvest_select_options(page, controls: list[dict]) -> None:
 
 def get_answers(controls: list[dict], context: dict | None = None) -> list[dict]:
     import datetime
-    unanswered = [c for c in controls if not c["value"]]
+    unanswered = [c for c in controls if not c["value"] and not c.get("chosen")]
     if not unanswered:
         return []
     context = context or {}
@@ -2451,13 +2458,29 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                 else:
                     lab = (c.get("label") or "").replace('"', '\\"')[:80]
                     input_type = "radio" if c["type"] == "group-radio" else "checkbox"
-                    boxes = page.locator(
-                        f"[role=radiogroup]:has-text(\"{lab}\") input[type={input_type}], "
-                        f"[role=group]:has-text(\"{lab}\") input[type={input_type}], "
-                        f"fieldset:has-text(\"{lab}\") input[type={input_type}], "
-                        f"div[class*=question]:has-text(\"{lab}\") input[type={input_type}], "
-                        f"div[class*=oj-flex]:has-text(\"{lab}\") input[type={input_type}]"
+                    wrappers = page.locator(
+                        f"[role=radiogroup]:has-text(\"{lab}\"), "
+                        f"[role=group]:has-text(\"{lab}\"), "
+                        f"fieldset:has-text(\"{lab}\"), "
+                        f"[class~=question]:has-text(\"{lab}\"), "
+                        f"[class^=question-]:has-text(\"{lab}\"), "
+                        f"[class*=\" question-\"]:has-text(\"{lab}\"), "
+                        f"[class^=question_]:has-text(\"{lab}\"), "
+                        f"[class*=\" question_\"]:has-text(\"{lab}\")"
                     )
+                    exact = []
+                    for wi in range(wrappers.count()):
+                        wrap = wrappers.nth(wi)
+                        try:
+                            text = wrap.inner_text(timeout=500)
+                        except Exception:
+                            continue
+                        if lab and lab in " ".join(str(text or "").split()):
+                            exact.append(wrap)
+                    if len(exact) != 1:
+                        failed.append(c["label"] or a["id_or_name"])
+                        continue
+                    boxes = exact[0].locator(f"input[type={input_type}]")
                 nb = boxes.count()
                 for w in wanted:
                     wl = str(w).lower()
@@ -2467,11 +2490,11 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                         if lab_txt and (wl in lab_txt.lower() or lab_txt.lower() in wl):
                             try:
                                 box.check(timeout=2000)
-                                got += 1
+                                got += int(bool(box.evaluate("el => !!el.checked")))
                             except Exception:
                                 try:
                                     box.evaluate("el => el.labels?.[0]?.click()")
-                                    got += 1
+                                    got += int(bool(box.evaluate("el => !!el.checked")))
                                 except Exception:
                                     pass
                             break

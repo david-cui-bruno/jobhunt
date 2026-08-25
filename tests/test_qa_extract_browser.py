@@ -331,3 +331,111 @@ def test_exact_outside_work_question_is_hard_blocked_but_broader_work_questions_
 
     assert [a["id_or_name"] for a in blocked] == ["outside"]
     assert [a["id_or_name"] for a in allowed] == ["auth"]
+
+
+def test_fill_answers_scopes_nameless_radio_to_exact_question_wrapper_not_shared_ancestor():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+    <div class="questionnaire">
+      <div class="question-block" role="radiogroup" aria-labelledby="q1">
+        <div id="q1">Are you authorized to work in the United States?</div>
+        <label><input type="radio" required> Yes</label>
+        <label><input type="radio" required> No</label>
+      </div>
+      <div class="question-block" role="radiogroup" aria-labelledby="q2">
+        <div id="q2">Will you now or in the future require sponsorship?</div>
+        <label><input type="radio" required> Yes</label>
+        <label><input type="radio" required> No</label>
+      </div>
+    </div>
+    """
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            controls = page.evaluate(qa.EXTRACT_JS)
+            filled, failed = qa.fill_answers(page, controls, [{
+                "id_or_name": "Will you now or in the future require sponsorship?",
+                "label": "Will you now or in the future require sponsorship?",
+                "answer": "No",
+            }])
+
+            assert failed == []
+            assert filled == ["Will you now or in the future require sponsorship?"]
+            radios = page.locator('input[type="radio"]')
+            assert not radios.nth(0).is_checked()
+            assert not radios.nth(1).is_checked()
+            assert not radios.nth(2).is_checked()
+            assert radios.nth(3).is_checked()
+        finally:
+            browser.close()
+
+
+def test_nameless_required_radio_groups_under_questionnaire_are_separate_for_empty_and_extract():
+    html = """
+    <div class="questionnaire">
+      <div class="question-block" role="radiogroup" aria-labelledby="q1">
+        <div id="q1">Are you authorized to work in the United States?</div>
+        <label><input type="radio" required checked> Yes</label>
+        <label><input type="radio" required> No</label>
+      </div>
+      <div class="question-block" role="radiogroup" aria-labelledby="q2">
+        <div id="q2">Will you now or in the future require sponsorship?</div>
+        <label><input type="radio" required> Yes</label>
+        <label><input type="radio" required> No</label>
+      </div>
+    </div>
+    """
+
+    required_empty = _required_empty_from_html(html)
+    controls = _extract_from_html(html)
+
+    assert required_empty == ["Will you now or in the future require sponsorship?"]
+    assert [control["label"] for control in controls] == [
+        "Are you authorized to work in the United States?",
+        "Will you now or in the future require sponsorship?",
+    ]
+
+
+def test_named_single_consent_checkbox_is_extracted_when_label_matches_option():
+    controls = _extract_from_html(
+        """
+        <label><input type="checkbox" name="consent" required> I certify that the information is accurate</label>
+        """
+    )
+
+    assert controls == [{
+        "id": "", "name": "consent", "tag": "input", "type": "group-checkbox", "cls": "",
+        "chosen": "", "label": "I certify that the information is accurate",
+        "required": True, "value": "", "options": ["I certify that the information is accurate"],
+    }]
+
+
+def test_committed_collapsed_cx_select_is_chosen_and_skipped_by_get_answers(monkeypatch):
+    controls = _extract_from_html(
+        """
+        <label for="degree">Degree Program</label>
+        <input id="degree" role="combobox" aria-expanded="false" value="Computer Science" data-committed-value="Computer Science">
+        """
+    )
+
+    assert controls[0]["type"] == "combobox"
+    assert controls[0]["value"] == ""
+    assert controls[0]["chosen"] == "Computer Science"
+    monkeypatch.setattr(qa, "_model_answers", lambda model_controls, company_context="": (_ for _ in ()).throw(AssertionError("committed control reopened")))
+    assert qa.get_answers(controls) == []
+
+
+def test_expanded_cx_select_typed_text_stays_uncommitted_unanswered():
+    controls = _extract_from_html(
+        """
+        <label for="degree">Degree Program</label>
+        <input id="degree" role="combobox" aria-expanded="true" value="Computer Science">
+        """
+    )
+
+    assert controls[0]["type"] == "combobox"
+    assert controls[0]["value"] == ""
+    assert controls[0]["chosen"] == ""
