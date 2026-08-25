@@ -905,7 +905,14 @@ def _unapproved_oracle_group_labels(
 
 
 def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
-    result = {"ok": False, "submitted": False, "reason": "", "unanswered": []}
+    result = {
+        "ok": False,
+        "submitted": False,
+        "reason": "",
+        "unanswered": [],
+        "click_attempted": False,
+        "submission_uncertain": False,
+    }
     with sync_playwright() as pw:
         browser, ctx = stealth.launch_stealth_context(pw)
         page = configure_page(ctx.new_page())

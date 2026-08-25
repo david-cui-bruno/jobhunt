@@ -1302,6 +1302,8 @@ def test_oracle_dry_run_finds_exact_accessible_submit_without_text_locator(fake_
     assert result["ok"] is True
     assert result["submitted"] is False
     assert result["reason"] == "dry run - did not submit"
+    assert result["click_attempted"] is False
+    assert result["submission_uncertain"] is False
     assert {"role": "button", "name": "Submit", "exact": True} in page.role_queries
     assert page.submit_clicks == 0
     assert "mark_submit_attempted" not in page.events
