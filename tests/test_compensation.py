@@ -344,3 +344,40 @@ def test_role_and_location_compatibility_avoid_substring_false_positives():
         dataclasses.replace(market("44", "54", domain="indeed.com"), title="Acme Software Engineer Intern Newark pay"),
     ]
     assert resolve_observations(context(), rows, now=100) is None
+
+
+@pytest.mark.parametrize("text", [
+    "£40-$50 per hour",
+    "MXN $40-$50 per hour",
+    "NZ$40-$50 per hour",
+    "HK$40-$50 per hour",
+    "¥40-$50 per hour",
+    "JPY 40 to 50 per hour",
+    "GBP $90,000-$110,000 annual",
+    "SGD40 to 50 per hour",
+    "NYC $40-$50 per hour",
+])
+def test_extract_rejects_non_usd_currency_qualifiers_without_denylist(text):
+    assert extract_usd_observations(
+        text,
+        url="https://levels.fyi/x",
+        title="x",
+        source_kind="market",
+        observed_at=100,
+    ) == []
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("$40-$50 per hour", ("40", "50", "hour")),
+    ("USD 40 to 50 per hour", ("40", "50", "hour")),
+    ("USD $90,000-$110,000 annual", ("90000", "110000", "year")),
+])
+def test_extract_accepts_only_literal_usd_or_unqualified_dollar(text, expected):
+    rows = extract_usd_observations(
+        text,
+        url="https://levels.fyi/x",
+        title="x",
+        source_kind="market",
+        observed_at=100,
+    )
+    assert (str(rows[0].low), str(rows[0].high), rows[0].period) == expected

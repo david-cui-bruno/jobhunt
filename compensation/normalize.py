@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from decimal import Decimal, InvalidOperation
 from typing import List, Optional
 from urllib.parse import urlparse
@@ -31,17 +32,23 @@ def _period(token: str) -> str:
     return "year"
 
 
-def _has_foreign_currency_marker(text: str, start: int, matched: str) -> bool:
-    prefix = text[max(0, start - 8):start].upper()
-    compact_prefix = prefix.replace(" ", "")
-    return (
-        "€" in matched
-        or "€" in prefix
-        or "CAD" in prefix
-        or "AUD" in prefix
-        or compact_prefix.endswith("A")
-        or compact_prefix.endswith("C")
-    )
+def _has_disqualifying_currency_qualifier(text: str, start: int, end: int, matched: str) -> bool:
+    prefix = text[max(0, start - 8):start]
+    nearby = prefix + matched
+    for char in nearby:
+        if unicodedata.category(char) == "Sc" and char != "$":
+            return True
+
+    qualifier = prefix.strip().split()[-1] if prefix.strip().split() else ""
+    qualifier = qualifier.rstrip("$")
+    if re.fullmatch(r"[A-Z]{1,3}", qualifier) and qualifier != "USD":
+        return True
+
+    adjacent = text[max(0, start - 3):end]
+    if re.match(r"[A-Z]{2,3}\$", adjacent) and not adjacent.startswith("USD"):
+        return True
+
+    return False
 
 
 def _valid_bounds(low: Decimal, high: Decimal, period: str) -> bool:
@@ -56,7 +63,7 @@ def extract_usd_observations(text: str, *, url: str, title: str, source_kind: st
     rows = []
     for match in _RANGE.finditer(text):
         matched = match.group(0)
-        if _has_foreign_currency_marker(text, match.start(), matched):
+        if _has_disqualifying_currency_qualifier(text, match.start(), match.end(), matched):
             continue
         if "$" not in matched and "USD" not in matched.upper():
             continue
