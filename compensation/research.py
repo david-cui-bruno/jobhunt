@@ -1,5 +1,6 @@
 import json
 import socket
+import time
 import urllib.error
 import urllib.request
 from decimal import Decimal
@@ -222,3 +223,39 @@ def prepare_posting(
         return _status("insufficient_evidence", posting_id)
     store_resolution(conn, resolution)
     return _summary(resolution)
+
+
+def prepare_pending_compensation(conn, provider: SearchProvider, *, limit: int = 5, now: Optional[int] = None) -> dict:
+    ensure_compensation_schema(conn)
+    effective_now = int(time.time()) if now is None else int(now)
+    rows = conn.execute(
+        """
+        SELECT posting_id FROM postings
+        WHERE status IN ('manual','failed')
+          AND (
+            lower(COALESCE(last_error,'')) GLOB '*compensation*'
+            OR lower(COALESCE(last_error,'')) GLOB '*salary*'
+            OR lower(COALESCE(last_error,'')) GLOB '*pay*'
+          )
+        ORDER BY COALESCE(last_attempt_at, first_seen), posting_id
+        LIMIT ?
+        """,
+        (int(limit),),
+    ).fetchall()
+    summary = {"examined": 0, "stored": 0, "manual": 0, "errors": 0, "limit": int(limit)}
+    for row in rows:
+        posting_id = row["posting_id"] if hasattr(row, "keys") else row[0]
+        summary["examined"] += 1
+        try:
+            result = prepare_posting(conn, posting_id, provider, now=effective_now, fetch_jd=default_fetch_jd)
+        except Exception:
+            summary["errors"] += 1
+            continue
+        status = result.get("status")
+        if status == "stored":
+            summary["stored"] += 1
+        elif status in {"search_failed", "search_timeout", "search_provider_unavailable"}:
+            summary["errors"] += 1
+        else:
+            summary["manual"] += 1
+    return summary

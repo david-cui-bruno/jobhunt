@@ -11,14 +11,19 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from submission.resolutions import apply_retriage, retriage_candidates
+from submission.resolutions import (
+    apply_compensation_retriage,
+    apply_retriage,
+    compensation_retriage_candidates,
+    retriage_candidates,
+)
 
-SAFE_KEYS = ("posting_id", "company", "title", "source_url", "resolved_url", "ats", "destination", "reason")
+SAFE_KEYS = ("posting_id", "company", "title", "source_url", "resolved_url", "ats", "destination", "reason", "candidate_kind")
 DEFAULT_APPLY_LIMIT = 25
 
 
 def safe_candidate(candidate: dict) -> dict:
-    return {key: candidate[key] for key in SAFE_KEYS}
+    return {key: candidate[key] for key in SAFE_KEYS if key in candidate}
 
 
 def emit_error(message: str) -> int:
@@ -65,7 +70,9 @@ def main(argv: list[str] | None = None) -> int:
             return emit_error("database is missing postings schema")
         if not table_exists(conn, "posting_url_resolutions"):
             return emit_error("database is missing posting_url_resolutions schema")
-        candidates = retriage_candidates(conn, ats=args.ats)
+        url_candidates = retriage_candidates(conn, ats=args.ats)
+        compensation_candidates = [] if args.ats else compensation_retriage_candidates(conn)
+        candidates = url_candidates + compensation_candidates
         selected = candidates[:args.limit] if args.apply else candidates
         payload = {
             "mode": "apply" if args.apply else "preview",
@@ -73,10 +80,20 @@ def main(argv: list[str] | None = None) -> int:
             "limit": args.limit,
             "candidates": [safe_candidate(candidate) for candidate in selected],
         }
+        if compensation_candidates:
+            payload["compensation_candidates"] = len(compensation_candidates)
         if args.ats:
             payload["ats"] = args.ats
         if args.apply:
-            payload["result"] = apply_retriage(conn, [candidate["posting_id"] for candidate in selected], ats=args.ats)
+            url_ids = [candidate["posting_id"] for candidate in selected if candidate.get("candidate_kind") != "compensation"]
+            compensation_ids = [candidate["posting_id"] for candidate in selected if candidate.get("candidate_kind") == "compensation"]
+            url_result = apply_retriage(conn, url_ids, ats=args.ats)
+            compensation_result = apply_compensation_retriage(conn, compensation_ids)
+            payload["result"] = {
+                "requested": url_result["requested"] + compensation_result["requested"],
+                "updated": url_result["updated"] + compensation_result["updated"],
+                "skipped": url_result["skipped"] + compensation_result["skipped"],
+            }
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
         return 0
     except RuntimeError as exc:

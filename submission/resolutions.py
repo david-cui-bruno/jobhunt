@@ -5,6 +5,10 @@ import sqlite3
 import time
 from typing import Iterable, Protocol
 
+from compensation.normalize import requested_period
+from compensation.research import _context_from_row, _has_compensation_marker
+from compensation.schema import load_resolution
+
 
 NEGATIVE_CACHE_BACKOFF_SECONDS = 6 * 60 * 60
 
@@ -205,6 +209,112 @@ def apply_retriage(conn: sqlite3.Connection, posting_ids: list[str], ats: str | 
     except Exception:
         conn.rollback()
         raise
+
+
+def compensation_retriage_candidates(conn: sqlite3.Connection, now: int | None = None) -> list[dict]:
+    from submission.identity import canonical_conflict_reason
+    from submission.lanes import classify_url, preparation_destination
+
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='compensation_evidence'"
+    ).fetchone() is None:
+        return []
+    current_now = int(time.time()) if now is None else int(now)
+    candidates: list[dict] = []
+    for row in conn.execute(_compensation_candidate_query(conn)):
+        reason = row["last_error"]
+        if not _has_compensation_marker(reason):
+            continue
+        period = requested_period(reason)
+        if period is None:
+            continue
+        context = _context_from_row(row, period)
+        if load_resolution(conn, context, current_now) is None:
+            continue
+        url = row["url"] or ""
+        ats_name, lane = classify_url(url)
+        if ats_name in {"oraclecloud", "ashby"} or lane.name in {"manual", "unsupported", "ashby"}:
+            continue
+        if not lane.automatic:
+            continue
+        if _has_application(conn, row["posting_id"]):
+            continue
+        if _has_finished_attempt(conn, row["posting_id"]):
+            continue
+        if canonical_conflict_reason(conn, row["posting_id"], url):
+            continue
+        destination, destination_reason = preparation_destination(conn, url)
+        if destination != "ready":
+            continue
+        candidates.append({
+            "posting_id": row["posting_id"],
+            "company": row["company"] or "",
+            "title": row["title"] or "",
+            "source_url": url,
+            "resolved_url": url,
+            "ats": ats_name,
+            "destination": destination,
+            "reason": reason,
+            "last_error": reason,
+            "next_error": destination_reason or "",
+            "candidate_kind": "compensation",
+            "original_status": row["status"],
+            "original_attempt_count": row["attempt_count"] or 0,
+        })
+    candidates.sort(key=lambda item: item["posting_id"])
+    return candidates
+
+
+def apply_compensation_retriage(conn: sqlite3.Connection, posting_ids: list[str]) -> dict:
+    requested_ids = list(dict.fromkeys(posting_ids))
+    requested = len(requested_ids)
+    if not requested_ids:
+        return {"requested": 0, "updated": 0, "skipped": 0}
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = {c["posting_id"]: c for c in compensation_retriage_candidates(conn) if c["posting_id"] in requested_ids}
+        updated = 0
+        for posting_id in requested_ids:
+            candidate = current.get(posting_id)
+            if candidate is None:
+                continue
+            updated += conn.execute(
+                "UPDATE postings SET status='ready', outcome=NULL, last_error='', last_attempt_at=? "
+                "WHERE posting_id=? AND status=? AND COALESCE(last_error,'')=? "
+                "AND COALESCE(attempt_count,0)=?",
+                (int(time.time()), posting_id, candidate["original_status"], candidate["last_error"], candidate["original_attempt_count"]),
+            ).rowcount
+        conn.commit()
+        return {"requested": requested, "updated": updated, "skipped": requested - updated}
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _compensation_candidate_query(conn: sqlite3.Connection) -> str:
+    source_expr = "COALESCE(p.source, '')" if _has_postings_column(conn, "source") else "''"
+    locations_expr = "COALESCE(p.locations, '')" if _has_postings_column(conn, "locations") else "''"
+    attempt_expr = "COALESCE(p.attempt_count, 0)" if _has_postings_column(conn, "attempt_count") else "0"
+    return f"""
+        SELECT p.posting_id, COALESCE(p.company,'') AS company, COALESCE(p.title,'') AS title,
+               {locations_expr} AS locations, COALESCE(p.url,'') AS url, {source_expr} AS source,
+               COALESCE(p.status,'') AS status, COALESCE(p.last_error,'') AS last_error,
+               {attempt_expr} AS attempt_count
+        FROM postings p
+        WHERE p.status IN ('manual','failed')
+          AND (lower(COALESCE(p.last_error,'')) GLOB '*compensation*'
+               OR lower(COALESCE(p.last_error,'')) GLOB '*salary*'
+               OR lower(COALESCE(p.last_error,'')) GLOB '*pay*')
+          AND COALESCE(p.outcome, '') NOT IN ('stale', 'submitted', 'deduplicated')
+        ORDER BY p.posting_id
+    """
+
+
+def _has_application(conn: sqlite3.Connection, posting_id: str) -> bool:
+    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='applications'").fetchone()
+    if not exists:
+        return False
+    return conn.execute("SELECT 1 FROM applications WHERE posting_id=? LIMIT 1", (posting_id,)).fetchone() is not None
 
 
 def _candidate_query(conn: sqlite3.Connection, posting_ids: list[str] | None = None) -> tuple[str, tuple]:

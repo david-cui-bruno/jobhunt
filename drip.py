@@ -257,6 +257,18 @@ def run():
     )
     print(f"[drip] watcher: {summary['new_count']} new, filter: {filt_res}")
 
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if api_key:
+        try:
+            from compensation.research import TavilySearchProvider, prepare_pending_compensation
+            comp_summary = prepare_pending_compensation(conn, TavilySearchProvider(api_key), limit=5)
+            redacted = {key: comp_summary.get(key, 0) for key in ("examined", "stored", "manual", "errors", "limit")}
+            print(f"[drip] compensation research: {redacted}")
+        except Exception as e:
+            print(f"[drip] compensation research failed: {type(e).__name__}: {e}")
+    else:
+        print("[drip] compensation research: {'status': 'disabled_missing_key', 'limit': 5}")
+
     # 2) email applications: compose and send ready HN postings autonomously.
     # poll_approvals only drains approval threads created by older releases.
     try:

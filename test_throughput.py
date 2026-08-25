@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import tempfile
 import time
@@ -755,3 +756,54 @@ class BacklogPriorityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class CompensationDripTests(unittest.TestCase):
+    def test_drip_compensation_research_disabled_without_tavily_key(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE postings(status TEXT)")
+        conn.execute("CREATE TABLE emails(sent_at INTEGER, posting_id TEXT, ats TEXT, confirmation TEXT)")
+        with mock.patch.dict(os.environ, {"TAVILY_API_KEY": ""}, clear=False), \
+             mock.patch.object(drip, "connect_tracker", return_value=conn), \
+             mock.patch.object(drip, "recover_stale_claims", return_value=0), \
+             mock.patch("watcher.watch.run", return_value={"new_count": 0, "current_posting_ids": []}), \
+             mock.patch("watcher.filter.run", return_value={}), \
+             mock.patch("watcher.abc_startups.run", return_value={}), \
+             mock.patch("watcher.bigco.run", return_value={}), \
+             mock.patch("email_apply.compose_ready_email_postings", return_value=0), \
+             mock.patch("email_apply.poll_approvals", return_value=0), \
+             mock.patch.object(drip, "quarantine_unsupported", return_value=0), \
+             mock.patch.object(drip, "reconcile_nonautomatic_ready", return_value=0), \
+             mock.patch.object(drip, "drain_tailoring_queue", return_value=0), \
+             mock.patch.object(drip, "promote_legacy_tailored", return_value=(0, 0)), \
+             mock.patch("compensation.research.TavilySearchProvider", side_effect=AssertionError("provider created without key")), \
+             mock.patch("builtins.print") as printed:
+            drip.run()
+        messages = [str(call.args[0]) for call in printed.call_args_list if call.args]
+        self.assertIn("[drip] compensation research: {'status': 'disabled_missing_key', 'limit': 5}", messages)
+
+    def test_drip_compensation_research_uses_fixed_limit_when_key_exists(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE postings(status TEXT)")
+        conn.execute("CREATE TABLE emails(sent_at INTEGER, posting_id TEXT, ats TEXT, confirmation TEXT)")
+        provider = object()
+        calls = []
+        with mock.patch.dict(os.environ, {"TAVILY_API_KEY": "key"}, clear=False), \
+             mock.patch.object(drip, "connect_tracker", return_value=conn), \
+             mock.patch.object(drip, "recover_stale_claims", return_value=0), \
+             mock.patch("watcher.watch.run", return_value={"new_count": 0, "current_posting_ids": []}), \
+             mock.patch("watcher.filter.run", return_value={}), \
+             mock.patch("watcher.abc_startups.run", return_value={}), \
+             mock.patch("watcher.bigco.run", return_value={}), \
+             mock.patch("email_apply.compose_ready_email_postings", return_value=0), \
+             mock.patch("email_apply.poll_approvals", return_value=0), \
+             mock.patch.object(drip, "quarantine_unsupported", return_value=0), \
+             mock.patch.object(drip, "reconcile_nonautomatic_ready", return_value=0), \
+             mock.patch.object(drip, "drain_tailoring_queue", return_value=0), \
+             mock.patch.object(drip, "promote_legacy_tailored", return_value=(0, 0)), \
+             mock.patch("compensation.research.TavilySearchProvider", return_value=provider), \
+             mock.patch("compensation.research.prepare_pending_compensation", side_effect=lambda c, p, limit: calls.append((c, p, limit)) or {"examined": 6, "stored": 1, "manual": 2, "errors": 3, "limit": limit}), \
+             mock.patch("builtins.print"):
+            drip.run()
+        self.assertEqual(calls, [(conn, provider, 5)])

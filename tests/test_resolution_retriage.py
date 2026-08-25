@@ -1039,3 +1039,126 @@ def test_apply_retriage_recomputes_only_selected_ids_under_lock(monkeypatch) -> 
 
     assert result == {"requested": 1, "updated": 1, "skipped": 0}
     assert calls == ["gh-07"]
+
+from decimal import Decimal
+from compensation.models import CompensationResolution, EvidenceObservation, JobContext
+from compensation.schema import ensure_compensation_schema, store_resolution
+from compensation.research import prepare_pending_compensation
+
+
+class CompensationFakeProvider:
+    def __init__(self, results=None, fail_for=None):
+        self.results = results or [
+            {"url": "https://levels.fyi/a", "title": "Acme Software Engineer Intern New York", "content": "Software Engineer Intern New York internship $40-$50 per hour"},
+            {"url": "https://indeed.com/a", "title": "Acme Software Engineer Intern New York", "content": "Software Engineer Intern New York internship $44-$54 per hour"},
+        ]
+        self.calls = []
+        self.fail_for = fail_for or set()
+
+    def search(self, query, include_domains):
+        self.calls.append((query, tuple(include_domains)))
+        if any(token in query for token in self.fail_for):
+            raise RuntimeError("boom")
+        return self.results
+
+
+def compensation_db(tmp_path: Path | None = None) -> sqlite3.Connection:
+    db = retriage_conn(tmp_path)
+    cols = {row[1] for row in db.execute("PRAGMA table_info(postings)")}
+    if "locations" not in cols:
+        db.execute("ALTER TABLE postings ADD COLUMN locations TEXT")
+    if "source" not in cols:
+        db.execute("ALTER TABLE postings ADD COLUMN source TEXT")
+    if "attempt_count" not in cols:
+        db.execute("ALTER TABLE postings ADD COLUMN attempt_count INTEGER DEFAULT 0")
+    ensure_compensation_schema(db)
+    return db
+
+
+def seed_compensation_blocker(db, posting_id, *, url=GREENHOUSE_URL, status="manual", last_error="required compensation per hour", attempt_count=0, source="dreamwork-2027", title="Software Engineer Intern", locations="New York, NY"):
+    db.execute(
+        "INSERT INTO postings (posting_id, company, title, locations, url, status, outcome, last_error, last_attempt_at, first_seen, source, attempt_count) VALUES (?, 'Acme', ?, ?, ?, ?, 'manual', ?, 100, 50, ?, ?)",
+        (posting_id, title, locations, url, status, last_error, source, attempt_count),
+    )
+
+
+def store_compensation_evidence(db, posting_id, *, expires_at=200, title="Software Engineer Intern", location="New York, NY"):
+    ctx = JobContext(posting_id, "Acme", title, location, "intern", "USD", "hour")
+    obs = EvidenceObservation("https://levels.fyi/a", "levels.fyi", "Acme intern", Decimal("40"), Decimal("50"), None, "USD", "hour", "market", 100)
+    store_resolution(db, CompensationResolution(ctx, Decimal("45"), "market_median", (obs,), 100, expires_at))
+
+
+def test_prepare_pending_compensation_is_bounded_serial_and_does_not_update_status(monkeypatch):
+    db = compensation_db()
+    for i in range(6):
+        seed_compensation_blocker(db, f"p{i}")
+    monkeypatch.setattr("compensation.research.default_fetch_jd", lambda _url: "No pay listed")
+    provider = CompensationFakeProvider()
+
+    summary = prepare_pending_compensation(db, provider, limit=5, now=100)
+
+    assert summary["examined"] == 5
+    assert summary["stored"] == 5
+    assert [call[0] for call in provider.calls] == ["Acme Software Engineer Intern New York, NY compensation pay range"] * 5
+    assert db.execute("select count(*) from postings where status='manual'").fetchone()[0] == 6
+
+
+def test_prepare_pending_compensation_isolates_per_row_exceptions(monkeypatch):
+    db = compensation_db()
+    seed_compensation_blocker(db, "ok")
+    seed_compensation_blocker(db, "bad", title="BadRole")
+    monkeypatch.setattr("compensation.research.default_fetch_jd", lambda _url: "No pay listed")
+    provider = CompensationFakeProvider(fail_for={"BadRole"})
+
+    summary = prepare_pending_compensation(db, provider, limit=5, now=100)
+
+    assert summary["examined"] == 2
+    assert summary["stored"] == 1
+    assert summary["errors"] == 1
+
+
+def test_compensation_candidates_require_fresh_exact_evidence_and_apply_is_cas_safe(tmp_path):
+    db = compensation_db(tmp_path)
+    seed_compensation_blocker(db, "p1")
+    store_compensation_evidence(db, "p1", expires_at=4_000_000_000)
+    db.commit()
+    path = tmp_path / "tracker.db"
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    preview = subprocess.check_output([sys.executable, "scripts/retriage_resolved_postings.py", "--db", str(path), "--preview", "--json"])
+    payload = json.loads(preview)
+    assert payload["compensation_candidates"] == 1
+    assert payload["candidates"][0]["candidate_kind"] == "compensation"
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+
+    changed = sqlite3.connect(path)
+    changed.execute("UPDATE postings SET last_error='changed compensation blocker' WHERE posting_id='p1'")
+    changed.commit(); changed.close()
+    apply = subprocess.check_output([sys.executable, "scripts/retriage_resolved_postings.py", "--db", str(path), "--apply", "--json"])
+    assert json.loads(apply)["result"]["updated"] == 0
+
+
+def test_compensation_candidate_exclusions():
+    cases = [
+        ("stale", {}, lambda db: store_compensation_evidence(db, "stale", expires_at=100)),
+        ("application", {}, lambda db: (store_compensation_evidence(db, "application"), db.execute("INSERT INTO applications(posting_id) VALUES ('application')"))),
+        ("finished", {}, lambda db: (store_compensation_evidence(db, "finished"), db.execute("INSERT INTO submission_attempts(attempt_id,posting_id,ats,lane,worker_id,browser_mode,policy_revision,started_at,finished_at) VALUES ('a','finished','greenhouse','automatic','w','hidden','p',1,2)"))),
+        ("manual_lane", {"url": "https://example.com/job/1"}, lambda db: store_compensation_evidence(db, "manual_lane")),
+        ("oracle", {"url": ORACLE_JOB_URL}, lambda db: store_compensation_evidence(db, "oracle")),
+        ("ashby", {"url": "https://jobs.ashbyhq.com/acme/123"}, lambda db: store_compensation_evidence(db, "ashby")),
+        ("unsupported", {"url": "https://unsupported.invalid/job"}, lambda db: store_compensation_evidence(db, "unsupported")),
+        ("changed_context", {"locations": "Remote"}, lambda db: store_compensation_evidence(db, "changed_context", location="New York, NY")),
+    ]
+    for posting_id, kwargs, setup in cases:
+        db = compensation_db()
+        seed_compensation_blocker(db, posting_id, **kwargs)
+        setup(db)
+        assert [] == [c for c in __import__('submission.resolutions').resolutions.compensation_retriage_candidates(db, 150) if c["posting_id"] == posting_id]
+
+
+def test_compensation_candidate_blocks_canonical_conflict():
+    db = compensation_db()
+    seed_compensation_blocker(db, "p1", url=GREENHOUSE_URL)
+    seed_compensation_blocker(db, "other", url=GREENHOUSE_URL, status="queued")
+    store_compensation_evidence(db, "p1")
+    assert __import__('submission.resolutions').resolutions.compensation_retriage_candidates(db, 150) == []
