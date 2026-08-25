@@ -119,14 +119,203 @@ def test_text_input_role_combobox_is_combobox_without_transient_value():
     assert controls[0]["value"] == ""
 
 
-def test_answer_filter_attaches_source_label_for_label_fallback_without_schema_change():
-    controls = [{"id": "current-123", "name": "", "label": "Personal website", "value": ""}]
+def test_unknown_stale_answer_id_is_not_mapped_to_only_unrelated_control():
+    controls = [{"id": "current-123", "name": "", "label": "Personal website", "value": "", "options": []}]
+    answers = [{"id_or_name": "old-456", "answer": "https://example.com"}]
+
+    allowed, blocked = qa.filter_manual_answers(controls, answers)
+
+    assert allowed == []
+    assert blocked == [{"id_or_name": "old-456", "answer": "https://example.com"}]
+
+
+def test_answer_filter_attaches_source_label_when_original_key_matches_control():
+    controls = [{"id": "old-456", "name": "", "label": "Personal website", "value": "", "options": []}]
     answers = [{"id_or_name": "old-456", "answer": "https://example.com"}]
 
     allowed, blocked = qa.filter_manual_answers(controls, answers)
 
     assert blocked == []
     assert allowed == [{"id_or_name": "old-456", "answer": "https://example.com", "label": "Personal website"}]
+
+
+def test_fill_answers_rematches_rerendered_nameless_radio_group_by_human_label():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+    <form>
+      <div id="shared">
+        <section role="radiogroup" aria-labelledby="q-first">
+          <h2 id="q-first">Are you authorized to work in the United States?</h2>
+          <label><input type="radio" name="regen_first" value="yes"> Yes</label>
+          <label><input type="radio" name="regen_first" value="no"> No</label>
+        </section>
+        <section role="radiogroup" aria-labelledby="q-second">
+          <h2 id="q-second">Will you now or in the future require sponsorship?</h2>
+          <label><input type="radio" name="regen_second" value="yes"> Yes</label>
+          <label><input type="radio" name="regen_second" value="no"> No</label>
+        </section>
+      </div>
+    </form>
+    """
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            controls = page.evaluate(qa.EXTRACT_JS)
+            answer = {
+                "id_or_name": "stale_second_group_id",
+                "label": "Will you now or in the future require sponsorship?",
+                "answer": "No",
+            }
+
+            filled, failed = qa.fill_answers(page, controls, [answer])
+
+            assert failed == []
+            assert filled == ["Will you now or in the future require sponsorship?"]
+            assert not page.locator('input[name="regen_first"][value="yes"]').is_checked()
+            assert not page.locator('input[name="regen_first"][value="no"]').is_checked()
+            assert not page.locator('input[name="regen_second"][value="yes"]').is_checked()
+            assert page.locator('input[name="regen_second"][value="no"]').is_checked()
+        finally:
+            browser.close()
+
+
+def test_cx_select_harvests_exact_safe_controlled_popup_options_and_commits_selection():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+    <label for="degree">Degree Program</label>
+    <input id="degree" role="combobox" aria-controls="degreePopup" aria-expanded="false" value="">
+    <div id="degreePopup" style="display:none">
+      <div role="gridcell" class="cx-select__list-item">Computer Science</div>
+      <div role="gridcell" class="cx-select__list-item">Economics</div>
+    </div>
+    <script>
+      degree.addEventListener('click', () => { degree.setAttribute('aria-expanded', 'true'); degreePopup.style.display = 'block'; });
+      degreePopup.addEventListener('click', (event) => {
+        if (event.target.matches('[role=gridcell]')) {
+          degree.value = event.target.innerText.trim();
+          degree.setAttribute('data-committed-value', degree.value);
+          degree.setAttribute('aria-expanded', 'false');
+          degreePopup.style.display = 'none';
+        }
+      });
+    </script>
+    """
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            controls = page.evaluate(qa.EXTRACT_JS)
+
+            qa.harvest_select_options(page, controls)
+            filled, failed = qa.fill_answers(
+                page, controls, [{"id_or_name": "degree", "label": "Degree Program", "answer": "Computer Science"}]
+            )
+
+            assert controls[0]["options"] == ["Computer Science", "Economics"]
+            assert failed == []
+            assert filled == ["Degree Program"]
+            assert page.locator("#degree").input_value() == "Computer Science"
+        finally:
+            browser.close()
+
+
+def test_cx_select_fill_fails_closed_for_ambiguous_or_missing_scoped_options():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+    <label for="degree">Degree Program</label>
+    <input id="degree" role="combobox" aria-controls="degreePopup" aria-expanded="false" value="">
+    <div id="degreePopup" style="display:none">
+      <div role="gridcell" class="cx-select__list-item">Computer Science BA</div>
+      <div role="gridcell" class="cx-select__list-item">Computer Science BS</div>
+    </div>
+    <script>
+      degree.addEventListener('click', () => { degree.setAttribute('aria-expanded', 'true'); degreePopup.style.display = 'block'; });
+      degreePopup.addEventListener('click', (event) => {
+        if (event.target.matches('[role=gridcell]')) degree.value = event.target.innerText.trim();
+      });
+    </script>
+    """
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            controls = page.evaluate(qa.EXTRACT_JS)
+            qa.harvest_select_options(page, controls)
+
+            filled, failed = qa.fill_answers(
+                page, controls, [{"id_or_name": "degree", "label": "Degree Program", "answer": "Computer Science"}]
+            )
+
+            assert filled == []
+            assert failed == ["Degree Program"]
+            assert page.locator("#degree").input_value() == ""
+        finally:
+            browser.close()
+
+
+def test_cx_select_rejects_unsafe_aria_controls_and_never_reads_unscoped_gridcells():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+    <label for="degree">Degree Program</label>
+    <input id="degree" role="combobox" aria-controls="degree popup" aria-expanded="false" value="">
+    <div role="gridcell" class="cx-select__list-item">Computer Science</div>
+    <script>degree.addEventListener('click', () => degree.setAttribute('aria-expanded', 'true'));</script>
+    """
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            controls = page.evaluate(qa.EXTRACT_JS)
+            qa.harvest_select_options(page, controls)
+
+            filled, failed = qa.fill_answers(
+                page, controls, [{"id_or_name": "degree", "label": "Degree Program", "answer": "Computer Science"}]
+            )
+
+            assert controls[0]["options"] == []
+            assert filled == []
+            assert failed == ["Degree Program"]
+            assert page.locator("#degree").input_value() == ""
+        finally:
+            browser.close()
+
+
+def test_cx_select_transient_typed_text_is_not_success_without_committed_option():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+    <label for="degree">Degree Program</label>
+    <input id="degree" role="combobox" aria-controls="degreePopup" aria-expanded="false" value="">
+    <div id="degreePopup" style="display:none"></div>
+    <script>
+      degree.addEventListener('click', () => { degree.setAttribute('aria-expanded', 'true'); degreePopup.style.display = 'block'; });
+      degree.addEventListener('input', () => { degree.value = 'Computer Science'; });
+    </script>
+    """
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            controls = page.evaluate(qa.EXTRACT_JS)
+
+            filled, failed = qa.fill_answers(
+                page, controls, [{"id_or_name": "degree", "label": "Degree Program", "answer": "Computer Science"}]
+            )
+
+            assert filled == []
+            assert failed == ["Degree Program"]
+        finally:
+            browser.close()
 
 
 def test_exact_outside_work_question_is_hard_blocked_but_broader_work_questions_are_not():

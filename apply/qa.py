@@ -2119,12 +2119,11 @@ def filter_manual_answers(controls: list[dict], answers: list[dict], profile_tex
         c = by_key.get(answer_key)
         if not c and a.get("label"):
             c = by_label.get(str(a.get("label")).lower().strip())
-        if not c and len(controls) == 1:
-            c = controls[0]
         if c and c.get("label") and not a.get("label"):
             a = dict(a, label=c.get("label"))
         if not c:
-            c = {"label": answer_key or ""}
+            blocked.append(a)
+            continue
         (blocked if answer_requires_manual(c, a.get("answer"), profile_text, approved_answers) else allowed).append(a)
     return allowed, blocked
 
@@ -2162,7 +2161,7 @@ def harvest_select_options(page, controls: list[dict]) -> None:
     """React-select options only exist in the DOM while the menu is open.
     Open each combobox briefly to capture its options so Claude can answer exactly."""
     for c in controls:
-        if not _is_react_select(c) or c["options"] or c.get("chosen") or c["value"]:
+        if not _is_react_select(c) or c.get("options") or c.get("chosen") or c.get("value"):
             continue
         sel = f"[id='{c['id']}']" if c["id"] else f"[name='{c['name']}']"
         try:
@@ -2178,6 +2177,13 @@ def harvest_select_options(page, controls: list[dict]) -> None:
             if expanded:
                 opts = el.evaluate("""
                     el => {
+                        const controls = el.getAttribute('aria-controls') || '';
+                        if (/^[A-Za-z0-9_-]+$/.test(controls)) {
+                            const popup = document.getElementById(controls);
+                            if (popup) return [...popup.querySelectorAll('[role=option], [role=gridcell].cx-select__list-item')]
+                                .filter(o => !!(o.offsetWidth || o.offsetHeight || o.getClientRects().length))
+                                .map(o => o.innerText.trim());
+                        }
                         // react-select renders the menu inside the control's container
                         const shell = (el.parentElement || el).closest('.select__container, .select-shell, [class*=select]');
                         const menu = shell?.querySelector('.select__menu') || document.querySelector('.select__menu');
@@ -2319,7 +2325,79 @@ def _best_option(ans: str, options: list[str]) -> str | None:
 
 
 def _is_react_select(c: dict) -> bool:
-    return c["type"] == "combobox" or "select__input" in (c.get("cls") or "")
+    return c.get("type") == "combobox" or "select__input" in (c.get("cls") or "")
+
+
+def _unique_best_option(ans: str, options: list[str]) -> str | None:
+    """Return a best option only when the visible menu has exactly one match."""
+    if not options:
+        return None
+    al = ans.lower().strip()
+    exact = [o for o in options if o.lower().strip() == al]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        return None
+
+    def phrase_in(needle: str, hay: str) -> bool:
+        return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", hay) is not None
+
+    phrase = [o for o in options if phrase_in(al, o.lower().strip()) or phrase_in(o.lower().strip(), al)]
+    if len(phrase) == 1:
+        return phrase[0]
+    return None
+
+
+def _safe_controlled_popup_options(page, el) -> list[str]:
+    try:
+        return el.evaluate("""
+            el => {
+                const controls = el.getAttribute('aria-controls') || '';
+                if (!/^[A-Za-z0-9_-]+$/.test(controls)) return [];
+                const popup = document.getElementById(controls);
+                if (!popup) return [];
+                return [...popup.querySelectorAll('[role=option], [role=gridcell].cx-select__list-item')]
+                    .filter(o => !!(o.offsetWidth || o.offsetHeight || o.getClientRects().length))
+                    .map(o => o.innerText.trim())
+                    .filter(Boolean);
+            }
+        """)
+    except Exception:
+        return []
+
+
+def _click_safe_controlled_popup_option(page, el, target: str) -> bool:
+    try:
+        return bool(el.evaluate("""
+            (el, target) => {
+                const controls = el.getAttribute('aria-controls') || '';
+                if (!/^[A-Za-z0-9_-]+$/.test(controls)) return false;
+                const popup = document.getElementById(controls);
+                if (!popup) return false;
+                const opts = [...popup.querySelectorAll('[role=option], [role=gridcell].cx-select__list-item')]
+                    .filter(o => !!(o.offsetWidth || o.offsetHeight || o.getClientRects().length));
+                const matches = opts.filter(o => o.innerText.trim() === target);
+                if (matches.length !== 1) return false;
+                matches[0].click();
+                return true;
+            }
+        """, target))
+    except Exception:
+        return False
+
+
+def _cx_committed_value(el) -> str:
+    try:
+        return str(el.evaluate("""
+            el => {
+                const committed = el.getAttribute('data-committed-value') || el.getAttribute('data-value');
+                if (committed) return committed;
+                const expanded = el.getAttribute('aria-expanded') === 'true';
+                return expanded ? '' : (el.value || '').trim();
+            }
+        """) or "")
+    except Exception:
+        return ""
 
 
 def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[str], list[str]]:
@@ -2445,6 +2523,28 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                 known = c.get("options") or []
                 target = _best_option(ans, known) if known else None
                 desired = target or ans
+                safe_options = _safe_controlled_popup_options(page, el)
+                has_controls = el.evaluate("el => !!(el.getAttribute('aria-controls') || '')")
+                safe_controls = el.evaluate("el => /^[A-Za-z0-9_-]+$/.test(el.getAttribute('aria-controls') || '')")
+                if has_controls and not safe_controls:
+                    failed.append(c["label"] or a["id_or_name"])
+                    continue
+                if safe_options or safe_controls:
+                    scoped_target = _unique_best_option(ans, safe_options or known)
+                    if scoped_target:
+                        if not safe_options:
+                            el.click(timeout=3000)
+                            page.wait_for_timeout(300)
+                            safe_options = _safe_controlled_popup_options(page, el)
+                            scoped_target = _unique_best_option(ans, safe_options)
+                        if scoped_target and _click_safe_controlled_popup_option(page, el, scoped_target):
+                            for _ in range(8):
+                                page.wait_for_timeout(125)
+                                if _best_option(scoped_target, [_cx_committed_value(el)]):
+                                    ok = True
+                                    break
+                    (filled if ok else failed).append(c["label"] or a["id_or_name"])
+                    continue
                 selected = el.evaluate(SELECTED)
                 if _best_option(desired, selected):
                     ok = True

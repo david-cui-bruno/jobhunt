@@ -812,6 +812,7 @@ def _run_shared_qa_passes(page, slug: str, url: str) -> tuple[list[str], list[st
     for qa_pass in range(3):
         controls = page.evaluate(qa.EXTRACT_JS)
         shared_controls = [control for control in controls if not _owned_oracle_control(control)]
+        qa.harvest_select_options(page, shared_controls)
         if answers is None:
             answers = qa.get_answers(shared_controls, context={"slug": slug, "url": url})
         by_key = {}
