@@ -1037,6 +1037,7 @@ def test_saved_draft_entry_bypasses_initial_upload_and_refreshes_resume(monkeypa
     entry = workday.WorkdayEntryResult(state="upload_ready", marker="saved_draft")
     monkeypatch.setattr(workday, "enter_application_form", lambda page, apply_url: entry)
     monkeypatch.setattr(workday, "saved_draft_wizard_is_active", lambda page: True)
+    monkeypatch.setattr(workday, "current_step", lambda page: "My Experience")
     refresh = mock.Mock(return_value=True)
     monkeypatch.setattr(workday, "refresh_saved_resume", refresh)
 
@@ -1044,6 +1045,22 @@ def test_saved_draft_entry_bypasses_initial_upload_and_refreshes_resume(monkeypa
 
     assert resume_current is True
     refresh.assert_called_once_with(page, resume)
+
+
+def test_saved_draft_my_information_defers_resume_refresh(monkeypatch, tmp_path):
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"pdf")
+    page = mock.Mock()
+    entry = workday.WorkdayEntryResult(state="upload_ready", marker="saved_draft")
+    monkeypatch.setattr(workday, "saved_draft_wizard_is_active", lambda page: True)
+    monkeypatch.setattr(workday, "current_step", lambda page: "My Information")
+    refresh = mock.Mock(return_value=False)
+    monkeypatch.setattr(workday, "refresh_saved_resume", refresh)
+
+    resume_current = workday.prepare_workday_resume_entry(page, resume, entry)
+
+    assert resume_current is None
+    refresh.assert_not_called()
 
 
 class _FakePlaywrightContext:

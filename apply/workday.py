@@ -1570,9 +1570,16 @@ def enter_application_form(
 
 
 def prepare_workday_resume_entry(page, resume_pdf: Path,
-                                 entry: WorkdayEntryResult) -> bool:
+                                 entry: WorkdayEntryResult) -> bool | None:
     """Upload or refresh the resume for a Workday entry screen."""
     if entry.marker == "saved_draft" or saved_draft_wizard_is_active(page):
+        # A resumed draft can open on My Information, before Workday renders
+        # any attachment controls. Defer the mandatory refresh until the
+        # wizard reaches My Experience rather than treating the absent upload
+        # input as a failed refresh. Later steps still fail closed because the
+        # automation cannot safely navigate backward to replace the resume.
+        if current_step(page).strip().lower() == "my information":
+            return None
         return refresh_saved_resume(page, resume_pdf)
     upload = page.locator("[data-automation-id='file-upload-input-ref']").first
     upload.wait_for(state="attached", timeout=20000)
@@ -1652,7 +1659,7 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                 result["resume_refreshed"] = True
         except Exception:
             resume_current = False
-        if not resume_current:
+        if resume_current is False:
             if saved_draft_wizard_is_active(page):
                 result.update(
                     ok=True,
