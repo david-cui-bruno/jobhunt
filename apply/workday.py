@@ -1721,6 +1721,15 @@ def apply_workday(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -
                 resume_current = True
                 result["resume_refreshed"] = True
             if "review" in step.lower():
+                if resume_current is not True:
+                    result.update(
+                        ok=True,
+                        reason="needs correction: saved resume attachment was not refreshed",
+                        unanswered=["Resume/CV attachment"],
+                    )
+                    _shot(page, slug, "resume_refresh_failed")
+                    browser.close()
+                    return result
                 _shot(page, slug, f"review")
                 if dry_run:
                     result.update(ok=True, reason="dry run — reached Review, did not submit")

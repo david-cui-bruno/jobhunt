@@ -1099,6 +1099,33 @@ def test_saved_draft_my_information_defers_resume_refresh(monkeypatch, tmp_path)
     refresh.assert_not_called()
 
 
+def test_saved_draft_review_fails_closed_before_submit_without_resume_refresh(
+    monkeypatch, tmp_path
+):
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"pdf")
+    page = mock.Mock()
+    page.inner_text.return_value = ""
+    page.url = APPLY_URL
+    entry = workday.WorkdayEntryResult(state="upload_ready", marker="saved_draft")
+    monkeypatch.setattr(workday, "sync_playwright", lambda: _FakePlaywrightContext(page))
+    monkeypatch.setattr(workday, "configure_page", lambda page: page)
+    monkeypatch.setattr(workday, "enter_application_form", lambda page, apply_url: entry)
+    monkeypatch.setattr(workday, "prepare_workday_resume_entry", lambda *args: None)
+    monkeypatch.setattr(workday, "current_step", lambda page: "Review")
+    monkeypatch.setattr(workday, "_shot", lambda *args, **kwargs: None)
+    mark_submit_attempted = mock.Mock()
+    monkeypatch.setattr(workday, "mark_submit_attempted", mark_submit_attempted)
+
+    result = workday.apply_workday(APPLY_URL, resume, "slug", dry_run=False)
+
+    assert result["ok"] is True
+    assert result["submitted"] is False
+    assert result["reason"] == "needs correction: saved resume attachment was not refreshed"
+    assert result["unanswered"] == ["Resume/CV attachment"]
+    mark_submit_attempted.assert_not_called()
+
+
 class _FakePlaywrightContext:
     def __init__(self, page):
         self.page = page
