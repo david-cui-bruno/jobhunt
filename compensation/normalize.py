@@ -12,6 +12,17 @@ _RANGE = re.compile(
     r"(?P<period>per\s+hour|hourly|/\s*hr|per\s+year|annually|annual)",
     re.I,
 )
+_POINT = re.compile(
+    r"(?:USD\s*)?\$?\s*(?P<point>\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*"
+    r"(?P<period>per\s+hour|hourly|/\s*hr|per\s+year|annually|annual)",
+    re.I,
+)
+_POINT_PREFIX = re.compile(
+    r"(?P<period>per\s+hour|hourly|per\s+year|annually|annual)"
+    r"[^$€£¥\d]{0,80}(?:USD\s*)?\$?\s*"
+    r"(?P<point>\d{1,3}(?:,\d{3})*(?:\.\d+)?)",
+    re.I,
+)
 
 _CURRENCY_CODES = set("""
 AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB
@@ -127,7 +138,9 @@ def _valid_bounds(low: Decimal, high: Decimal, period: str) -> bool:
 
 def extract_usd_observations(text: str, *, url: str, title: str, source_kind: str, observed_at: int) -> List[EvidenceObservation]:
     rows = []
-    for match in _RANGE.finditer(text):
+    range_matches = list(_RANGE.finditer(text))
+    range_spans = [match.span() for match in range_matches]
+    for match in range_matches:
         matched = match.group(0)
         if _has_disqualifying_currency_qualifier(text, match.start(), match.end(), matched):
             continue
@@ -155,6 +168,41 @@ def extract_usd_observations(text: str, *, url: str, title: str, source_kind: st
                 observed_at=observed_at,
             )
         )
+    seen_points = set()
+    for pattern in (_POINT, _POINT_PREFIX):
+        for match in pattern.finditer(text):
+            point_span = match.span("point")
+            if point_span in seen_points:
+                continue
+            if any(match.start() < end and match.end() > start for start, end in range_spans):
+                continue
+            matched = match.group(0)
+            if _has_disqualifying_currency_qualifier(text, match.start(), match.end(), matched):
+                continue
+            if "$" not in matched and "USD" not in matched.upper():
+                continue
+            try:
+                point = _decimal(match.group("point"))
+            except InvalidOperation:
+                continue
+            period = _period(match.group("period"))
+            if not _valid_bounds(point, point, period):
+                continue
+            rows.append(
+                EvidenceObservation(
+                    url=url,
+                    domain=canonical_domain(url),
+                    title=title,
+                    low=None,
+                    high=None,
+                    point=point,
+                    currency="USD",
+                    period=period,
+                    source_kind=source_kind,
+                    observed_at=observed_at,
+                )
+            )
+            seen_points.add(point_span)
     return rows
 
 

@@ -197,6 +197,49 @@ def test_extract_usd_ranges_is_conservative(text, expected):
         assert rows[0].domain == "levels.fyi"
 
 
+@pytest.mark.parametrize(("text", "expected"), [
+    ("Average Sony Software Engineer Intern hourly pay in San Diego is approximately $25.77, which is below the national average.", ("25.77", "hour")),
+    ("Average hourly pay is approximately $25.77 per hour.", ("25.77", "hour")),
+    ("The estimated average is USD 64,508 per year.", ("64508", "year")),
+    ("The median total pay is $49.50 hourly.", ("49.50", "hour")),
+])
+def test_extract_usd_points_requires_an_explicit_period(text, expected):
+    rows = extract_usd_observations(
+        text, url="https://indeed.com/x", title="x", source_kind="market", observed_at=100,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].low is None
+    assert rows[0].high is None
+    assert (str(rows[0].point), rows[0].period) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "$50,000",
+    "CAD $25.77 per hour",
+    "$25.77 per hour CAD",
+    "€25 per hour",
+    "A$25 per hour",
+])
+def test_extract_usd_points_rejects_ambiguous_or_foreign_values(text):
+    assert extract_usd_observations(
+        text, url="https://indeed.com/x", title="x", source_kind="market", observed_at=100,
+    ) == []
+
+
+def test_extract_range_does_not_also_emit_endpoint_points():
+    rows = extract_usd_observations(
+        "$24 - $45/hr",
+        url="https://glassdoor.com/x",
+        title="x",
+        source_kind="market",
+        observed_at=100,
+    )
+
+    assert len(rows) == 1
+    assert (str(rows[0].low), str(rows[0].high), rows[0].point) == ("24", "45", None)
+
+
 @pytest.mark.parametrize(("question", "expected"), [
     ("What is your desired hourly rate?", "hour"),
     ("Requested rate", "hour"),
