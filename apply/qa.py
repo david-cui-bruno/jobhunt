@@ -167,19 +167,69 @@ def relevant_application_answers(controls: list[dict], approved: dict | None = N
         result["preferences"] = selected_preferences
     if re.search(r"\b(offer|deadline)\b", question):
         result["current_offers"] = source.get("current_offers") or []
+    availability = source.get("availability") or {}
+    selected_availability = {}
     if re.search(r"\b(start|end|availability|available|internship dates|season)\b", question):
-        result["availability"] = source.get("availability") or {}
+        if availability.get("default_start_date") is not None:
+            selected_availability["default_start_date"] = availability.get("default_start_date")
+    if selected_availability:
+        result["availability"] = selected_availability
     legal = source.get("legal") or {}
+    selected_legal = {}
+    if re.search(r"\b(clearance|public trust)\b", question):
+        if legal.get("security_clearance") is not None:
+            selected_legal["security_clearance"] = legal.get("security_clearance")
+    if re.search(r"\bdepartment of defense|\bdod\b", question):
+        if legal.get("us_dod_employment_after_2008_01_28") is not None:
+            selected_legal["us_dod_employment_after_2008_01_28"] = legal.get(
+                "us_dod_employment_after_2008_01_28"
+            )
     if re.search(
-        r"\b(non[- ]?compete|conflict of interest|clearance|public trust|notice period|"
-        r"driver[’']?s? licen[cs]e|restrictive (?:agreement|covenant)|"
-        r"moonlighting|outside employment|political contributions?)\b|"
+        r"government[- ]entity employment|government agency employment|government employment",
+        question,
+    ):
+        if legal.get("self_or_family_or_business_partner_government_employment") is not None:
+            selected_legal["self_or_family_or_business_partner_government_employment"] = legal.get(
+                "self_or_family_or_business_partner_government_employment"
+            )
+    if re.search(r"\bdriver[’']?s? licen[cs]e\b", question):
+        if legal.get("valid_drivers_license") is not None:
+            selected_legal["valid_drivers_license"] = legal.get("valid_drivers_license")
+    if re.search(
+        r"\b(non[- ]?compete|conflict of interest|notice period|"
+        r"restrictive (?:agreement|covenant)|moonlighting|outside employment)\b|"
         r"\bagreement with (?:your )?(?:current|any other) employer\b",
         question,
     ):
-        result["legal"] = legal
+        for key in ("non_compete_or_conflict", "notice_period"):
+            if legal.get(key) is not None:
+                selected_legal[key] = legal.get(key)
+    if re.search(r"\bpolitical contributions?\b", question):
+        if legal.get("political_contributions_over_150_last_two_years") is not None:
+            selected_legal["political_contributions_over_150_last_two_years"] = legal.get(
+                "political_contributions_over_150_last_two_years"
+            )
+    if selected_legal:
+        result["legal"] = selected_legal
+    professional = source.get("professional") or {}
+    selected_professional = {}
     if re.search(r"\b(publications?|references?)\b", question):
-        result["professional"] = source.get("professional") or {}
+        for key in ("publications", "references"):
+            if professional.get(key) is not None:
+                selected_professional[key] = professional.get(key)
+    if re.search(r"\b(english proficiency|proficiency in english|fluent in english)\b", question):
+        if professional.get("english_proficiency") is not None:
+            selected_professional["english_proficiency"] = professional.get("english_proficiency")
+    if selected_professional:
+        result["professional"] = selected_professional
+    documents = source.get("documents") or {}
+    if re.search(r"\b(unofficial )?transcript\b", question):
+        if documents.get("unofficial_transcript"):
+            result["documents"] = {"unofficial_transcript": documents.get("unofficial_transcript")}
+    events = source.get("events") or {}
+    if re.search(r"\bneurips\s*2026\b", question):
+        if events.get("neurips_2026"):
+            result["events"] = {"neurips_2026": events.get("neurips_2026")}
     companies = {}
     for company, facts in (source.get("company_facts") or {}).items():
         if _company_matches(company, question, company_context):

@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 
+import pytest
 import yaml
 from pathlib import Path
 from unittest import mock
@@ -13,6 +14,109 @@ import ashby  # noqa: E402
 import greenhouse  # noqa: E402
 import smartrecruiters  # noqa: E402
 import workday  # noqa: E402
+
+
+APPROVED_AUG_25 = {
+    "version": 1,
+    "legal": {
+        "security_clearance": "None",
+        "us_dod_employment_after_2008_01_28": False,
+        "self_or_family_or_business_partner_government_employment": False,
+    },
+    "professional": {
+        "english_proficiency": "Native or bilingual",
+        "publications": [],
+    },
+    "documents": {
+        "unofficial_transcript": {
+            "available": True,
+            "application_upload_authorized": True,
+        },
+    },
+    "events": {
+        "neurips_2026": {"attending": False},
+    },
+    "availability": {
+        "default_start_date": "June 2028",
+        "summer_2027": {
+            "pursue": True,
+            "start": "June 2027",
+            "end": "August 2027",
+        },
+    },
+    "company_facts": {
+        "Availity": {
+            "household_employment": False,
+            "prior_application": False,
+        },
+        "Point72": {"prior_application": False},
+    },
+}
+
+
+@pytest.mark.parametrize(("label", "section", "key"), [
+    ("What level is your US government security clearance?", "legal", "security_clearance"),
+    (
+        "Were you a US Department of Defense employee on or after January 28, 2008?",
+        "legal",
+        "us_dod_employment_after_2008_01_28",
+    ),
+    ("What is your English proficiency?", "professional", "english_proficiency"),
+    ("May we upload your unofficial transcript?", "documents", "unofficial_transcript"),
+    ("Will you attend NeurIPS 2026?", "events", "neurips_2026"),
+    ("When can you start?", "availability", "default_start_date"),
+])
+def test_relevant_application_answers_exposes_only_matching_new_fact(label, section, key):
+    result = qa.relevant_application_answers(
+        [{"id": "q", "label": label}], APPROVED_AUG_25,
+    )
+
+    assert result[section] == {key: APPROVED_AUG_25[section][key]}
+
+
+def test_new_sensitive_sections_are_not_exposed_to_unrelated_questions():
+    result = qa.relevant_application_answers(
+        [{"id": "q", "label": "Why do you want this role?"}], APPROVED_AUG_25,
+    )
+
+    assert "legal" not in result
+    assert "professional" not in result
+    assert "documents" not in result
+    assert "events" not in result
+    assert "availability" not in result
+
+
+def test_household_and_prior_application_facts_do_not_cross_company_contexts():
+    availity = qa.relevant_application_answers(
+        [{"id": "q", "label": "Do you have relatives employed by Availity?"}],
+        APPROVED_AUG_25,
+        company_context="Availity",
+    )
+    assert set(availity["company_facts"]) == {"Availity"}
+
+    unrelated = qa.relevant_application_answers(
+        [{"id": "q", "label": "Do you have relatives employed here?"}],
+        APPROVED_AUG_25,
+        company_context="Another Company",
+    )
+    assert "company_facts" not in unrelated
+
+
+def test_missing_new_structured_values_are_not_exposed():
+    approved = {
+        "version": 1,
+        "documents": {},
+        "events": {},
+        "availability": {},
+        "professional": {},
+        "legal": {},
+    }
+    result = qa.relevant_application_answers(
+        [{"id": "q", "label": "Upload your transcript and tell us your English proficiency."}],
+        approved,
+    )
+
+    assert result == {"version": 1}
 
 
 def test_application_answers_example_schema_covers_private_runtime_delta():
