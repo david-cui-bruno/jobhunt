@@ -4,6 +4,8 @@ from decimal import Decimal
 from pathlib import Path
 
 from compensation.models import CompensationResolution, EvidenceObservation, JobContext
+from compensation.normalize import extract_usd_observations, requested_period
+from compensation.resolve import resolve_observations
 from compensation.schema import ensure_compensation_schema, load_resolution, store_resolution
 from submission.database import connect_tracker
 
@@ -121,3 +123,149 @@ def test_ensure_compensation_schema_preserves_caller_transaction() -> None:
     assert conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='compensation_evidence'"
     ).fetchone() is None
+
+
+def employer(low: str, high: str, *, domain: str = "acme.com", period: str = "hour", currency: str = "USD", observed_at: int = 90) -> EvidenceObservation:
+    return EvidenceObservation(
+        url=f"https://{domain}/jobs/1",
+        domain=domain,
+        title="Acme Software Engineer Intern compensation",
+        low=Decimal(low),
+        high=Decimal(high),
+        point=None,
+        currency=currency,
+        period=period,
+        source_kind="employer",
+        observed_at=observed_at,
+    )
+
+
+def market(low: str, high: str, *, domain: str = "levels.fyi", period: str = "hour", currency: str = "USD", observed_at: int = 90) -> EvidenceObservation:
+    return EvidenceObservation(
+        url=f"https://{domain}/acme-intern-pay",
+        domain=domain,
+        title="Acme Software Engineer Intern New York pay",
+        low=Decimal(low),
+        high=Decimal(high),
+        point=None,
+        currency=currency,
+        period=period,
+        source_kind="market",
+        observed_at=observed_at,
+    )
+
+
+def market_point(point: str, *, domain: str = "levels.fyi", period: str = "hour", currency: str = "USD", observed_at: int = 90) -> EvidenceObservation:
+    return EvidenceObservation(
+        url=f"https://{domain}/acme-intern-pay",
+        domain=domain,
+        title="Acme Software Engineer Intern New York pay",
+        low=None,
+        high=None,
+        point=Decimal(point),
+        currency=currency,
+        period=period,
+        source_kind="market",
+        observed_at=observed_at,
+    )
+
+
+import pytest
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("$40-$50 per hour", ("40", "50", "hour")),
+    ("USD 90,000 to 110,000 per year", ("90000", "110000", "year")),
+    ("Pay is competitive", None),
+    ("€50,000 per year", None),
+    ("$50,000", None),
+    ("Compensation is USD $42.50 – USD $55.25 hourly", ("42.50", "55.25", "hour")),
+    ("Range is 40 to 50 per hour", None),
+    ("$50-$40 per hour", None),
+    ("$4-$6 per hour", None),
+    ("$1,200,000-$1,300,000 annual", None),
+])
+def test_extract_usd_ranges_is_conservative(text, expected):
+    rows = extract_usd_observations(
+        text, url="https://levels.fyi/x", title="x", source_kind="market", observed_at=100,
+    )
+    if expected is None:
+        assert rows == []
+    else:
+        assert (str(rows[0].low), str(rows[0].high), rows[0].period) == expected
+        assert rows[0].currency == "USD"
+        assert rows[0].domain == "levels.fyi"
+
+
+@pytest.mark.parametrize(("question", "expected"), [
+    ("What is your desired hourly rate?", "hour"),
+    ("Requested rate", "hour"),
+    ("What annual base salary do you expect?", "year"),
+    ("Desired yearly compensation", "year"),
+    ("Desired compensation", None),
+])
+def test_requested_period_classifies_explicit_periods(question, expected):
+    assert requested_period(question) == expected
+
+
+def test_exact_employer_range_midpoint_wins():
+    result = resolve_observations(context(), [employer("42", "58"), market("40", "50")], now=100)
+    assert result.amount == Decimal("50")
+    assert result.method == "employer_midpoint"
+    assert result.expires_at == 100 + 30 * 86400
+
+
+def test_multiple_employer_ranges_fall_back_to_market_median():
+    result = resolve_observations(
+        context(),
+        [employer("42", "58"), employer("43", "59"), market("40", "50"), market("44", "54", domain="indeed.com")],
+        now=100,
+    )
+    assert result.amount == Decimal("47")
+    assert result.method == "market_median"
+
+
+def test_two_independent_domains_resolve_market_median():
+    rows = [market("40", "50", domain="levels.fyi"), market("44", "54", domain="indeed.com")]
+    result = resolve_observations(context(), rows, now=100)
+    assert result.amount == Decimal("47")
+    assert result.method == "market_median"
+
+
+@pytest.mark.parametrize("rows", [
+    [market("40", "50", domain="levels.fyi")],
+    [market("40", "50", domain="levels.fyi"), market("45", "55", domain="levels.fyi")],
+    [market("20", "25"), market("70", "80", domain="indeed.com")],
+    [market("40", "50", currency="EUR"), market("44", "54", domain="indeed.com")],
+])
+def test_insufficient_or_inconsistent_market_evidence_fails_closed(rows):
+    assert resolve_observations(context(), rows, now=100) is None
+
+
+def test_converts_annual_to_hourly_only_with_explicit_periods():
+    rows = [market("83200", "104000", domain="levels.fyi", period="year"), market("44", "54", domain="indeed.com")]
+    result = resolve_observations(context(), rows, now=100)
+    assert result.amount == Decimal("47")
+
+
+def test_converts_hourly_to_annual_and_rounds_to_nearest_thousand():
+    annual_context = dataclasses.replace(context(), period="year")
+    rows = [market("40", "50", domain="levels.fyi"), market("44", "54", domain="indeed.com")]
+    result = resolve_observations(annual_context, rows, now=100)
+    assert result.amount == Decimal("98000")
+
+
+def test_rejects_context_incompatible_observations_before_arithmetic():
+    rows = [
+        market("40", "50", domain="levels.fyi"),
+        dataclasses.replace(market("44", "54", domain="indeed.com"), title="OtherCo senior engineer San Francisco"),
+    ]
+    assert resolve_observations(context(), rows, now=100) is None
+
+
+def test_uses_market_points_and_rejects_wide_spread_after_dedupe():
+    ok = [market_point("45", domain="levels.fyi"), market_point("49", domain="indeed.com")]
+    assert resolve_observations(context(), ok, now=100).amount == Decimal("47")
+
+    wide = [market_point("25", domain="levels.fyi"), market_point("51", domain="indeed.com")]
+    assert resolve_observations(context(), wide, now=100) is None
