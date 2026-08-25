@@ -26,6 +26,7 @@ UGX USD USN UYI UYU UYW UZS VED VES VND VUV WST XAF XAG XAU XBA XBB XBC
 XBD XCD XDR XOF XPD XPF XPT XSU XTS XUA XXX YER ZAR ZMW ZWL
 """.split())
 _FOREIGN_CODES = {code.lower() for code in _CURRENCY_CODES if code != "USD"}
+_COMMON_FOREIGN_CODES = {"cad", "aud", "nzd", "hkd", "mxn", "gbp", "eur", "jpy", "cny", "inr", "chf"}
 _FOREIGN_WORDS = {
     "canadian dollars",
     "australian dollars",
@@ -74,11 +75,11 @@ def _has_disqualifying_currency_qualifier(text: str, start: int, end: int, match
     qualifier = qualifier.rstrip("$")
     if re.fullmatch(r"[A-Z]{1,3}", qualifier) and qualifier != "USD":
         return True
-    if qualifier.lower() in _FOREIGN_CODES:
+    if qualifier.lower() in _COMMON_FOREIGN_CODES:
         return True
 
     adjacent = text[max(0, start - 4):end + 8]
-    if re.search(r"\b(?:%s)\b" % "|".join(sorted(_FOREIGN_CODES)), adjacent, re.I):
+    if re.search(r"\b(?:%s)\b" % "|".join(sorted(_COMMON_FOREIGN_CODES)), adjacent, re.I):
         return True
     if re.match(r"[A-Z]{1,3}\$", adjacent) and not adjacent.startswith("USD"):
         return True
@@ -106,10 +107,12 @@ def _has_disqualifying_currency_label(question: str) -> bool:
     for pattern in code_patterns:
         for match in re.finditer(pattern, question, re.I):
             if match.group(1).lower() in _FOREIGN_CODES:
+                if re.match(r"\s+(?:role|position|job|developer|engineer)\b", question[match.end():], re.I):
+                    continue
                 return True
 
     lowered = question.lower()
-    if re.search(r"\b(?:%s)\b" % "|".join(sorted(_FOREIGN_CODES)), lowered):
+    if re.search(r"\b(?:%s)\b" % "|".join(sorted(_COMMON_FOREIGN_CODES)), lowered):
         return True
     return any(word in lowered for word in _FOREIGN_WORDS)
 
