@@ -40,7 +40,7 @@ APPROVED_AUG_25 = {
         "default_start_date": "05/15/2027",
         "summer_2027": {
             "pursue": True,
-            "start": "June 2027",
+            "start": "05/15/2027",
             "end": "August 2027",
         },
     },
@@ -124,6 +124,91 @@ def test_company_scoped_prior_application_does_not_leak_to_similarly_named_emplo
         dict(control, company_context="American Fidelity National Bank"),
         "No",
         approved_answers=APPROVED_AUG_25,
+    )
+
+
+def test_clearance_no_clearance_synonyms_require_approved_no_clearance_fact():
+    control = {
+        "id": "clear",
+        "label": "What level is your US government security clearance?",
+        "options": ["None", "No clearance", "Secret"],
+    }
+    missing = json.loads(json.dumps(APPROVED_AUG_25))
+    missing["legal"]["security_clearance"] = None
+    mismatch = json.loads(json.dumps(APPROVED_AUG_25))
+    mismatch["legal"]["security_clearance"] = "Public Trust"
+
+    assert qa.explicit_approved_answers([control], approved_answers=missing) == []
+    assert qa.answer_requires_manual(control, "None", approved_answers=missing)
+    assert qa.explicit_approved_answers([control], approved_answers=mismatch) == []
+    assert qa.answer_requires_manual(control, "None", approved_answers=mismatch)
+
+
+def test_non_government_employment_wording_stays_manual():
+    control = {
+        "id": "nongov",
+        "label": "Have you or your immediate family worked for a non-government entity?",
+        "options": ["Yes", "No"],
+    }
+
+    assert qa.explicit_approved_answers([control], approved_answers=APPROVED_AUG_25) == []
+    assert qa.answer_requires_manual(control, "No", approved_answers=APPROVED_AUG_25)
+
+
+def test_empty_company_context_does_not_authorize_question_substring_company_fact():
+    control = {
+        "id": "prior",
+        "label": "Have you previously applied to Point72?",
+        "options": ["Yes", "No"],
+    }
+
+    assert qa.explicit_approved_answers([control], approved_answers=APPROVED_AUG_25) == []
+    assert qa.answer_requires_manual(control, "No", approved_answers=APPROVED_AUG_25)
+
+
+def test_company_context_accepts_ordinary_legal_suffix_but_not_descriptive_suffix():
+    availity_llc = {
+        "id": "prior-availity",
+        "label": "Have you previously applied here?",
+        "options": ["Yes", "No"],
+        "company_context": "Availity LLC",
+    }
+    american_fidelity_bank = {
+        "id": "prior-af-bank",
+        "label": "Have you previously applied here?",
+        "options": ["Yes", "No"],
+        "company_context": "American Fidelity National Bank",
+    }
+
+    assert qa.explicit_approved_answers(
+        [availity_llc], company_context="Availity LLC", approved_answers=APPROVED_AUG_25,
+    ) == [{"id_or_name": "prior-availity", "answer": "No"}]
+    assert not qa.answer_requires_manual(
+        availity_llc, "No", approved_answers=APPROVED_AUG_25,
+    )
+    assert qa.explicit_approved_answers(
+        [american_fidelity_bank], company_context="American Fidelity National Bank", approved_answers=APPROVED_AUG_25,
+    ) == []
+    assert qa.answer_requires_manual(
+        american_fidelity_bank, "No", approved_answers=APPROVED_AUG_25,
+    )
+
+
+def test_internship_start_date_renders_exactly_and_rejects_contradictions():
+    control = {
+        "id": "internship-start",
+        "label": "What is your earliest internship start date?",
+        "options": [],
+    }
+
+    assert qa.explicit_approved_answers(
+        [control], approved_answers=APPROVED_AUG_25,
+    ) == [{"id_or_name": "internship-start", "answer": "05/15/2027"}]
+    assert not qa.answer_requires_manual(
+        control, "05/15/2027", approved_answers=APPROVED_AUG_25,
+    )
+    assert qa.answer_requires_manual(
+        control, "06/01/2027", approved_answers=APPROVED_AUG_25,
     )
 
 
@@ -1739,11 +1824,11 @@ class QaManualPolicyTest(unittest.TestCase):
             controls, answers, approved_answers=self.APPROVED
         )
         self.assertEqual(
-            {"dob", "pronouns", "product", "prior", "hybrid", "offer"},
+            {"dob", "pronouns", "hybrid", "offer"},
             {answer["id_or_name"] for answer in allowed},
         )
         self.assertEqual(
-            {"deadline", "comp"},
+            {"product", "prior", "deadline", "comp"},
             {answer["id_or_name"] for answer in blocked},
         )
 

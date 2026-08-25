@@ -74,15 +74,31 @@ def _company_key(value: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
 
 
+def _company_match_key(value: object) -> str:
+    ordinary_suffixes = {
+        "co", "company", "corp", "corporation", "inc", "incorporated",
+        "llc", "llp", "lp", "ltd", "limited", "plc",
+    }
+    words = [
+        word for word in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if word not in ordinary_suffixes
+    ]
+    return "".join(words)
+
+
 def _company_matches(company: object, question: str, company_context: str = "") -> bool:
     key = _company_key(company)
     context_key = _company_key(company_context)
+    match_key = _company_match_key(company)
+    context_match_key = _company_match_key(company_context)
     if not key:
         return False
     # When the caller knows which employer owns the form, require an exact
     # normalized match.  Substring matching leaked facts between distinct firms
     # such as Crowe/Crowell & Moring and Sentry/Sentry Insurance.
     if context_key == key:
+        return True
+    if context_match_key and context_match_key == match_key:
         return True
     if context_key and (context_key in key or key in context_key):
         return False
@@ -457,7 +473,7 @@ HARD_BLOCKED_PATTERNS = [
     r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|bonus|equity|expected (?:pay|salary)|desired (?:pay|salary)|(?:pay|compensation) expectations?)\b",
     r"\b(offer deadline|exploding offer|outstanding offers?|competing offers?|pending offers?|deadline to accept)\b",
     r"\b(referral|referred|refer you|know anyone|previously employed|prior employment|worked (?:at|for)|former(?:\s+\w+){0,4}\s+(?:employee|contingent worker)|current employee)\b",
-    r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|prior application|previous application)\b",
+    r"\b(previously interviewed|interviewed (?:at|with|for)|applied (?:to|with)|previously applied|prior application|previous application)\b",
     r"\b(member of your household|household member|family member|relative)\b.*\b(employed|worked|employee)\b",
     r"\b(non[- ]?compete|notice period|conflict of interest|restrictive (?:agreement|covenant)|moonlighting|outside employment)\b|\bagreement with (?:your )?(?:current|any other) employer\b",
     r"\b(outside\s+work)\b",
@@ -468,6 +484,7 @@ HARD_BLOCKED_PATTERNS = [
     r"\b(english proficiency|proficiency in english|fluent in english)\b",
     r"\bneurips\s*2026\b",
     r"\b(?:when can you start|desired start date|available to start)\b",
+    r"\binternship\b.*\bstart(?: date)?\b",
     r"\btranscript\b.*\b(upload|authorize|authorise|consent|may)\b|\b(may|authorize|authorise|consent)\b.*\btranscript\b",
     r"\bstandardized test\b|\b(?:sat|act)\b.{0,30}\b(?:score|result|test|take|taken)s?\b|\b(?:score|result|test|take|taken)s?\b.{0,30}\b(?:sat|act)\b",
     r"\b(disability|disabled|impairment|medical condition|health condition|accommodation history)\b",
@@ -526,6 +543,11 @@ def _answer_boolean(value: object) -> bool | None:
     return None
 
 
+def _no_clearance_value(value: object) -> bool:
+    text = re.sub(r"[^a-z0-9]+", " ", str(value or "").strip().lower()).strip()
+    return text in {"none", "no clearance", "no security clearance"}
+
+
 def _date_parts(value: object) -> tuple[int, int | None, int] | None:
     text = str(value or "").strip()
     full = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", text)
@@ -553,6 +575,8 @@ _MISSING = object()
 def _company_fact(control: dict, field: str, answers: dict) -> object:
     question = _control_question_text(control).lower()
     company_context = str(control.get("company_context") or "")
+    if not company_context.strip():
+        return _MISSING
     for company, facts in (answers.get("company_facts") or {}).items():
         if (_company_matches(company, question, company_context)
                 and isinstance(facts, dict) and facts.get(field) is not None):
@@ -1179,12 +1203,18 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             pass
         elif re.search(r"\b(security clearance|clearance level|public trust|secret clearance|top secret|ts/sci)\b", question):
             expected = str(legal.get("security_clearance") or "").strip()
-            answer = _first_matching_option([expected, "No clearance", "None"], options) if options else expected or None
+            if expected:
+                candidates = [expected]
+                if _no_clearance_value(expected):
+                    candidates.extend(["No clearance", "None"])
+                answer = _first_matching_option(candidates, options) if options else expected
         elif re.search(r"\bdepartment of defense|\bdod\b", question) and re.search(r"\bemploy", question):
             expected = legal.get("us_dod_employment_after_2008_01_28")
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
-        elif re.search(r"\bgovernment (?:entity|agency|employment)\b", question) and re.search(r"\b(family|business partner|worked|employ)", question):
+        elif (re.search(r"\bgovernment (?:entity|agency|employment)\b", question)
+              and not re.search(r"\bnon[- ]government\b", question)
+              and re.search(r"\b(family|business partner|worked|employ)", question)):
             expected = legal.get("self_or_family_or_business_partner_government_employment")
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
@@ -1203,6 +1233,9 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             answer = _render_boolean(expected, options)
         elif re.search(r"\b(?:when can you start|desired start date|available to start)\b", question):
             answer = availability.get("default_start_date")
+        elif re.search(r"\binternship\b", question) and re.search(r"\bstart(?: date)?\b", question):
+            summer_2027 = availability.get("summer_2027") or {}
+            answer = summer_2027.get("start")
         elif hometown_component:
             expected = _company_hometown_value(
                 control, hometown_component, approved
@@ -1503,7 +1536,7 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             )
             if isinstance(expected, bool):
                 answer = _render_boolean(expected, options)
-        elif re.search(r"\b(applied (?:to|with)|prior application|previous application)\b", question):
+        elif re.search(r"\b(applied (?:to|with)|previously applied|prior application|previous application)\b", question):
             expected = _company_fact_first(
                 control, approved, "prior_application", "prior_interview_or_application",
             )
@@ -1720,13 +1753,20 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
     if re.search(r"\b(security clearance|clearance level|public trust|secret clearance|top secret|ts/sci)\b", question):
         expected = str(legal.get("security_clearance") or "").strip()
         options = [str(option) for option in control.get("options") or []]
-        approved_answer = (_first_matching_option([expected, "No clearance", "None"], options)
+        if not expected:
+            return False
+        candidates = [expected]
+        if _no_clearance_value(expected):
+            candidates.extend(["No clearance", "None"])
+        approved_answer = (_first_matching_option(candidates, options)
                            if options else expected)
         return bool(approved_answer and approved_answer.casefold() == answer_text.strip().casefold())
     if re.search(r"\bdepartment of defense|\bdod\b", question) and re.search(r"\bemploy", question):
         expected = legal.get("us_dod_employment_after_2008_01_28")
         return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
-    if re.search(r"\bgovernment (?:entity|agency|employment)\b", question) and re.search(r"\b(family|business partner|worked|employ)", question):
+    if (re.search(r"\bgovernment (?:entity|agency|employment)\b", question)
+            and not re.search(r"\bnon[- ]government\b", question)
+            and re.search(r"\b(family|business partner|worked|employ)", question)):
         expected = legal.get("self_or_family_or_business_partner_government_employment")
         return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
     if re.search(r"\b(english proficiency|proficiency in english|fluent in english)\b", question):
@@ -1745,6 +1785,10 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return _answer_boolean(answer_text) is expected
     if re.search(r"\b(?:when can you start|desired start date|available to start)\b", question):
         expected = str(availability.get("default_start_date") or "").strip()
+        return bool(expected and expected.casefold() == answer_text.strip().casefold())
+    if re.search(r"\binternship\b", question) and re.search(r"\bstart(?: date)?\b", question):
+        summer_2027 = availability.get("summer_2027") or {}
+        expected = str(summer_2027.get("start") or "").strip()
         return bool(expected and expected.casefold() == answer_text.strip().casefold())
     if re.search(r"(?:\b18\+|\b18\s+(?:years? of age(?:\s+or (?:older|over))?|or (?:older|over)|and (?:older|over))\b|\bat least (?:age )?18\b)", question):
         birth = _date_parts(identity.get("date_of_birth"))
@@ -2044,7 +2088,7 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             control, approved, "prior_interview", "prior_interview_or_application",
         )
         return isinstance(expected, bool) and _answer_boolean(answer) is expected
-    if re.search(r"\b(applied (?:to|with)|prior application|previous application)\b", question):
+    if re.search(r"\b(applied (?:to|with)|previously applied|prior application|previous application)\b", question):
         expected = _company_fact_first(
             control, approved, "prior_application", "prior_interview_or_application",
         )
@@ -2106,9 +2150,6 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             expected = "; ".join(str(item) for item in publications)
             return expected.lower() == answer_text.strip().lower()
         return False
-    if re.search(r"\b(security clearance|clearance level|secret clearance|top secret|ts/sci|public trust)\b", question):
-        expected = str(legal.get("security_clearance") or "").strip()
-        return bool(expected and expected.casefold() == answer_text.strip().casefold())
     if re.search(r"\btravel\b", question):
         return preferences.get("travel") is not None
     if re.search(r"\b(schedule|hours|days? (?:a|per) week|in[- ]?office|on[- ]?site|hybrid)\b", question):
