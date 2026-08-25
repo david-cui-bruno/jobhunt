@@ -329,8 +329,8 @@ EXTRACT_JS = r"""
     if (role === 'combobox') {
       const expanded = el.getAttribute('aria-expanded') === 'true';
       const committed = el.getAttribute('data-jobhunt-committed-value') || el.getAttribute('data-committed-value') || el.getAttribute('data-value') || '';
-      if (!expanded && String(committed || '').trim()) chosen = String(committed).trim().slice(0, 200);
-      else if (!expanded && el.value && (el.hasAttribute('data-jobhunt-committed-value') || el.hasAttribute('data-committed-value') || el.hasAttribute('data-value'))) chosen = el.value.slice(0, 200);
+      const current = String(el.value || '').trim();
+      if (!expanded && current && String(committed || '').trim()) chosen = current.slice(0, 200);
     }
     controls.push({
       id: isGroup ? '' : (el.id || ''), name: el.name || '', tag: el.tagName.toLowerCase(),
@@ -2401,13 +2401,56 @@ def _cx_committed_value(el) -> str:
         return str(el.evaluate("""
             el => {
                 const committed = el.getAttribute('data-jobhunt-committed-value') || el.getAttribute('data-committed-value') || el.getAttribute('data-value');
-                if (committed) return committed;
+                const current = (el.value || '').trim();
+                if (committed && current) return current;
                 const expanded = el.getAttribute('aria-expanded') === 'true';
-                return expanded ? '' : (el.value || '').trim();
+                return expanded ? '' : current;
             }
         """) or "")
     except Exception:
         return ""
+
+
+def _wait_for_stable_cx_commit(page, selector: str, target: str) -> bool:
+    """Accept a cx-select choice only after it survives a reactive re-render window."""
+    consecutive_matches = 0
+    current = None
+    for _ in range(10):
+        page.wait_for_timeout(125)
+        try:
+            candidates = page.locator(selector)
+            if candidates.count() != 1:
+                consecutive_matches = 0
+                continue
+            current = candidates.first
+            if _best_option(target, [_cx_committed_value(current)]):
+                consecutive_matches += 1
+            else:
+                consecutive_matches = 0
+        except Exception:
+            consecutive_matches = 0
+        if consecutive_matches >= 5:
+            break
+    if consecutive_matches < 5 or current is None:
+        return False
+
+    try:
+        current.evaluate(
+            "(el, value) => el.setAttribute('data-jobhunt-committed-value', value)",
+            target,
+        )
+        page.wait_for_timeout(250)
+        candidates = page.locator(selector)
+        if candidates.count() != 1:
+            return False
+        verified = candidates.first
+        marker = verified.get_attribute("data-jobhunt-committed-value") or ""
+        return bool(
+            _best_option(target, [marker])
+            and _best_option(target, [_cx_committed_value(verified)])
+        )
+    except Exception:
+        return False
 
 
 def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[str], list[str]]:
@@ -2564,12 +2607,7 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                             safe_options = _safe_controlled_popup_options(page, el)
                             scoped_target = _unique_best_option(ans, safe_options)
                         if scoped_target and _click_safe_controlled_popup_option(page, el, scoped_target):
-                            for _ in range(8):
-                                page.wait_for_timeout(125)
-                                if _best_option(scoped_target, [_cx_committed_value(el)]):
-                                    el.evaluate("(el, value) => el.setAttribute('data-jobhunt-committed-value', value)", scoped_target)
-                                    ok = True
-                                    break
+                            ok = _wait_for_stable_cx_commit(page, sel, scoped_target)
                     (filled if ok else failed).append(c["label"] or a["id_or_name"])
                     continue
                 selected = el.evaluate(SELECTED)

@@ -351,6 +351,63 @@ def test_cx_select_uses_real_pointer_click_and_survives_transient_untrusted_valu
             browser.close()
 
 
+def test_cx_select_does_not_report_success_when_oracle_rerender_clears_late_commit():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+    <label for="degree">Degree Program</label>
+    <input id="degree" role="combobox" aria-controls="degreePopup" aria-expanded="false" value="">
+    <div id="degreePopup" style="display:none">
+      <div role="gridcell" class="cx-select__list-item">Bachelor (BA/BS)</div>
+      <div role="gridcell" class="cx-select__list-item">Master (MA/MS)</div>
+    </div>
+    <script>
+      function bindDegree(input) {
+        input.addEventListener('click', () => {
+          input.setAttribute('aria-expanded', 'true');
+          degreePopup.style.display = 'block';
+        });
+      }
+      bindDegree(degree);
+      degreePopup.addEventListener('click', (event) => {
+        if (!event.target.matches('[role=gridcell]')) return;
+        const selected = event.target.innerText.trim();
+        degree.value = selected;
+        degree.setAttribute('aria-expanded', 'false');
+        degreePopup.style.display = 'none';
+        setTimeout(() => {
+          const replacement = degree.cloneNode(true);
+          replacement.value = '';
+          replacement.removeAttribute('data-jobhunt-committed-value');
+          replacement.removeAttribute('data-committed-value');
+          degree.replaceWith(replacement);
+          bindDegree(replacement);
+        }, 400);
+      });
+    </script>
+    """
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            controls = page.evaluate(qa.EXTRACT_JS)
+            qa.harvest_select_options(page, controls)
+
+            filled, failed = qa.fill_answers(
+                page, controls,
+                [{"id_or_name": "degree", "label": "Degree Program", "answer": "Bachelor (BA/BS)"}],
+            )
+            page.wait_for_timeout(700)
+
+            assert filled == []
+            assert failed == ["Degree Program"]
+            assert page.locator("#degree").input_value() == ""
+            assert page.locator("#degree").get_attribute("data-jobhunt-committed-value") is None
+        finally:
+            browser.close()
+
+
 def test_cx_select_fill_fails_closed_for_ambiguous_or_missing_scoped_options():
     from playwright.sync_api import sync_playwright
 
@@ -553,6 +610,19 @@ def test_committed_collapsed_cx_select_is_chosen_and_skipped_by_get_answers(monk
     assert controls[0]["chosen"] == "Computer Science"
     monkeypatch.setattr(qa, "_model_answers", lambda model_controls, company_context="": (_ for _ in ()).throw(AssertionError("committed control reopened")))
     assert qa.get_answers(controls) == []
+
+
+def test_empty_cx_select_with_stale_jobhunt_marker_remains_unanswered():
+    controls = _extract_from_html(
+        """
+        <label for="degree">Degree Program</label>
+        <input id="degree" role="combobox" aria-expanded="false" value="" data-jobhunt-committed-value="Computer Science">
+        """
+    )
+
+    assert controls[0]["type"] == "combobox"
+    assert controls[0]["value"] == ""
+    assert controls[0]["chosen"] == ""
 
 
 def test_expanded_cx_select_typed_text_stays_uncommitted_unanswered():
