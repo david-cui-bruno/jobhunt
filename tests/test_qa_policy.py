@@ -24,7 +24,7 @@ APPROVED_AUG_25 = {
         "self_or_family_or_business_partner_government_employment": False,
     },
     "professional": {
-        "english_proficiency": "Native or bilingual",
+        "english_proficiency": "Fluent",
         "publications": [],
     },
     "documents": {
@@ -37,7 +37,7 @@ APPROVED_AUG_25 = {
         "neurips_2026": {"attending": False},
     },
     "availability": {
-        "default_start_date": "June 2028",
+        "default_start_date": "05/15/2027",
         "summer_2027": {
             "pursue": True,
             "start": "June 2027",
@@ -49,9 +49,82 @@ APPROVED_AUG_25 = {
             "household_employment": False,
             "prior_application": False,
         },
+        "Akuna Capital": {"prior_application": False},
+        "American Fidelity": {"prior_application": False},
         "Point72": {"prior_application": False},
     },
 }
+
+
+def test_august_25_facts_render_exactly_and_wrong_values_remain_manual():
+    controls = [
+        {"id": "clear", "label": "What level is your US government security clearance?", "options": ["None", "Public Trust", "Secret"]},
+        {"id": "dod", "label": "Were you a US Department of Defense employee on or after January 28, 2008?", "options": ["Yes", "No"]},
+        {"id": "gov", "label": "Have you or your immediate family or business partners worked for a government entity?", "options": ["Yes", "No"]},
+        {"id": "english", "label": "English proficiency", "options": ["Basic", "Conversational", "Fluent", "Native"]},
+        {"id": "neurips", "label": "Will you attend NeurIPS 2026?", "options": ["Yes", "No"]},
+        {"id": "transcript", "label": "May we upload your unofficial transcript?", "options": ["Yes", "No"]},
+        {"id": "start", "label": "When can you start?", "options": []},
+    ]
+    answers = qa.explicit_approved_answers(controls, approved_answers=APPROVED_AUG_25)
+    assert {a["id_or_name"]: a["answer"] for a in answers} == {
+        "clear": "None", "dod": "No", "gov": "No", "english": "Fluent",
+        "neurips": "No", "transcript": "Yes", "start": "05/15/2027",
+    }
+    assert qa.answer_requires_manual(controls[0], "Secret", approved_answers=APPROVED_AUG_25)
+    assert qa.answer_requires_manual(controls[1], "Yes", approved_answers=APPROVED_AUG_25)
+    assert qa.answer_requires_manual(controls[2], "Yes", approved_answers=APPROVED_AUG_25)
+
+
+def test_official_transcript_does_not_borrow_unofficial_upload_authorization():
+    control = {
+        "id": "official-transcript",
+        "label": "May we upload your official transcript?",
+        "options": ["Yes", "No"],
+    }
+
+    assert qa.explicit_approved_answers([control], approved_answers=APPROVED_AUG_25) == []
+    assert qa.answer_requires_manual(control, "Yes", approved_answers=APPROVED_AUG_25)
+    assert qa.answer_requires_manual(control, "No", approved_answers=APPROVED_AUG_25)
+
+
+@pytest.mark.parametrize(("company", "label"), [
+    ("Point72", "Have you previously applied to Point72?"),
+    ("Akuna Capital", "Have you applied to this role at Akuna previously?"),
+    ("Availity", "Have you previously applied to Availity?"),
+    ("American Fidelity", "Have you previously applied to American Fidelity?"),
+])
+def test_company_scoped_prior_application_renders_no_only_for_intended_company(company, label):
+    control = {"id": "prior", "label": label, "options": ["Yes", "No"]}
+
+    rendered = qa.explicit_approved_answers(
+        [control], company_context=company, approved_answers=APPROVED_AUG_25,
+    )
+
+    assert rendered == [{"id_or_name": "prior", "answer": "No"}]
+    assert not qa.answer_requires_manual(
+        dict(control, company_context=company), "No", approved_answers=APPROVED_AUG_25,
+    )
+    assert qa.answer_requires_manual(
+        dict(control, company_context=company), "Yes", approved_answers=APPROVED_AUG_25,
+    )
+
+
+def test_company_scoped_prior_application_does_not_leak_to_similarly_named_employer():
+    control = {
+        "id": "prior",
+        "label": "Have you previously applied to American Fidelity National Bank?",
+        "options": ["Yes", "No"],
+    }
+
+    assert qa.explicit_approved_answers(
+        [control], company_context="American Fidelity National Bank", approved_answers=APPROVED_AUG_25,
+    ) == []
+    assert qa.answer_requires_manual(
+        dict(control, company_context="American Fidelity National Bank"),
+        "No",
+        approved_answers=APPROVED_AUG_25,
+    )
 
 
 @pytest.mark.parametrize(("label", "section", "key"), [
