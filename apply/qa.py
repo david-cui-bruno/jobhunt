@@ -243,7 +243,12 @@ EXTRACT_JS = """
   };
   const groupInfo = (el) => {
     // checkbox/radio group: same name; group question label = wrapper's first label-ish text
-    const boxes = [...document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)];
+    const groupWrap = el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question], div[class*=oj-flex]');
+    const groupKey = el.name || el.getAttribute('data-qa-group-key') || (groupWrap?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (!el.name && groupKey) {
+      [...groupWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`)].forEach(b => b.setAttribute('data-qa-group-key', groupKey));
+    }
+    const boxes = el.name ? [...document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)] : [...(groupWrap || el.parentElement).querySelectorAll(`input[type="${CSS.escape(el.type)}"]`)];
     // ARIA standard (Workable et al.): the group or its radiogroup wrapper
     // carries aria-labelledby pointing at the question node
     let q = '';
@@ -276,15 +281,19 @@ EXTRACT_JS = """
         if (t && t.trim().length > 10) { q = t; break; }
       }
     }
-    const opts = boxes.map(b => b.labels?.[0]?.innerText?.trim() || b.value).filter(Boolean);
+    const ownOptionText = (b) => (b.labels?.[0]?.innerText || b.closest('label')?.innerText || b.parentElement?.innerText || b.value || '').replace(/\s+/g, ' ').trim();
+    const opts = boxes.map(b => ownOptionText(b)).filter(Boolean);
     return { q: (q || '').replace(/\\s+/g, ' ').trim().slice(0, 500), opts };
   };
   document.querySelectorAll('input, select, textarea, [role=combobox]').forEach(el => {
     if (el.type === 'hidden' || el.type === 'file') return;
     const isYesNo = el.type === 'checkbox' && el.closest('[class*=yesno]');
     if (el.offsetParent === null && !isYesNo) return;
-    const isGroup = (el.type === 'checkbox' || el.type === 'radio') && el.name;
-    const key = isGroup ? el.name : (el.id || el.name || labelFor(el));
+    const role = el.getAttribute('role');
+    const groupWrap = (el.type === 'checkbox' || el.type === 'radio') ? el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question], div[class*=oj-flex]') : null;
+    const namelessGroup = (el.type === 'checkbox' || el.type === 'radio') && !el.name && groupWrap && groupWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`).length > 1;
+    const isGroup = (el.type === 'checkbox' || el.type === 'radio') && (el.name || namelessGroup);
+    const key = isGroup ? (el.name || groupWrap.innerText.replace(/\s+/g, ' ').trim().slice(0, 120)) : (el.id || el.name || labelFor(el));
     if (!key || seen.has(key)) return;
     seen.add(key);
     let options = [];
@@ -298,6 +307,7 @@ EXTRACT_JS = """
       const g = groupInfo(el);
       label = g.q || label;
       options = g.opts.slice(0, 60);
+      if (options.some(option => option && option.toLowerCase() === String(label || '').toLowerCase())) continue; // label === option fails closed
       // Ashby yes/no widget: hidden checkbox with Yes/No buttons
       if (el.closest('[class*=yesno]')) options = ['Yes', 'No'];
     }
@@ -308,12 +318,12 @@ EXTRACT_JS = """
     if (cvs?.length) chosen = [...cvs].map(x => x.innerText.trim()).filter(Boolean).join(' | ').slice(0, 200);
     controls.push({
       id: isGroup ? '' : (el.id || ''), name: el.name || '', tag: el.tagName.toLowerCase(),
-      type: isGroup ? 'group-' + el.type : (el.type || el.getAttribute('role') || ''),
+      type: isGroup ? 'group-' + el.type : (role || el.type || ''),
       cls: el.className || '',
       chosen,
       label,
       required: el.required || el.getAttribute('aria-required') === 'true',
-      value: (el.value && el.type !== 'checkbox' && el.type !== 'radio') ? el.value.slice(0, 100) : '',
+      value: (el.value && el.type !== 'checkbox' && el.type !== 'radio' && role !== 'combobox') ? el.value.slice(0, 100) : '',
       options,
     });
   });
@@ -2338,7 +2348,18 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                 # tick option(s) whose label matches; scope strictly to this input group
                 wanted = a["answer"] if isinstance(a["answer"], list) else [a["answer"]]
                 got = 0
-                boxes = page.locator(f"input[name=\"{c['name']}\"]")
+                if c.get("name"):
+                    boxes = page.locator(f"input[name=\"{c['name']}\"]")
+                else:
+                    lab = (c.get("label") or "").replace('"', '\\"')[:80]
+                    input_type = "radio" if c["type"] == "group-radio" else "checkbox"
+                    boxes = page.locator(
+                        f"[role=radiogroup]:has-text(\"{lab}\") input[type={input_type}], "
+                        f"[role=group]:has-text(\"{lab}\") input[type={input_type}], "
+                        f"fieldset:has-text(\"{lab}\") input[type={input_type}], "
+                        f"div[class*=question]:has-text(\"{lab}\") input[type={input_type}], "
+                        f"div[class*=oj-flex]:has-text(\"{lab}\") input[type={input_type}]"
+                    )
                 nb = boxes.count()
                 for w in wanted:
                     wl = str(w).lower()
@@ -2384,9 +2405,14 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                         return false;
                     }
                 """, ans)
-                if not handled and ans.lower() in ("yes", "true", "1", "on"):
+                if handled:
+                    ok = True
+                elif ans.lower() in ("yes", "true", "1", "on"):
                     el.check()
-                ok = True
+                    try:
+                        ok = bool(el.evaluate("el => !!el.checked"))
+                    except Exception:
+                        ok = True
             elif _is_react_select(c):
                 SELECTED = """
                     el => {

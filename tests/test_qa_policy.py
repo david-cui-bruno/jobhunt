@@ -2687,3 +2687,35 @@ class QaManualPolicyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_extract_js_groups_nameless_redwood_radios_by_human_ancestor_label():
+    src = qa.EXTRACT_JS
+    assert 'data-qa-group-key' in src
+    assert 'ownOptionText' in src
+    assert 'label === option' in src
+
+
+def test_fill_answers_standalone_radio_no_without_click_is_failed_not_filled():
+    class Keyboard:
+        def press(self, key): pass
+    class El:
+        def scroll_into_view_if_needed(self, timeout=None): pass
+        def evaluate(self, script, *args): return False
+        def check(self): raise AssertionError('No answer must not call check')
+    class Loc:
+        @property
+        def first(self): return El()
+    class Page:
+        keyboard = Keyboard()
+        def locator(self, selector): return Loc()
+        def wait_for_timeout(self, value): pass
+    controls = [{"id": "r-no", "name": "", "tag": "input", "type": "radio", "label": "No", "value": "", "chosen": ""}]
+    filled, failed = qa.fill_answers(Page(), controls, [{"id_or_name": "r-no", "answer": "No"}])
+    assert filled == []
+    assert failed == ["No"]
+
+
+def test_oracle_redwood_combobox_control_is_not_plain_text():
+    src = qa.EXTRACT_JS
+    assert "role || el.type" in src

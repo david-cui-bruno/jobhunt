@@ -658,7 +658,7 @@ def test_oracle_required_field_on_page_two_stops_before_next(fake_oracle, pdf):
     assert page.submit_clicks == 0
 
 
-def test_oracle_qa_failure_on_middle_page_stops_before_next_and_surfaces_label(fake_oracle, pdf, monkeypatch):
+def test_oracle_qa_failure_on_middle_page_is_telemetry_and_does_not_block_next(fake_oracle, pdf, monkeypatch):
     page = fake_oracle("multipage_four")
 
     def fail_page_two(page, controls, answers):
@@ -670,10 +670,10 @@ def test_oracle_qa_failure_on_middle_page_stops_before_next_and_surfaces_label(f
 
     result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-qa-page-two", dry_run=True)
 
-    assert result["outcome"] == "manual"
-    assert result["unanswered"] == ["Page 2 QA"]
+    assert result["reason"] == "dry run - did not submit"
+    assert result["unanswered"] == []
     assert result["qa_failed"] == ["Page 2 QA"]
-    assert page.next_clicks == 1
+    assert page.next_clicks == 3
     assert page.submit_clicks == 0
 
 
@@ -1886,3 +1886,21 @@ def test_oracle_preferred_full_name_is_owned_by_deterministic_basics_fill():
     assert oraclecloud._owned_oracle_control(
         {"id": "oj-dynamic-17", "name": "", "label": "Preferred Full Name"}
     ) is True
+
+
+def test_oracle_required_empty_js_groups_nameless_checked_radio_by_stable_label():
+    src = oraclecloud.REQUIRED_EMPTY_JS
+    assert 'data-qa-group-key' in src
+    assert "group.some(x => x.checked)" in src
+    assert "el.name || el.id" not in src
+
+
+def test_oracle_optional_qa_failed_does_not_block_progression(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("anonymous")
+    monkeypatch.setattr(oraclecloud, "_run_shared_qa_passes", lambda page, slug, url: ([], ["Optional marketing consent"]))
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-optional-qa", dry_run=True)
+    assert result["reason"] == "dry run - did not submit"
+    assert result["unanswered"] == []
+    assert result["qa_failed"] == ["Optional marketing consent"]
+    assert page.next_clicks == 0
+    assert page.submit_clicks == 0

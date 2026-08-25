@@ -88,14 +88,17 @@ REQUIRED_EMPTY_JS = r"""
       label = wrap?.querySelector('legend, label, [class*=label], [class*=question]')?.innerText || '';
       if (!label && wrap) label = (wrap.innerText || '').split('\n')[0] || '';
     }
-    return (label || el.name || el.id || 'unknown').replace(/\s+/g, ' ').trim().slice(0, 80);
+    return (label || 'unknown').replace(/\s+/g, ' ').trim().slice(0, 80);
   };
   const bad = [];
   document.querySelectorAll('[aria-required="true"], [required]').forEach(el => {
     if (el.getAttribute('aria-hidden') === 'true' || el.type === 'hidden' || el.type === 'file') return;
     if (el.offsetParent === null) return;
     if (el.type === 'checkbox' || el.type === 'radio') {
-      const group = [...document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)];
+      const wrap = el.closest('[role=radiogroup], [role=group], fieldset, div[class*=question], div[class*=oj-flex]');
+      const groupKey = el.name || el.getAttribute('data-qa-group-key') || (wrap?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!el.name && groupKey && wrap) [...wrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`)].forEach(x => x.setAttribute('data-qa-group-key', groupKey));
+      const group = el.name ? [...document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)] : [...(wrap || el.parentElement).querySelectorAll(`input[type="${CSS.escape(el.type)}"]`)];
       if (group.some(x => x.checked)) return;
     } else if (String(el.value || '').trim()) {
       return;
@@ -927,7 +930,7 @@ def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = Tru
                     return result
 
                 required_empty = page.evaluate(REQUIRED_EMPTY_JS)
-                unanswered = _merge_unique(list(required_empty or []), qa_failed)
+                unanswered = list(required_empty or [])
                 result["unanswered"] = unanswered
                 _record_filled_screenshot(result, page, slug)
                 if unanswered:
