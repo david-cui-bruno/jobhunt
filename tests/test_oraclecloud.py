@@ -412,7 +412,7 @@ class _FakePage:
             if self.variant.startswith("multipage"):
                 visible = selector == oraclecloud.SUBMIT_SELECTORS[0] and self.app_page_index == self._multipage_total_pages()
             else:
-                visible = self.variant not in {"missing_submit"} and selector == oraclecloud.SUBMIT_SELECTORS[0]
+                visible = self.variant not in {"missing_submit", "accessible_submit"} and selector == oraclecloud.SUBMIT_SELECTORS[0]
             count = 2 if self.variant == "ambiguous_submit" and visible else (1 if visible else 0)
             return _FakeLocator(self, "submit", visible=visible, count=count, on_click=self._click_submit)
         if "Submit" in selector or "submit" in selector:
@@ -448,6 +448,8 @@ class _FakePage:
             count = 2 if self.variant == "email_gate_identity_ambiguous_verify" else 1
             self.verify_buttons = [_FakeLocator(self, "verify", visible=True, on_click=self._click_verify) for _ in range(count)]
             return _FakeLocator(self, "verify_buttons", visible=count > 0, count=count)
+        if role == "button" and name == "Submit" and exact is True and self.variant == "accessible_submit":
+            return _FakeLocator(self, "submit", visible=True, count=1, on_click=self._click_submit)
         return _FakeLocator(self, str(name or role), count=0, visible=False)
 
     def get_by_label(self, label, exact=False):
@@ -1080,7 +1082,7 @@ def test_oracle_anonymous_email_gate_uses_exact_accessible_next_button(fake_orac
 
     result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-accessible-next", dry_run=True)
 
-    assert page.role_queries == [{"role": "button", "name": "Next", "exact": True}]
+    assert page.role_queries.count({"role": "button", "name": "Next", "exact": True}) == 1
     assert page.next_clicks == 1
     assert page.uploaded_to == "resume"
     assert result["ok"] is True
@@ -1094,7 +1096,7 @@ def test_oracle_anonymous_email_gate_rejects_multiple_visible_exact_accessible_n
 
     result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-duplicate-accessible-next", dry_run=True)
 
-    assert page.role_queries == [{"role": "button", "name": "Next", "exact": True}]
+    assert page.role_queries.count({"role": "button", "name": "Next", "exact": True}) == 1
     assert result["outcome"] == "manual"
     assert "anonymous email gate" in result["reason"]
     assert page.next_clicks == 0
@@ -1288,6 +1290,19 @@ def test_oracle_dry_run_requires_exact_visible_submit(fake_oracle, pdf):
     assert result["ok"] is True
     assert result["submitted"] is False
     assert result["reason"] == "dry run - did not submit"
+    assert page.submit_clicks == 0
+    assert "mark_submit_attempted" not in page.events
+
+
+def test_oracle_dry_run_finds_exact_accessible_submit_without_text_locator(fake_oracle, pdf):
+    page = fake_oracle("accessible_submit")
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-accessible-submit", dry_run=True)
+
+    assert result["ok"] is True
+    assert result["submitted"] is False
+    assert result["reason"] == "dry run - did not submit"
+    assert {"role": "button", "name": "Submit", "exact": True} in page.role_queries
     assert page.submit_clicks == 0
     assert "mark_submit_attempted" not in page.events
 

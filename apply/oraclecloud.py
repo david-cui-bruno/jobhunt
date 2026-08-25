@@ -209,6 +209,12 @@ def _wait_for_visible_apply(page, *, timeout_ms: int = APPLY_WAIT_TIMEOUT_MS, po
 
 
 def _find_exact_visible_submit(page):
+    accessible_count = _visible_exact_button_count(page, "Submit")
+    if accessible_count == 1:
+        return _single_visible_exact_button(page, "Submit")
+    if accessible_count > 1:
+        return None
+
     candidates = []
     for selector in SUBMIT_SELECTORS:
         try:
