@@ -163,12 +163,9 @@ def _format_amount(value: Decimal) -> str:
     return format(value.normalize(), "f")
 
 
-def cached_answer_for_control(control: dict, env: dict, now: int) -> Optional[str]:
-    """Return an exact fresh cached compensation answer for a form control.
-
-    This path is deliberately read-only and cache-only for browser workers.
-    Missing or ambiguous context fails closed without contacting providers.
-    """
+def _cached_resolution_for_control(
+    control: dict, env: dict, now: int
+) -> Optional[CompensationResolution]:
     period = requested_period(_control_text(control))
     if period is None:
         return None
@@ -200,6 +197,24 @@ def cached_answer_for_control(control: dict, env: dict, now: int) -> Optional[st
         return None
     finally:
         conn.close()
+    return resolution
+
+
+def cached_answer_for_control(control: dict, env: dict, now: int) -> Optional[str]:
+    """Return an exact fresh cached compensation amount for a form control.
+
+    This path is deliberately read-only and cache-only for browser workers.
+    Missing or ambiguous context fails closed without contacting providers.
+    """
+    resolution = _cached_resolution_for_control(control, env, now)
     if resolution is None:
         return None
     return _format_amount(resolution.amount)
+
+
+def cached_currency_for_control(control: dict, env: dict, now: int) -> Optional[str]:
+    """Return the currency paired with an exact fresh cached amount control."""
+    resolution = _cached_resolution_for_control(control, env, now)
+    if resolution is None:
+        return None
+    return resolution.context.currency

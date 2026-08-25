@@ -3195,6 +3195,56 @@ def test_numeric_compensation_is_allowed_only_from_exact_fresh_cache(monkeypatch
     assert qa.answer_requires_manual(control, "48", approved_answers=APPROVED_COMPENSATION)
 
 
+def test_fresh_compensation_cache_fills_exact_paired_currency_dropdown(monkeypatch, tmp_path):
+    _assert_no_provider_or_http(monkeypatch)
+    db = tmp_path / "tracker.db"
+    _store_compensation(db, context=_comp_context(period="year"), amount="98000")
+    set_job_env(monkeypatch, db=db)
+    controls = [
+        {"id": "amount", "label": "What are your gross salary expectations?*", "options": []},
+        {"id": "currency", "label": "Currency type*", "options": ["CAD", "USD", "EUR"]},
+    ]
+
+    answers = qa.explicit_approved_answers(
+        controls, approved_answers=APPROVED_COMPENSATION
+    )
+
+    assert answers == [
+        {"id_or_name": "amount", "answer": "98000"},
+        {"id_or_name": "currency", "answer": "USD"},
+    ]
+
+
+def test_currency_type_stays_manual_without_matching_cached_compensation(monkeypatch):
+    _assert_no_provider_or_http(monkeypatch)
+    set_job_env(monkeypatch, db=None)
+    monkeypatch.delenv("JOBHUNT_TRACKER_DB", raising=False)
+    controls = [
+        {"id": "currency", "label": "Currency type*", "options": ["CAD", "USD", "EUR"]},
+    ]
+
+    assert qa.explicit_approved_answers(
+        controls, approved_answers=APPROVED_COMPENSATION
+    ) == []
+
+
+def test_cached_usd_does_not_choose_a_different_currency_option(monkeypatch, tmp_path):
+    _assert_no_provider_or_http(monkeypatch)
+    db = tmp_path / "tracker.db"
+    _store_compensation(db, context=_comp_context(period="year"), amount="98000")
+    set_job_env(monkeypatch, db=db)
+    controls = [
+        {"id": "amount", "label": "Expected annual salary", "options": []},
+        {"id": "currency", "label": "Currency type*", "options": ["CAD", "EUR"]},
+    ]
+
+    answers = qa.explicit_approved_answers(
+        controls, approved_answers=APPROVED_COMPENSATION
+    )
+
+    assert answers == [{"id_or_name": "amount", "answer": "98000"}]
+
+
 @pytest.mark.parametrize(("env_updates", "context_updates", "label"), [
     ({}, {"expires_at": 1_787_600_000}, "Desired hourly compensation"),
     ({"posting_id": "p2"}, {}, "Desired hourly compensation"),

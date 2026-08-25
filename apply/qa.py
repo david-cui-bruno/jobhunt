@@ -17,7 +17,10 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import track as _track  # noqa: E402  (shared intern/fulltime classifier)
-from compensation.resolve import cached_answer_for_control  # noqa: E402
+from compensation.resolve import (  # noqa: E402
+    cached_answer_for_control,
+    cached_currency_for_control,
+)
 
 PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
 
@@ -1185,14 +1188,28 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
     availability = approved.get("availability") or {}
     offers = [offer for offer in (approved.get("current_offers") or [])
               if isinstance(offer, dict)]
+    now = int(time.time())
+    compensation_pattern = re.compile(
+        r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|"
+        r"expected (?:pay|salary)|desired (?:pay|salary)|"
+        r"(?:pay|compensation) expectations?)\b"
+    )
+    compensation_currency = None
+    for source_control in controls:
+        if compensation_pattern.search(_control_question_text(source_control).lower()):
+            compensation_currency = cached_currency_for_control(
+                source_control, os.environ, now
+            )
+            if compensation_currency:
+                break
     rendered = []
     for original in controls:
         control = dict(original, company_context=company_context)
         question = _control_question_text(control).lower()
         options = [str(option) for option in control.get("options") or []]
         compensation_answer = None
-        if re.search(r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|expected (?:pay|salary)|desired (?:pay|salary)|(?:pay|compensation) expectations?)\b", question):
-            compensation_answer = cached_answer_for_control(control, os.environ, int(time.time()))
+        if compensation_pattern.search(question):
+            compensation_answer = cached_answer_for_control(control, os.environ, now)
         hometown_component = _hometown_component(control, approved)
         organization_entry = next((
             entry for entry in approved.get("long_form_answers") or []
@@ -1206,6 +1223,20 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             answer = _approved_long_form_answer(question, approved, company_context)
         if compensation_answer is not None:
             answer = compensation_answer
+        if (answer is None and compensation_currency and options
+                and re.fullmatch(
+                    r"currency type\s*\*?",
+                    str(control.get("label") or "").strip().lower(),
+                )):
+            candidates = [compensation_currency]
+            if compensation_currency.upper() == "USD":
+                candidates.extend([
+                    "United States Dollar (USD)",
+                    "US Dollar (USD)",
+                    "United States Dollar",
+                    "US Dollar",
+                ])
+            answer = _exact_matching_option(candidates, options)
         if answer is not None:
             pass
         elif re.search(r"\b(security clearance|clearance level|public trust|secret clearance|top secret|ts/sci)\b", question):
