@@ -7,6 +7,10 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from apply.jd import fetch_jd
 from compensation.research import SearchProviderUnavailable, TavilySearchProvider, prepare_posting
 from submission.database import connect_tracker

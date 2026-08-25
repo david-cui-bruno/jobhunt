@@ -1,5 +1,8 @@
 import json
 import sqlite3
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -190,6 +193,27 @@ def test_cli_requires_key_only_when_search_needed_and_outputs_json(tmp_path, mon
     code = cli.main(["--db", str(db), "--posting-id", "p1", "--json"])
 
     assert code == 0
+
+
+def test_prepare_compensation_script_runs_from_repository_root(tmp_path):
+    db = tmp_path / "tracker.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE postings (posting_id TEXT PRIMARY KEY, company TEXT, title TEXT, locations TEXT, url TEXT, status TEXT, last_error TEXT)")
+    conn.execute("INSERT INTO postings VALUES ('p1','Acme','Software Engineer Intern','New York, NY','https://acme.example/jobs/1','manual','manual unanswered: favorite color')")
+    conn.commit()
+    conn.close()
+    root = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [sys.executable, "scripts/prepare_compensation.py", "--db", str(db), "--posting-id", "p1", "--json"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [{"posting_id": "p1", "status": "not_compensation_blocker"}]
 
 
 def test_tavily_provider_filters_transport_results_without_live_network(monkeypatch):
