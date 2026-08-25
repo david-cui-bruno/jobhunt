@@ -2252,6 +2252,12 @@ def answer_requires_manual(control: dict, answer: object, profile_text: str | No
                         entry, question, company_context
                     )):
                 return True
+    if (company_context
+            and re.search(r"\brelative\b.{0,40}\bemployee\b", question)):
+        for company in (approved.get("company_facts") or {}):
+            if (_company_matches(company, question, "")
+                    and not _company_matches(company, company_context, company_context)):
+                return True
     if _blocked_answer_is_approved(control, answer, approved):
         return False
     if _hometown_component(control, approved):
@@ -2270,8 +2276,11 @@ def answer_requires_manual(control: dict, answer: object, profile_text: str | No
 
 
 def filter_manual_answers(controls: list[dict], answers: list[dict], profile_text: str | None = None,
-                          key_field: str = "id_or_name", approved_answers: dict | None = None) -> tuple[list[dict], list[dict]]:
+                          key_field: str = "id_or_name", approved_answers: dict | None = None,
+                          company_context: str = "") -> tuple[list[dict], list[dict]]:
     """Return (allowed, blocked) answers using only inputs, with no side effects."""
+    if company_context:
+        controls = [dict(control, company_context=company_context) for control in controls]
     by_key = {}
     by_label = {}
     for c in controls:

@@ -1965,6 +1965,44 @@ class QaManualPolicyTest(unittest.TestCase):
         )
         self.assertEqual(["referral-wrong"], [answer["id_or_name"] for answer in blocked])
 
+    def test_filter_manual_answers_accepts_company_context_keyword(self):
+        controls = [
+            {"id": "availity", "label": "Are you a relative of an Availity employee? *", "options": ["Yes", "No"]},
+        ]
+        answers = [
+            {"id_or_name": "availity", "answer": "No"},
+        ]
+
+        allowed, blocked = qa.filter_manual_answers(
+            controls,
+            answers,
+            company_context="Availity",
+            approved_answers=APPROVED_AUG_25,
+        )
+
+        self.assertEqual(["availity"], [answer["id_or_name"] for answer in allowed])
+        self.assertEqual([], blocked)
+
+    def test_company_scoped_household_fact_blocks_mismatched_company_context(self):
+        controls = [
+            {"id": "availity", "label": "Are you a relative of an Availity employee? *", "options": ["Yes", "No"]},
+        ]
+        answers = qa.explicit_approved_answers(
+            controls,
+            company_context="Point72",
+            approved_answers=APPROVED_AUG_25,
+        )
+
+        allowed, blocked = qa.filter_manual_answers(
+            controls,
+            answers,
+            company_context="Point72",
+            approved_answers=APPROVED_AUG_25,
+        )
+
+        self.assertEqual([], allowed)
+        self.assertEqual(["availity"], [answer["id_or_name"] for answer in blocked])
+
     def test_graduation_month_year_and_approved_estimated_day_must_match(self):
         controls = [
             {"id": "right", "label": "Graduation date", "value": ""},
