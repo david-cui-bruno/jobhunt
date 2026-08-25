@@ -291,8 +291,6 @@ EXTRACT_JS = r"""
   document.querySelectorAll('input, select, textarea, [role=combobox]').forEach(el => {
     if (el.type === 'hidden' || el.type === 'file') return;
     const isYesNo = el.type === 'checkbox' && el.closest('[class*=yesno]');
-    if (el.offsetParent === null && !isYesNo) return;
-    const role = el.getAttribute('role');
     const stableGroupWrap = (el.type === 'checkbox' || el.type === 'radio') ? el.closest(questionWrapperSelector) : null;
     const fallbackGroupWrap = (el.type === 'checkbox' || el.type === 'radio') ? el.closest('div[class*=oj-flex]') : null;
     const groupWrap = stableGroupWrap || (
@@ -300,6 +298,9 @@ EXTRACT_JS = r"""
         ? fallbackGroupWrap
         : null
     );
+    const visibleGroupWrap = groupWrap && !!(groupWrap.offsetWidth || groupWrap.offsetHeight || groupWrap.getClientRects().length);
+    if (el.offsetParent === null && !isYesNo && !visibleGroupWrap) return;
+    const role = el.getAttribute('role');
     const namelessGroup = (el.type === 'checkbox' || el.type === 'radio') && !el.name && groupWrap && groupWrap.querySelectorAll(`input[type="${CSS.escape(el.type)}"]`).length > 1;
     const isGroup = (el.type === 'checkbox' || el.type === 'radio') && (el.name || namelessGroup);
     const key = isGroup ? (el.name || groupWrap.innerText.replace(/\s+/g, ' ').trim().slice(0, 120)) : (el.id || el.name || labelFor(el));
@@ -2375,20 +2376,22 @@ def _safe_controlled_popup_options(page, el) -> list[str]:
 
 def _click_safe_controlled_popup_option(page, el, target: str) -> bool:
     try:
-        return bool(el.evaluate("""
-            (el, target) => {
-                const controls = el.getAttribute('aria-controls') || '';
-                if (!/^[A-Za-z0-9_-]+$/.test(controls)) return false;
-                const popup = document.getElementById(controls);
-                if (!popup) return false;
-                const opts = [...popup.querySelectorAll('[role=option], [role=gridcell].cx-select__list-item')]
-                    .filter(o => !!(o.offsetWidth || o.offsetHeight || o.getClientRects().length));
-                const matches = opts.filter(o => o.innerText.trim() === target);
-                if (matches.length !== 1) return false;
-                matches[0].click();
-                return true;
-            }
-        """, target))
+        controls = str(el.get_attribute("aria-controls") or "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", controls):
+            return False
+        popup = page.locator(f'[id="{controls}"]')
+        if popup.count() != 1:
+            return False
+        options = popup.locator('[role="option"], [role="gridcell"].cx-select__list-item')
+        matches = []
+        for index in range(options.count()):
+            option = options.nth(index)
+            if option.is_visible() and option.inner_text(timeout=500).strip() == target:
+                matches.append(option)
+        if len(matches) != 1:
+            return False
+        matches[0].click(timeout=3000)
+        return True
     except Exception:
         return False
 

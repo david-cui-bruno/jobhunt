@@ -70,6 +70,29 @@ def test_inner_oj_flex_option_wrappers_group_by_outer_radiogroup_not_each_option
     assert controls[0]["options"] == ["Yes", "No"]
 
 
+def test_hidden_named_oracle_radio_inputs_use_visible_radiogroup():
+    controls = _extract_from_html(
+        """
+        <div class="input-row input-row--radiogroup" role="radiogroup" aria-labelledby="age-label">
+          <div id="age-label">Are you 18 years old or over?</div>
+          <label for="age-yes">Yes</label>
+          <input id="age-yes" class="input-row__hidden-control" type="radio"
+                 name="age-question" required style="display:none" value="yes">
+          <label for="age-no">No</label>
+          <input id="age-no" class="input-row__hidden-control" type="radio"
+                 name="age-question" required style="display:none" value="no">
+        </div>
+        """
+    )
+
+    assert controls == [{
+        "id": "", "name": "age-question", "tag": "input", "type": "group-radio",
+        "cls": "input-row__hidden-control", "chosen": "",
+        "label": "Are you 18 years old or over?", "required": True,
+        "value": "", "options": ["Yes", "No"],
+    }]
+
+
 def test_checked_nameless_required_radio_group_is_not_required_empty_but_unchecked_is_human_label():
     checked = _required_empty_from_html(
         """
@@ -270,6 +293,60 @@ def test_cx_select_controlled_gridcell_commit_marks_extract_chosen_without_reope
             assert fresh_controls[0]["chosen"] == "Computer Science"
             assert fresh_controls[0]["value"] == ""
             assert page.evaluate("window.openCount") == open_count_after_fill
+        finally:
+            browser.close()
+
+
+def test_cx_select_uses_real_pointer_click_and_survives_transient_untrusted_value():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+    <label for="degree">Degree Program</label>
+    <input id="degree" role="combobox" aria-controls="degreePopup" aria-expanded="false" value="">
+    <div id="degreePopup" style="display:none">
+      <div role="gridcell" class="cx-select__list-item">Bachelor (BA/BS)</div>
+      <div role="gridcell" class="cx-select__list-item">Master (MA/MS)</div>
+    </div>
+    <script>
+      degree.addEventListener('click', () => {
+        degree.setAttribute('aria-expanded', 'true');
+        degreePopup.style.display = 'block';
+      });
+      degreePopup.addEventListener('click', (event) => {
+        if (!event.target.matches('[role=gridcell]')) return;
+        degree.value = event.target.innerText.trim();
+        degree.setAttribute('aria-expanded', 'false');
+        degreePopup.style.display = 'none';
+        if (event.isTrusted) {
+          degree.setAttribute('data-committed-value', degree.value);
+        } else {
+          setTimeout(() => {
+            degree.value = '';
+            degree.removeAttribute('data-jobhunt-committed-value');
+            degree.removeAttribute('data-committed-value');
+          }, 400);
+        }
+      });
+    </script>
+    """
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            controls = page.evaluate(qa.EXTRACT_JS)
+            qa.harvest_select_options(page, controls)
+
+            filled, failed = qa.fill_answers(
+                page, controls,
+                [{"id_or_name": "degree", "label": "Degree Program", "answer": "Bachelor (BA/BS)"}],
+            )
+            page.wait_for_timeout(700)
+
+            assert failed == []
+            assert filled == ["Degree Program"]
+            assert page.locator("#degree").input_value() == "Bachelor (BA/BS)"
+            assert page.locator("#degree").get_attribute("data-committed-value") == "Bachelor (BA/BS)"
         finally:
             browser.close()
 
