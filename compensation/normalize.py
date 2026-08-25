@@ -13,7 +13,19 @@ _RANGE = re.compile(
     re.I,
 )
 
-_FOREIGN_CODES = {"cad", "aud", "nzd", "hkd", "mxn", "gbp", "eur", "jpy", "cny", "inr", "chf"}
+_CURRENCY_CODES = set("""
+AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB
+BOV BRL BSD BTN BWP BYN BZD CAD CDF CHE CHF CHW CLF CLP CNY COP COU CRC CUC
+CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF
+GTQ GYD HKD HNL HRK HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS
+KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK
+MNT MOP MRU MUR MVR MWK MXN MXV MYR MZN NAD NGN NIO NOK NPR NZD OMR PAB
+PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE
+SLL SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH
+UGX USD USN UYI UYU UYW UZS VED VES VND VUV WST XAF XAG XAU XBA XBB XBC
+XBD XCD XDR XOF XPD XPF XPT XSU XTS XUA XXX YER ZAR ZMW ZWL
+""".split())
+_FOREIGN_CODES = {code.lower() for code in _CURRENCY_CODES if code != "USD"}
 _FOREIGN_WORDS = {
     "canadian dollars",
     "australian dollars",
@@ -87,13 +99,13 @@ def _has_disqualifying_currency_label(question: str) -> bool:
             return True
 
     code_patterns = (
-        (r"\(([A-Z]{3})\)", 0),
-        (r"\b(?:in|currency(?:\s+is)?|denominated\s+in|paid\s+in)\s*[:=]?\s*([A-Z]{3})\b", re.I),
-        (r"\b([A-Z]{3})\s+(?:salary|compensation|pay|rate)\b", 0),
+        r"\(([A-Z]{3})\)",
+        r"\b(?:in|currency(?:\s+is)?|denominated\s+in|paid\s+in)\s*[:=]?\s*([A-Z]{3})\b",
+        r"\b([A-Z]{3})\s+(?:salary|compensation|pay|rate)\b",
     )
-    for pattern, flags in code_patterns:
-        for match in re.finditer(pattern, question, flags):
-            if match.group(1).lower() != "usd":
+    for pattern in code_patterns:
+        for match in re.finditer(pattern, question, re.I):
+            if match.group(1).lower() in _FOREIGN_CODES:
                 return True
 
     lowered = question.lower()

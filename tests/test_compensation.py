@@ -207,6 +207,7 @@ def test_extract_usd_ranges_is_conservative(text, expected):
     ("Expected annual salary in usd", "year"),
     ("Annual salary US$80k", "year"),
     ("What annual salary do you expect for SWE?", "year"),
+    ("needs answers: ['Do you have a non-compete clause in a contract that could impact your ability to work in the position?', 'What is your annual salary expectation?*']", "year"),
     ("Expected monthly salary", None),
     ("Fortnightly salary", None),
     ("Desired salary (CAD)", None),
