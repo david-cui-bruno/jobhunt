@@ -76,6 +76,31 @@ def test_august_25_facts_render_exactly_and_wrong_values_remain_manual():
     assert qa.answer_requires_manual(controls[2], "Yes", approved_answers=APPROVED_AUG_25)
 
 
+@pytest.mark.parametrize(("company", "label", "approved", "non_option"), [
+    ("", "Were you a US Department of Defense employee on or after January 28, 2008?", "No", "No, maybe"),
+    ("", "Have you or your immediate family or business partners worked for a government entity?", "No", "No, maybe"),
+    ("", "Will you attend NeurIPS 2026?", "No", "No, maybe"),
+    ("", "May we upload your unofficial transcript?", "Yes", "Yes, Soren"),
+    ("Point72", "Have you previously applied to work at Point72?", "No", "No, maybe"),
+    ("Availity", "Is any member of your household employed by Availity?", "No", "No, maybe"),
+])
+def test_august_25_boolean_selects_allow_only_the_rendered_option(
+        company, label, approved, non_option):
+    control = {
+        "id": "fact",
+        "label": label,
+        "options": ["Yes", "No"],
+        "company_context": company,
+    }
+
+    assert not qa.answer_requires_manual(
+        control, approved, approved_answers=APPROVED_AUG_25,
+    )
+    assert qa.answer_requires_manual(
+        control, non_option, approved_answers=APPROVED_AUG_25,
+    )
+
+
 def test_official_transcript_does_not_borrow_unofficial_upload_authorization():
     control = {
         "id": "official-transcript",

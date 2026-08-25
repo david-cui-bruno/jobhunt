@@ -1750,8 +1750,20 @@ def _company_answer_is_approved(control: dict, field: str, answers: dict,
     if expected is _MISSING:
         return False
     if isinstance(expected, bool):
-        return _answer_boolean(answer) is expected
+        return _boolean_answer_is_approved(control, expected, answer)
     return str(expected).strip().lower() in str(answer or "").strip().lower()
+
+
+def _boolean_answer_is_approved(control: dict, expected: bool,
+                                answer: object) -> bool:
+    options = [str(option) for option in control.get("options") or []]
+    if not options:
+        return _answer_boolean(answer) is expected
+    rendered = _render_boolean(expected, options)
+    return bool(
+        rendered
+        and rendered.strip().casefold() == str(answer or "").strip().casefold()
+    )
 
 
 def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -> bool:
@@ -1801,12 +1813,14 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return bool(approved_answer and approved_answer.casefold() == answer_text.strip().casefold())
     if re.search(r"\bdepartment of defense|\bdod\b", question) and re.search(r"\bemploy", question):
         expected = legal.get("us_dod_employment_after_2008_01_28")
-        return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
+        return (isinstance(expected, bool)
+                and _boolean_answer_is_approved(control, expected, answer_text))
     if (re.search(r"\bgovernment (?:entity|agency|employment)\b", question)
             and not re.search(r"\bnon[- ]government\b", question)
             and re.search(r"\b(family|business partner|worked|employ)", question)):
         expected = legal.get("self_or_family_or_business_partner_government_employment")
-        return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
+        return (isinstance(expected, bool)
+                and _boolean_answer_is_approved(control, expected, answer_text))
     if re.search(r"\b(english proficiency|proficiency in english|fluent in english)\b", question):
         expected = str(professional.get("english_proficiency") or "").strip()
         options = [str(option) for option in control.get("options") or []]
@@ -1814,13 +1828,14 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         return bool(approved_answer and approved_answer.casefold() == answer_text.strip().casefold())
     if re.search(r"\bneurips\s*2026\b", question):
         expected = ((events.get("neurips_2026") or {}).get("attending"))
-        return isinstance(expected, bool) and _answer_boolean(answer_text) is expected
+        return (isinstance(expected, bool)
+                and _boolean_answer_is_approved(control, expected, answer_text))
     if (re.search(r"\bunofficial transcript\b", question)
             and re.search(r"\b(may|consent|authorize|authorise|upload)\b", question)):
         transcript = documents.get("unofficial_transcript") or {}
         expected = (transcript.get("available") is True
                     and transcript.get("application_upload_authorized") is True)
-        return _answer_boolean(answer_text) is expected
+        return _boolean_answer_is_approved(control, expected, answer_text)
     if re.search(r"\b(?:when can you start|desired start date|available to start)\b", question):
         expected = str(availability.get("default_start_date") or "").strip()
         return bool(expected and expected.casefold() == answer_text.strip().casefold())
@@ -2133,7 +2148,8 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
         expected = _company_fact_first(
             control, approved, "prior_application", "prior_interview_or_application",
         )
-        return isinstance(expected, bool) and _answer_boolean(answer) is expected
+        return (isinstance(expected, bool)
+                and _boolean_answer_is_approved(control, expected, answer))
     if re.search(r"\b(?:currently )?registered with finra\b", question):
         expected = _company_fact_first(
             control, approved, "finra_registered", "licenses_or_exams",
