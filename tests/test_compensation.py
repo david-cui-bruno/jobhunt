@@ -202,6 +202,9 @@ def test_extract_usd_ranges_is_conservative(text, expected):
     ("Requested rate", "hour"),
     ("What annual base salary do you expect?", "year"),
     ("Desired yearly compensation", "year"),
+    ("Expected monthly salary", None),
+    ("Desired salary (CAD)", None),
+    ("Expected annual salary in EUR", None),
     ("Desired compensation", None),
 ])
 def test_requested_period_classifies_explicit_periods(question, expected):

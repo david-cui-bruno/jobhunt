@@ -121,6 +121,17 @@ def extract_usd_observations(text: str, *, url: str, title: str, source_kind: st
 
 def requested_period(question: str) -> Optional[str]:
     lowered = question.lower()
+    if any(unicodedata.category(char) == "Sc" and char != "$" for char in question):
+        return None
+    if re.search(r"\b(?:%s)\b" % "|".join(sorted(_FOREIGN_CODES)), lowered):
+        return None
+    if any(word in lowered for word in _FOREIGN_WORDS):
+        return None
+    if any(token in lowered for token in (
+        "monthly", "per month", "/month", "weekly", "per week", "/week",
+        "daily", "per day", "/day",
+    )):
+        return None
     if any(token in lowered for token in ("hourly", "per hour", "/hr", "hour rate", "hourly rate", "requested rate")):
         return "hour"
     if any(token in lowered for token in ("annual", "yearly", "per year", "base salary", "salary")):

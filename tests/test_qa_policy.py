@@ -3200,6 +3200,9 @@ def test_numeric_compensation_is_allowed_only_from_exact_fresh_cache(monkeypatch
     ({"posting_id": "p2"}, {}, "Desired hourly compensation"),
     ({"company": "Other"}, {}, "Desired hourly compensation"),
     ({}, {"period": "year", "amount": "98000"}, "Desired hourly compensation"),
+    ({}, {"period": "year", "amount": "98000"}, "Expected monthly salary"),
+    ({}, {"period": "year", "amount": "98000"}, "Desired salary (CAD)"),
+    ({}, {"period": "year", "amount": "98000"}, "Expected annual salary in EUR"),
     ({}, {}, "Desired compensation"),
 ])
 def test_numeric_compensation_cache_mismatch_or_ambiguous_label_stays_manual(
