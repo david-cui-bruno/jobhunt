@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from apply.jd import fetch_jd as default_fetch_jd
 from compensation.models import JobContext
 from compensation.normalize import canonical_domain, extract_usd_observations, requested_period
-from compensation.resolve import resolve_observations
+from compensation.resolve import _compatible, resolve_observations
 from compensation.schema import ensure_compensation_schema, store_resolution
 from track import infer_track
 
@@ -100,7 +100,18 @@ def _status(value: str, posting_id: str, **extra: object) -> dict:
 
 def _has_compensation_marker(last_error: str) -> bool:
     lowered = last_error.lower()
-    return any(token in lowered for token in ("compensation", "salary", "hourly", "rate", "pay"))
+    return any(
+        token in lowered
+        for token in (
+            "compensation",
+            "salary",
+            "hourly",
+            "pay range",
+            "pay rate",
+            "desired rate",
+            "requested rate",
+        )
+    )
 
 
 def _public_query(row) -> str:
@@ -129,6 +140,14 @@ def _summary(resolution) -> dict:
         "method": resolution.method,
         "source_urls": [row.url for row in resolution.evidence],
     }
+
+
+def _has_multiple_compatible_employer_ranges(context: JobContext, observations: Iterable[object]) -> bool:
+    rows = [
+        row for row in observations
+        if getattr(row, "source_kind", None) == "employer" and _compatible(context, row)
+    ]
+    return len(rows) > 1
 
 
 def prepare_posting(
@@ -169,6 +188,8 @@ def prepare_posting(
         observations.extend(
             extract_usd_observations(jd_text, url=url, title=context.title, source_kind="employer", observed_at=now)
         )
+    if _has_multiple_compatible_employer_ranges(context, observations):
+        return _status("ambiguous_employer_evidence", posting_id)
     resolution = resolve_observations(context, observations, now=now)
     if resolution is not None:
         store_resolution(conn, resolution)
@@ -183,6 +204,8 @@ def prepare_posting(
         return _status("search_timeout", posting_id)
     except SearchProviderUnavailable:
         return _status("search_provider_unavailable", posting_id)
+    except Exception:
+        return _status("search_failed", posting_id)
 
     for result in _filter_result_dicts(raw_results, APPROVED_DOMAINS):
         observations.extend(

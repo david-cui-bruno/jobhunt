@@ -381,3 +381,35 @@ def test_extract_accepts_only_literal_usd_or_unqualified_dollar(text, expected):
         observed_at=100,
     )
     assert (str(rows[0].low), str(rows[0].high), rows[0].period) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "$40-$50 per hour CAD",
+    "$40-$50 per hour aud",
+    "$40-$50 per hour nzd",
+    "$40-$50 per hour hkd",
+    "$40-$50 per hour mxn",
+    "$40-$50 per hour gbp",
+    "$40-$50 per hour eur",
+    "$40-$50 per hour jpy",
+    "$40-$50 per hour cny",
+    "$40-$50 per hour inr",
+    "$40-$50 per hour chf",
+    "Comp listed in Canadian dollars $40-$50 per hour",
+    "Comp listed in euros $40-$50 per hour",
+    "Comp listed in pounds $40-$50 per hour",
+    "Comp listed in yen $40-$50 per hour",
+    "Comp listed in rupees $40-$50 per hour",
+    "Comp listed as AU dollars $40-$50 per hour",
+    "$40-$50 per hour €",
+    "$40-$50 per hour ¥",
+    "$40-$50 per hour £",
+])
+def test_extract_rejects_currency_suffix_lowercase_spelled_and_distant_qualifiers(text):
+    assert extract_usd_observations(
+        text,
+        url="https://levels.fyi/x",
+        title="x",
+        source_kind="market",
+        observed_at=100,
+    ) == []

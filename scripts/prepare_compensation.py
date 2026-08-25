@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -9,6 +10,9 @@ from typing import List, Optional
 from apply.jd import fetch_jd
 from compensation.research import SearchProviderUnavailable, TavilySearchProvider, prepare_posting
 from submission.database import connect_tracker
+
+
+_POSTINGS_COLUMNS = {"posting_id", "company", "title", "locations", "url", "status", "last_error"}
 
 
 def _provider_from_env():
@@ -26,11 +30,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_db_path(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        raise ValueError("database file does not exist")
+    conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+    try:
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='postings'"
+        ).fetchone()
+        if table is None:
+            raise ValueError("database is missing required postings table")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(postings)").fetchall()}
+        missing = sorted(_POSTINGS_COLUMNS - columns)
+        if missing:
+            raise ValueError("postings table is missing required columns: %s" % ", ".join(missing))
+    finally:
+        conn.close()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    db_path = Path(args.db)
     try:
-        conn = connect_tracker(Path(args.db))
+        _validate_db_path(db_path)
+        conn = connect_tracker(db_path)
     except Exception as exc:
         print("invalid database: %s" % exc, file=sys.stderr)
         return 2

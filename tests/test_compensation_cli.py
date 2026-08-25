@@ -226,3 +226,65 @@ def test_tavily_provider_filters_transport_results_without_live_network(monkeypa
     assert captured["payload"]["api_key"] == "key"
     assert captured["payload"]["include_domains"] == ["levels.fyi", "indeed.com"]
     assert rows == [{"url": "https://levels.fyi/a", "title": "ok", "content": "$40-$50 per hour"}]
+
+
+def test_cli_rejects_missing_db_without_creating_file(tmp_path, capsys):
+    import scripts.prepare_compensation as cli
+
+    missing = tmp_path / "missing.db"
+
+    code = cli.main(["--db", str(missing), "--posting-id", "p1", "--json"])
+
+    assert code == 2
+    assert not missing.exists()
+    assert "invalid database" in capsys.readouterr().err
+
+
+def test_cli_rejects_db_without_required_postings_schema(tmp_path, capsys):
+    import scripts.prepare_compensation as cli
+
+    db = tmp_path / "tracker.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE other (id TEXT)")
+    conn.commit()
+    conn.close()
+
+    code = cli.main(["--db", str(db), "--posting-id", "p1"])
+
+    assert code == 2
+    assert "postings" in capsys.readouterr().err
+
+
+def test_prepare_posting_unexpected_provider_exception_fails_closed_and_continues(conn):
+    from compensation.research import prepare_posting
+
+    result = prepare_posting(conn, "p1", FakeProvider(exc=RuntimeError("secret token david@example.com")), now=100, fetch_jd=lambda _url: "No pay listed")
+
+    assert result == {"posting_id": "p1", "status": "search_failed"}
+    assert _count_evidence(conn) == 0
+
+
+def test_prepare_posting_multiple_employer_ranges_do_not_search(conn):
+    from compensation.research import prepare_posting
+
+    provider = FakeProvider([
+        {"url": "https://levels.fyi/a", "title": "Acme Software Engineer Intern New York", "content": "$40-$50 per hour"},
+        {"url": "https://indeed.com/a", "title": "Acme Software Engineer Intern New York", "content": "$44-$54 per hour"},
+    ])
+
+    result = prepare_posting(conn, "p1", provider, now=100, fetch_jd=lambda _url: "$40-$50 per hour and $44-$54 per hour")
+
+    assert result["status"] == "ambiguous_employer_evidence"
+    assert provider.queries == []
+    assert _count_evidence(conn) == 0
+
+
+def test_prepare_posting_bare_rate_marker_does_not_pass_compensation_gate(conn):
+    from compensation.research import prepare_posting
+
+    conn.execute("UPDATE postings SET last_error='manual unanswered: What is your website conversion rate?' WHERE posting_id='p1'")
+
+    result = prepare_posting(conn, "p1", FakeProvider([]), now=100, fetch_jd=lambda _url: "$40-$50 per hour")
+
+    assert result["status"] == "not_compensation_blocker"
+    assert _count_evidence(conn) == 0

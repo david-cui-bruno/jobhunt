@@ -13,6 +13,24 @@ _RANGE = re.compile(
     re.I,
 )
 
+_FOREIGN_CODES = {"cad", "aud", "nzd", "hkd", "mxn", "gbp", "eur", "jpy", "cny", "inr", "chf"}
+_FOREIGN_WORDS = {
+    "canadian dollars",
+    "australian dollars",
+    "new zealand dollars",
+    "hong kong dollars",
+    "mexican pesos",
+    "british pounds",
+    "euros",
+    "euro",
+    "pounds",
+    "yen",
+    "yuan",
+    "rupees",
+    "swiss francs",
+    "au dollars",
+}
+
 
 def canonical_domain(value: str) -> str:
     host = urlparse(value).netloc.lower() or value.lower()
@@ -33,9 +51,10 @@ def _period(token: str) -> str:
 
 
 def _has_disqualifying_currency_qualifier(text: str, start: int, end: int, matched: str) -> bool:
-    prefix = text[max(0, start - 8):start]
+    prefix = text[max(0, start - 48):start]
+    suffix = text[end:end + 16]
     nearby = prefix + matched
-    for char in nearby:
+    for char in nearby + suffix:
         if unicodedata.category(char) == "Sc" and char != "$":
             return True
 
@@ -43,9 +62,17 @@ def _has_disqualifying_currency_qualifier(text: str, start: int, end: int, match
     qualifier = qualifier.rstrip("$")
     if re.fullmatch(r"[A-Z]{1,3}", qualifier) and qualifier != "USD":
         return True
+    if qualifier.lower() in _FOREIGN_CODES:
+        return True
 
-    adjacent = text[max(0, start - 3):end]
-    if re.match(r"[A-Z]{2,3}\$", adjacent) and not adjacent.startswith("USD"):
+    adjacent = text[max(0, start - 4):end + 8]
+    if re.search(r"\b(?:%s)\b" % "|".join(sorted(_FOREIGN_CODES)), adjacent, re.I):
+        return True
+    if re.match(r"[A-Z]{1,3}\$", adjacent) and not adjacent.startswith("USD"):
+        return True
+
+    lowered_context = (prefix + suffix).lower()
+    if any(word in lowered_context for word in _FOREIGN_WORDS):
         return True
 
     return False
