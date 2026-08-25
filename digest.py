@@ -61,6 +61,11 @@ MANUAL_FINISH_PREFIXES = (
     "Ashby rejected the submission as possible spam",
     "ashby automation disabled after spam rejection",
     "prepared for manual completion:",
+    "authenticated candidate profile confirms application remains a draft",
+)
+
+UNCERTAINTY_RESOLVED_PREFIXES = (
+    "authenticated candidate profile confirms application remains a draft",
 )
 
 
@@ -113,7 +118,7 @@ def collect(conn, since: int) -> dict:
         uncertain = conn.execute(
             f"SELECT 1 FROM postings WHERE posting_id=? AND {uncertain_sql}",
             (posting_id,),
-        ).fetchone() is not None
+        ).fetchone() is not None and not err.startswith(UNCERTAINTY_RESOLVED_PREFIXES)
         if uncertain:
             continue
         if any(err.startswith(p) for p in AGENT_DEBT_PREFIXES):
@@ -124,10 +129,15 @@ def collect(conn, since: int) -> dict:
         else:
             manual_ask.append((company, title, url, err))
 
-    verify = conn.execute(
-        "SELECT company, title, url FROM postings "
+    verify_rows = conn.execute(
+        "SELECT company, title, url, COALESCE(last_error,'') FROM postings "
         f"WHERE status='manual' AND COALESCE(last_attempt_at, first_seen) > ? AND {uncertain_sql}",
         (since,)).fetchall()
+    verify = [
+        (company, title, url)
+        for company, title, url, err in verify_rows
+        if not err.startswith(UNCERTAINTY_RESOLVED_PREFIXES)
+    ]
 
     action = conn.execute(
         "SELECT category, company, role, deadline, action_url, summary FROM inbox_events "

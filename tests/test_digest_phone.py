@@ -48,6 +48,9 @@ class CollectClassificationTest(unittest.TestCase):
                  "Lever hCaptcha requires manual completion", 20, 20, ""),
                 ("p3", "Debt Co", "SWE", "https://debt.example/job", "manual",
                  "no adapter for other", 20, 20, ""),
+                ("p4", "Verified Draft Co", "SWE", "https://draft.example/job", "manual",
+                 "authenticated candidate profile confirms application remains a draft; "
+                 "review and submit manually", 20, 20, "manual"),
             ],
         )
         conn.execute(
@@ -60,11 +63,24 @@ class CollectClassificationTest(unittest.TestCase):
                       'manual', 1, 0)
             """
         )
+        conn.execute(
+            """
+            INSERT INTO submission_attempts (
+                attempt_id, posting_id, ats, lane, worker_id, browser_mode,
+                policy_revision, started_at, finished_at, outcome, click_attempted,
+                confirmation_observed
+            ) VALUES ('a2', 'p4', 'oraclecloud', 'oracle', 'w', 'headless', 'test', 20, 21,
+                      'manual', 1, 0)
+            """
+        )
 
         data = digest.collect(conn, since=10)
 
         self.assertEqual([row[0] for row in data["verify"]], ["Uncertain Co"])
-        self.assertEqual([row[0] for row in data["manual_finish"]], ["Captcha Co"])
+        self.assertEqual(
+            [row[0] for row in data["manual_finish"]],
+            ["Captcha Co", "Verified Draft Co"],
+        )
         self.assertEqual(data["manual_debt"]["no adapter for"], 1)
         self.assertFalse(data["manual_ask"])
 
