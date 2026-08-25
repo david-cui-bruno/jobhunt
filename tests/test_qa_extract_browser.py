@@ -224,6 +224,56 @@ def test_cx_select_harvests_exact_safe_controlled_popup_options_and_commits_sele
             browser.close()
 
 
+def test_cx_select_controlled_gridcell_commit_marks_extract_chosen_without_reopening():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+    <label for="degree">Degree Program</label>
+    <input id="degree" role="combobox" aria-controls="degreePopup" aria-expanded="false" value="">
+    <div id="degreePopup" style="display:none">
+      <div role="gridcell" class="cx-select__list-item">Computer Science</div>
+      <div role="gridcell" class="cx-select__list-item">Economics</div>
+    </div>
+    <script>
+      window.openCount = 0;
+      degree.addEventListener('click', () => {
+        if (degree.getAttribute('aria-expanded') !== 'true') window.openCount += 1;
+        degree.setAttribute('aria-expanded', 'true');
+        degreePopup.style.display = 'block';
+      });
+      degreePopup.addEventListener('click', (event) => {
+        if (event.target.matches('[role=gridcell]')) {
+          degree.value = event.target.innerText.trim();
+          degree.setAttribute('aria-expanded', 'false');
+          degreePopup.style.display = 'none';
+        }
+      });
+    </script>
+    """
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            controls = page.evaluate(qa.EXTRACT_JS)
+
+            qa.harvest_select_options(page, controls)
+            filled, failed = qa.fill_answers(
+                page, controls, [{"id_or_name": "degree", "label": "Degree Program", "answer": "Computer Science"}]
+            )
+            fresh_controls = page.evaluate(qa.EXTRACT_JS)
+            open_count_after_fill = page.evaluate("window.openCount")
+            qa.harvest_select_options(page, fresh_controls)
+
+            assert failed == []
+            assert filled == ["Degree Program"]
+            assert fresh_controls[0]["chosen"] == "Computer Science"
+            assert fresh_controls[0]["value"] == ""
+            assert page.evaluate("window.openCount") == open_count_after_fill
+        finally:
+            browser.close()
+
+
 def test_cx_select_fill_fails_closed_for_ambiguous_or_missing_scoped_options():
     from playwright.sync_api import sync_playwright
 

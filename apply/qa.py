@@ -327,9 +327,9 @@ EXTRACT_JS = r"""
     if (cvs?.length) chosen = [...cvs].map(x => x.innerText.trim()).filter(Boolean).join(' | ').slice(0, 200);
     if (role === 'combobox') {
       const expanded = el.getAttribute('aria-expanded') === 'true';
-      const committed = el.getAttribute('data-committed-value') || el.getAttribute('data-value') || '';
+      const committed = el.getAttribute('data-jobhunt-committed-value') || el.getAttribute('data-committed-value') || el.getAttribute('data-value') || '';
       if (!expanded && String(committed || '').trim()) chosen = String(committed).trim().slice(0, 200);
-      else if (!expanded && el.value && (el.hasAttribute('data-committed-value') || el.hasAttribute('data-value'))) chosen = el.value.slice(0, 200);
+      else if (!expanded && el.value && (el.hasAttribute('data-jobhunt-committed-value') || el.hasAttribute('data-committed-value') || el.hasAttribute('data-value'))) chosen = el.value.slice(0, 200);
     }
     controls.push({
       id: isGroup ? '' : (el.id || ''), name: el.name || '', tag: el.tagName.toLowerCase(),
@@ -2397,7 +2397,7 @@ def _cx_committed_value(el) -> str:
     try:
         return str(el.evaluate("""
             el => {
-                const committed = el.getAttribute('data-committed-value') || el.getAttribute('data-value');
+                const committed = el.getAttribute('data-jobhunt-committed-value') || el.getAttribute('data-committed-value') || el.getAttribute('data-value');
                 if (committed) return committed;
                 const expanded = el.getAttribute('aria-expanded') === 'true';
                 return expanded ? '' : (el.value || '').trim();
@@ -2564,6 +2564,7 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                             for _ in range(8):
                                 page.wait_for_timeout(125)
                                 if _best_option(scoped_target, [_cx_committed_value(el)]):
+                                    el.evaluate("(el, value) => el.setAttribute('data-jobhunt-committed-value', value)", scoped_target)
                                     ok = True
                                     break
                     (filled if ok else failed).append(c["label"] or a["id_or_name"])
