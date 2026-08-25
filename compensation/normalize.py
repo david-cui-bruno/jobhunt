@@ -78,6 +78,30 @@ def _has_disqualifying_currency_qualifier(text: str, start: int, end: int, match
     return False
 
 
+def _has_disqualifying_currency_label(question: str) -> bool:
+    if any(unicodedata.category(char) == "Sc" and char != "$" for char in question):
+        return True
+
+    for match in re.finditer(r"\b([A-Za-z]{1,3})\$", question):
+        if match.group(1).lower() not in {"us", "usd"}:
+            return True
+
+    code_patterns = (
+        r"\(([A-Z]{3})\)",
+        r"\b(?:in|currency(?:\s+is)?|denominated\s+in|paid\s+in)\s*[:=]?\s*([A-Z]{3})\b",
+        r"\b([A-Z]{3})\s+(?:salary|compensation|pay|rate)\b",
+    )
+    for pattern in code_patterns:
+        for match in re.finditer(pattern, question):
+            if match.group(1) != "USD":
+                return True
+
+    lowered = question.lower()
+    if re.search(r"\b(?:%s)\b" % "|".join(sorted(_FOREIGN_CODES)), lowered):
+        return True
+    return any(word in lowered for word in _FOREIGN_WORDS)
+
+
 def _valid_bounds(low: Decimal, high: Decimal, period: str) -> bool:
     if low <= 0 or high <= 0 or low > high:
         return False
@@ -121,14 +145,11 @@ def extract_usd_observations(text: str, *, url: str, title: str, source_kind: st
 
 def requested_period(question: str) -> Optional[str]:
     lowered = question.lower()
-    if any(unicodedata.category(char) == "Sc" and char != "$" for char in question):
-        return None
-    if re.search(r"\b(?:%s)\b" % "|".join(sorted(_FOREIGN_CODES)), lowered):
-        return None
-    if any(word in lowered for word in _FOREIGN_WORDS):
+    if _has_disqualifying_currency_label(question):
         return None
     if any(token in lowered for token in (
         "monthly", "per month", "/month", "weekly", "per week", "/week",
+        "fortnightly", "per fortnight", "/fortnight", "biweekly", "per two weeks",
         "daily", "per day", "/day",
     )):
         return None

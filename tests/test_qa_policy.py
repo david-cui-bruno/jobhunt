@@ -3201,8 +3201,15 @@ def test_numeric_compensation_is_allowed_only_from_exact_fresh_cache(monkeypatch
     ({"company": "Other"}, {}, "Desired hourly compensation"),
     ({}, {"period": "year", "amount": "98000"}, "Desired hourly compensation"),
     ({}, {"period": "year", "amount": "98000"}, "Expected monthly salary"),
+    ({}, {"period": "year", "amount": "98000"}, "Fortnightly salary"),
     ({}, {"period": "year", "amount": "98000"}, "Desired salary (CAD)"),
     ({}, {"period": "year", "amount": "98000"}, "Expected annual salary in EUR"),
+    ({}, {"period": "year", "amount": "98000"}, "Expected salary in SEK"),
+    ({}, {"period": "year", "amount": "98000"}, "Salary in SGD annually"),
+    ({}, {"period": "year", "amount": "98000"}, "Annual salary in KRW"),
+    ({}, {"period": "year", "amount": "98000"}, "Salary in BRL per year"),
+    ({}, {"period": "year", "amount": "98000"}, "Annual salary A$80k"),
+    ({}, {"period": "year", "amount": "98000"}, "Annual salary (C$)"),
     ({}, {}, "Desired compensation"),
 ])
 def test_numeric_compensation_cache_mismatch_or_ambiguous_label_stays_manual(

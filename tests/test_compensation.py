@@ -200,11 +200,22 @@ def test_extract_usd_ranges_is_conservative(text, expected):
 @pytest.mark.parametrize(("question", "expected"), [
     ("What is your desired hourly rate?", "hour"),
     ("Requested rate", "hour"),
+    ("Pay rate per hour required", "hour"),
     ("What annual base salary do you expect?", "year"),
     ("Desired yearly compensation", "year"),
+    ("Expected annual salary in USD", "year"),
+    ("Annual salary US$80k", "year"),
+    ("What annual salary do you expect for SWE?", "year"),
     ("Expected monthly salary", None),
+    ("Fortnightly salary", None),
     ("Desired salary (CAD)", None),
     ("Expected annual salary in EUR", None),
+    ("Expected salary in SEK", None),
+    ("Salary in SGD annually", None),
+    ("Annual salary in KRW", None),
+    ("Salary in BRL per year", None),
+    ("Annual salary A$80k", None),
+    ("Annual salary (C$)", None),
     ("Desired compensation", None),
 ])
 def test_requested_period_classifies_explicit_periods(question, expected):
