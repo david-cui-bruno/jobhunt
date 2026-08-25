@@ -87,13 +87,13 @@ def _has_disqualifying_currency_label(question: str) -> bool:
             return True
 
     code_patterns = (
-        r"\(([A-Z]{3})\)",
-        r"\b(?:in|currency(?:\s+is)?|denominated\s+in|paid\s+in)\s*[:=]?\s*([A-Z]{3})\b",
-        r"\b([A-Z]{3})\s+(?:salary|compensation|pay|rate)\b",
+        (r"\(([A-Z]{3})\)", 0),
+        (r"\b(?:in|currency(?:\s+is)?|denominated\s+in|paid\s+in)\s*[:=]?\s*([A-Z]{3})\b", re.I),
+        (r"\b([A-Z]{3})\s+(?:salary|compensation|pay|rate)\b", 0),
     )
-    for pattern in code_patterns:
-        for match in re.finditer(pattern, question):
-            if match.group(1) != "USD":
+    for pattern, flags in code_patterns:
+        for match in re.finditer(pattern, question, flags):
+            if match.group(1).lower() != "usd":
                 return True
 
     lowered = question.lower()

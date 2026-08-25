@@ -3205,6 +3205,8 @@ def test_numeric_compensation_is_allowed_only_from_exact_fresh_cache(monkeypatch
     ({}, {"period": "year", "amount": "98000"}, "Desired salary (CAD)"),
     ({}, {"period": "year", "amount": "98000"}, "Expected annual salary in EUR"),
     ({}, {"period": "year", "amount": "98000"}, "Expected salary in SEK"),
+    ({}, {"period": "year", "amount": "98000"}, "Expected salary in sek"),
+    ({}, {"period": "year", "amount": "98000"}, "Expected salary in Sek"),
     ({}, {"period": "year", "amount": "98000"}, "Salary in SGD annually"),
     ({}, {"period": "year", "amount": "98000"}, "Annual salary in KRW"),
     ({}, {"period": "year", "amount": "98000"}, "Salary in BRL per year"),
