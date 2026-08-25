@@ -1117,6 +1117,92 @@ def test_prepare_pending_compensation_isolates_per_row_exceptions(monkeypatch):
     assert summary["errors"] == 1
 
 
+def test_prepare_pending_compensation_skips_unrelated_paypal_rows_before_limit(monkeypatch):
+    db = compensation_db()
+    for i in range(5):
+        seed_compensation_blocker(db, f"paypal-{i}", last_error="PayPal authentication failed")
+    seed_compensation_blocker(db, "real", last_error="required compensation per hour")
+    monkeypatch.setattr("compensation.research.default_fetch_jd", lambda _url: "No compensation listed")
+    provider = CompensationFakeProvider()
+
+    summary = prepare_pending_compensation(db, provider, limit=5, now=100)
+
+    assert summary["examined"] == 1
+    assert summary["stored"] == 1
+    assert summary["manual"] == 0
+    assert len(provider.calls) == 1
+
+
+def test_prepare_pending_compensation_preselects_supported_compensation_markers(monkeypatch):
+    db = compensation_db()
+    markers = [
+        "compensation per hour required",
+        "salary required",
+        "hourly compensation required",
+        "pay range required",
+        "pay rate required",
+        "desired rate required",
+        "requested rate required",
+    ]
+    for index, marker in enumerate(markers):
+        seed_compensation_blocker(db, f"marker-{index}", last_error=marker)
+    monkeypatch.setattr("compensation.research.default_fetch_jd", lambda _url: "No compensation listed")
+    provider = CompensationFakeProvider()
+
+    summary = prepare_pending_compensation(db, provider, limit=len(markers), now=100)
+
+    assert summary["examined"] == len(markers)
+
+
+def test_compensation_retriage_prequery_skips_unrelated_paypal_rows():
+    db = compensation_db()
+    for i in range(5):
+        seed_compensation_blocker(
+            db,
+            f"paypal-{i}",
+            url=f"https://job-boards.greenhouse.io/acme/jobs/{7000 + i}",
+            last_error="PayPal authentication failed",
+        )
+        store_compensation_evidence(db, f"paypal-{i}")
+    seed_compensation_blocker(
+        db,
+        "real",
+        url="https://job-boards.greenhouse.io/acme/jobs/8000",
+        last_error="required compensation per hour",
+    )
+    store_compensation_evidence(db, "real")
+
+    candidates = __import__('submission.resolutions').resolutions.compensation_retriage_candidates(db, 150)
+
+    assert [candidate["posting_id"] for candidate in candidates] == ["real"]
+
+
+def test_compensation_retriage_prequery_includes_supported_compensation_markers():
+    db = compensation_db()
+    markers = [
+        "compensation per hour required",
+        "salary per hour required",
+        "hourly compensation required",
+        "pay range per hour required",
+        "pay rate per hour required",
+        "desired rate hourly required",
+        "requested rate required",
+    ]
+    for index, marker in enumerate(markers):
+        posting_id = f"marker-{index}"
+        seed_compensation_blocker(
+            db,
+            posting_id,
+            url=f"https://job-boards.greenhouse.io/acme/jobs/{8100 + index}",
+            last_error=marker,
+        )
+        store_compensation_evidence(db, posting_id)
+
+    candidates = __import__('submission.resolutions').resolutions.compensation_retriage_candidates(db, 150)
+
+    assert {candidate["posting_id"] for candidate in candidates} == {f"marker-{index}" for index in range(len(markers))}
+
+
 def test_compensation_candidates_require_fresh_exact_evidence_and_apply_is_cas_safe(tmp_path):
     db = compensation_db(tmp_path)
     seed_compensation_blocker(db, "p1")

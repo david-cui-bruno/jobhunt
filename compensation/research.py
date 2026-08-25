@@ -99,20 +99,25 @@ def _status(value: str, posting_id: str, **extra: object) -> dict:
     return result
 
 
+COMPENSATION_MARKERS = (
+    "compensation",
+    "salary",
+    "hourly",
+    "pay range",
+    "pay rate",
+    "desired rate",
+    "requested rate",
+)
+
+
+def compensation_marker_sql_predicate(expression: str) -> str:
+    lowered = f"lower(COALESCE({expression},''))"
+    return "(" + " OR ".join(f"{lowered} LIKE '%{token}%'" for token in COMPENSATION_MARKERS) + ")"
+
+
 def _has_compensation_marker(last_error: str) -> bool:
     lowered = last_error.lower()
-    return any(
-        token in lowered
-        for token in (
-            "compensation",
-            "salary",
-            "hourly",
-            "pay range",
-            "pay rate",
-            "desired rate",
-            "requested rate",
-        )
-    )
+    return any(token in lowered for token in COMPENSATION_MARKERS)
 
 
 def _public_query(row) -> str:
@@ -228,15 +233,12 @@ def prepare_posting(
 def prepare_pending_compensation(conn, provider: SearchProvider, *, limit: int = 5, now: Optional[int] = None) -> dict:
     ensure_compensation_schema(conn)
     effective_now = int(time.time()) if now is None else int(now)
+    predicate = compensation_marker_sql_predicate("last_error")
     rows = conn.execute(
-        """
+        f"""
         SELECT posting_id FROM postings
         WHERE status IN ('manual','failed')
-          AND (
-            lower(COALESCE(last_error,'')) GLOB '*compensation*'
-            OR lower(COALESCE(last_error,'')) GLOB '*salary*'
-            OR lower(COALESCE(last_error,'')) GLOB '*pay*'
-          )
+          AND {predicate}
         ORDER BY COALESCE(last_attempt_at, first_seen), posting_id
         LIMIT ?
         """,

@@ -6,7 +6,7 @@ import time
 from typing import Iterable, Protocol
 
 from compensation.normalize import requested_period
-from compensation.research import _context_from_row, _has_compensation_marker
+from compensation.research import _context_from_row, _has_compensation_marker, compensation_marker_sql_predicate
 from compensation.schema import load_resolution
 
 
@@ -295,6 +295,7 @@ def _compensation_candidate_query(conn: sqlite3.Connection) -> str:
     source_expr = "COALESCE(p.source, '')" if _has_postings_column(conn, "source") else "''"
     locations_expr = "COALESCE(p.locations, '')" if _has_postings_column(conn, "locations") else "''"
     attempt_expr = "COALESCE(p.attempt_count, 0)" if _has_postings_column(conn, "attempt_count") else "0"
+    marker_predicate = compensation_marker_sql_predicate("p.last_error")
     return f"""
         SELECT p.posting_id, COALESCE(p.company,'') AS company, COALESCE(p.title,'') AS title,
                {locations_expr} AS locations, COALESCE(p.url,'') AS url, {source_expr} AS source,
@@ -302,9 +303,7 @@ def _compensation_candidate_query(conn: sqlite3.Connection) -> str:
                {attempt_expr} AS attempt_count
         FROM postings p
         WHERE p.status IN ('manual','failed')
-          AND (lower(COALESCE(p.last_error,'')) GLOB '*compensation*'
-               OR lower(COALESCE(p.last_error,'')) GLOB '*salary*'
-               OR lower(COALESCE(p.last_error,'')) GLOB '*pay*')
+          AND {marker_predicate}
           AND COALESCE(p.outcome, '') NOT IN ('stale', 'submitted', 'deduplicated')
         ORDER BY p.posting_id
     """
