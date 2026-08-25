@@ -2453,6 +2453,18 @@ def _wait_for_stable_cx_commit(page, selector: str, target: str) -> bool:
         return False
 
 
+def _dismiss_open_combobox(page) -> None:
+    """Avoid Escape unless a visible combobox menu is actually expanded."""
+    try:
+        expanded = page.locator('[role="combobox"][aria-expanded="true"]')
+        for index in range(expanded.count()):
+            if expanded.nth(index).is_visible():
+                page.keyboard.press("Escape")
+                return
+    except Exception:
+        pass
+
+
 def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[str], list[str]]:
     """Apply answers with post-fill verification. Returns (filled_labels, failed_labels)."""
     by_key = {}
@@ -2483,7 +2495,7 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
         ans = str(a["answer"])
         ok = False
         try:
-            page.keyboard.press("Escape")  # dismiss any menu left open by a previous control
+            _dismiss_open_combobox(page)
             el = page.locator(sel).first
             try:
                 el.scroll_into_view_if_needed(timeout=2000)
@@ -2663,7 +2675,7 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
                     ok = bool(_best_option(desired, selected))
                     if ok:
                         break
-                    page.keyboard.press("Escape")
+                    _dismiss_open_combobox(page)
                     page.wait_for_timeout(300)
             else:  # plain input / textarea
                 el.fill(ans)
@@ -2672,7 +2684,7 @@ def fill_answers(page, controls: list[dict], answers: list[dict]) -> tuple[list[
             page.wait_for_timeout(200)
         except Exception:
             failed.append(c["label"] or a["id_or_name"])
-    page.keyboard.press("Escape")
+    _dismiss_open_combobox(page)
     return filled, failed
 
 

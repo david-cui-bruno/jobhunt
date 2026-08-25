@@ -408,6 +408,57 @@ def test_cx_select_does_not_report_success_when_oracle_rerender_clears_late_comm
             browser.close()
 
 
+def test_collapsed_cx_select_survives_a_later_answer_without_spurious_escape():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+    <label for="degree">Degree Program</label>
+    <input id="degree" role="combobox" aria-controls="degreePopup" aria-expanded="false" value="">
+    <div id="degreePopup" style="display:none">
+      <div role="gridcell" class="cx-select__list-item">Bachelor (BA/BS)</div>
+    </div>
+    <label for="portfolio">Portfolio</label>
+    <input id="portfolio" type="text" value="">
+    <script>
+      degree.addEventListener('click', () => {
+        degree.setAttribute('aria-expanded', 'true');
+        degreePopup.style.display = 'block';
+      });
+      degreePopup.addEventListener('click', (event) => {
+        if (!event.target.matches('[role=gridcell]')) return;
+        degree.value = event.target.innerText.trim();
+        degree.setAttribute('aria-expanded', 'false');
+        degreePopup.style.display = 'none';
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && degree.value) {
+          degree.value = '';
+          degree.removeAttribute('data-jobhunt-committed-value');
+        }
+      });
+    </script>
+    """
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.set_content(html)
+            controls = page.evaluate(qa.EXTRACT_JS)
+            qa.harvest_select_options(page, controls)
+
+            filled, failed = qa.fill_answers(page, controls, [
+                {"id_or_name": "degree", "label": "Degree Program", "answer": "Bachelor (BA/BS)"},
+                {"id_or_name": "portfolio", "label": "Portfolio", "answer": "https://example.invalid"},
+            ])
+
+            assert failed == []
+            assert filled == ["Degree Program", "Portfolio"]
+            assert page.locator("#degree").input_value() == "Bachelor (BA/BS)"
+            assert page.locator("#portfolio").input_value() == "https://example.invalid"
+        finally:
+            browser.close()
+
+
 def test_cx_select_fill_fails_closed_for_ambiguous_or_missing_scoped_options():
     from playwright.sync_api import sync_playwright
 
