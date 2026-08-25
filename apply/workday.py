@@ -1416,7 +1416,7 @@ def _explicit_application_href(page) -> str | None:
                 'Apply', 'Start Your Application', 'Continue Application'
               ]);
               const links = [...document.querySelectorAll('a[href]')];
-              const match = links.find((link) => {
+              const matches = links.filter((link) => {
                 const style = window.getComputedStyle(link);
                 const visible = style.visibility !== 'hidden'
                   && style.display !== 'none'
@@ -1425,7 +1425,7 @@ def _explicit_application_href(page) -> str | None:
                 return visible && (link.getAttribute('data-automation-id') === 'adventureButton'
                   || exactLabels.has(text));
               });
-              return match ? match.getAttribute('href') : null;
+              return matches.length === 1 ? matches[0].getAttribute('href') : null;
             }
             """
         )

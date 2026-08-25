@@ -806,6 +806,38 @@ def test_missing_apply_uses_one_explicit_application_href_without_looping():
     ]
 
 
+def test_explicit_continue_application_href_is_browser_backed_and_exact():
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content(
+            '<a href="/jobs/job/example/apply">Continue Application</a>'
+            '<a href="/jobs/job/other/apply">Continue Application Later</a>'
+        )
+        try:
+            assert workday._explicit_application_href(page) == "/jobs/job/example/apply"
+        finally:
+            browser.close()
+
+
+def test_explicit_continue_application_href_fails_closed_on_ambiguity():
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content(
+            '<a href="/jobs/job/example/apply">Continue Application</a>'
+            '<a href="/jobs/job/example/apply?duplicate=1">Continue Application</a>'
+        )
+        try:
+            assert workday._explicit_application_href(page) is None
+        finally:
+            browser.close()
+
+
 def test_missing_apply_uses_one_exact_visible_continue_application_button():
     page = ContinueApplicationPage()
 
