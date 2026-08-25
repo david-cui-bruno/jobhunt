@@ -1053,7 +1053,11 @@ def test_saved_draft_my_information_defers_resume_refresh(monkeypatch, tmp_path)
     page = mock.Mock()
     entry = workday.WorkdayEntryResult(state="upload_ready", marker="saved_draft")
     monkeypatch.setattr(workday, "saved_draft_wizard_is_active", lambda page: True)
-    monkeypatch.setattr(workday, "current_step", lambda page: "My Information")
+    monkeypatch.setattr(
+        workday,
+        "current_step",
+        lambda page: "Current step 1 of 6\nMy Information",
+    )
     refresh = mock.Mock(return_value=False)
     monkeypatch.setattr(workday, "refresh_saved_resume", refresh)
 

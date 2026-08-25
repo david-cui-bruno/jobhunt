@@ -1578,7 +1578,12 @@ def prepare_workday_resume_entry(page, resume_pdf: Path,
         # wizard reaches My Experience rather than treating the absent upload
         # input as a failed refresh. Later steps still fail closed because the
         # automation cannot safely navigate backward to replace the resume.
-        if current_step(page).strip().lower() == "my information":
+        step_lines = [
+            line.strip().lower()
+            for line in current_step(page).splitlines()
+            if line.strip()
+        ]
+        if step_lines[-1:] == ["my information"]:
             return None
         return refresh_saved_resume(page, resume_pdf)
     upload = page.locator("[data-automation-id='file-upload-input-ref']").first
