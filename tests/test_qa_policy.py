@@ -2,6 +2,8 @@ import json
 import sys
 import tempfile
 import unittest
+
+import yaml
 from pathlib import Path
 from unittest import mock
 
@@ -11,6 +13,35 @@ import ashby  # noqa: E402
 import greenhouse  # noqa: E402
 import smartrecruiters  # noqa: E402
 import workday  # noqa: E402
+
+
+def test_application_answers_example_schema_covers_private_runtime_delta():
+    # This uses the sanitized schema file directly instead of qa.APPLICATION_ANSWERS,
+    # which is intentionally environment-dependent at import time.
+    example = yaml.safe_load((qa.ROOT / "profile" / "application_answers.example.yaml").read_text())
+
+    assert example["availability"]["default_start_date"] is None
+    assert example["availability"]["summer_2027"] == {
+        "pursue": True,
+        "start": None,
+        "end": None,
+    }
+    assert example["current_offers"] == [{
+        "company": None,
+        "description": None,
+        "deadline_month": None,
+        "deadline": None,
+        "deadline_note": None,
+    }]
+    assert example["legal"]["security_clearance"] is None
+    assert example["legal"]["us_dod_employment_after_2008_01_28"] is None
+    assert example["legal"]["self_or_family_or_business_partner_government_employment"] is None
+    assert example["professional"]["english_proficiency"] is None
+    assert example["documents"]["unofficial_transcript"] == {
+        "available": None,
+        "application_upload_authorized": None,
+    }
+    assert example["events"]["example_event"]["attending"] is None
 
 
 class QaManualPolicyTest(unittest.TestCase):

@@ -37,6 +37,8 @@ preferences:
   future_contact: null
   compensation_policy: null
 availability:
+  # Exact candidate-specific dates belong only in the private runtime file.
+  default_start_date: null
   summer_2027:
     pursue: true
     start: null
@@ -50,23 +52,34 @@ availability:
     start: null
     end: null
 current_offers:
-  # deadline_month supports truthful month-only answers. Keep deadline null until
-  # the exact contractual date is verified; day-level fields will remain manual.
+  # Keep populated offer details only in the private runtime file.
   - company: null
+    description: null
     deadline_month: null
     deadline: null
+    deadline_note: null
 legal:
   non_compete_or_conflict: null
   notice_period: null
   valid_drivers_license: null
   security_clearance: null
+  us_dod_employment_after_2008_01_28: null
+  self_or_family_or_business_partner_government_employment: null
   political_contributions_over_150_last_two_years: null
 professional:
+  english_proficiency: null
   # Use false or [] only after the user confirms there are no publications.
   publications: null
   # Exact response for direct reference-detail fields, for example
   # "Available upon request." Never store invented names or contact details.
   references: null
+documents:
+  unofficial_transcript:
+    available: null
+    application_upload_authorized: null
+events:
+  example_event:
+    attending: null
 # Exact user-authored answers for recurring free-text application prompts. Every
 # normalized phrase in match_all must appear in the form question before the
 # answer is eligible. Keep the real populated values in the encrypted answer bank.
