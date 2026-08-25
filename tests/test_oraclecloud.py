@@ -597,7 +597,7 @@ def test_oracle_dry_run_reaches_submit_boundary_without_click(fake_oracle, pdf):
     assert page.filled["email"]
     assert page.filled["phone"]
     assert page.filled["linkedin"]
-    assert page.qa_evaluations == 3
+    assert page.qa_evaluations == 4
     assert result["ok"] is True
     assert result["submitted"] is False
     assert result["reason"] == "dry run - did not submit"
@@ -613,7 +613,7 @@ def test_oracle_four_page_dry_run_clicks_next_three_times_uploads_once_and_aggre
 
     assert page.next_clicks == 3
     assert page.uploaded_file == str(pdf)
-    assert page.qa_evaluations == 12
+    assert page.qa_evaluations == 16
     assert result["reason"] == "dry run - did not submit"
     assert result["qa_filled"] == ["page1", "page2", "page3", "page4"]
     assert page.submit_clicks == 0
@@ -726,7 +726,7 @@ def test_oracle_gates_after_transition_stop_before_further_filling_or_clicking(f
     assert result["outcome"] == ("stale" if "closed" in variant else "manual")
     assert reason.lower() in result["reason"].lower()
     assert page.next_clicks == 1
-    assert page.qa_evaluations == 3
+    assert page.qa_evaluations == 4
     assert page.submit_clicks == 0
 
 
@@ -1194,6 +1194,89 @@ def test_oracle_required_empty_returns_manual_without_submit(fake_oracle, pdf):
     assert result["unanswered"] == ["Example eligibility question"]
     assert result["click_attempted"] is False
     assert result["submission_uncertain"] is False
+    assert page.submit_clicks == 0
+
+
+def test_oracle_required_group_answers_need_explicit_approval_even_when_preselected():
+    controls = [{
+        "id": "",
+        "name": "government-contract",
+        "label": "Were you involved in a government contract with Example Company?",
+        "type": "group-radio",
+        "required": True,
+        "value": "",
+        "chosen": "Synthetic persisted value",
+        "options": ["Yes", "No"],
+    }]
+
+    assert oraclecloud._unapproved_oracle_group_labels(
+        controls,
+        approved_answers={"long_form_answers": []},
+    ) == [controls[0]["label"]]
+
+
+def test_oracle_unlabeled_required_group_fails_closed():
+    controls = [{
+        "id": "",
+        "name": "unknown-required-choice",
+        "label": "",
+        "type": "group-radio",
+        "required": True,
+        "value": "",
+        "chosen": "Synthetic persisted value",
+        "options": ["Option A", "Option B"],
+    }]
+
+    assert oraclecloud._unapproved_oracle_group_labels(
+        controls,
+        approved_answers={},
+    ) == ["Unknown required Oracle choice"]
+
+
+def test_oracle_required_group_with_approved_answer_passes_gate():
+    label = "Were you involved in a government contract with Example Company?"
+    controls = [{
+        "id": "",
+        "name": "government-contract",
+        "label": label,
+        "type": "group-radio",
+        "required": True,
+        "value": "",
+        "chosen": "",
+        "options": ["Yes", "No"],
+    }]
+    approved = {
+        "long_form_answers": [{
+            "key": "confirmed_example_compliance_answer",
+            "match_all": ["government contract", "example company"],
+            "answer": "No",
+        }],
+    }
+
+    assert oraclecloud._unapproved_oracle_group_labels(
+        controls,
+        approved_answers=approved,
+    ) == []
+    answers = oraclecloud.qa.explicit_approved_answers(
+        controls,
+        approved_answers=approved,
+    )
+    assert answers == [{"id_or_name": "government-contract", "answer": "No"}]
+
+
+def test_oracle_unapproved_group_blocks_before_next_or_submit(fake_oracle, pdf, monkeypatch):
+    page = fake_oracle("anonymous")
+    monkeypatch.setattr(
+        oraclecloud,
+        "_unapproved_oracle_group_labels",
+        lambda controls, **kwargs: ["Confirmed compliance answer required"],
+    )
+
+    result = apply_oraclecloud(ORACLE_JOB_URL, pdf, "oracle-compliance-gate", dry_run=True)
+
+    assert result["outcome"] == "manual"
+    assert result["unanswered"] == ["Confirmed compliance answer required"]
+    assert page.next_clicks == 0
     assert page.submit_clicks == 0
 
 

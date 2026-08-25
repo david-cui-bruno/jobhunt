@@ -858,6 +858,46 @@ def _merge_unique(existing: list[str], new: list[str]) -> list[str]:
     return merged
 
 
+def _unapproved_oracle_group_labels(
+    controls: list[dict],
+    *,
+    company_context: str = "",
+    approved_answers: dict | None = None,
+) -> list[str]:
+    """Require a grounded answer for every required Oracle choice group.
+
+    Oracle persists radio selections between attempts. A non-empty DOM value is
+    therefore not evidence that the user approved the underlying fact.
+    """
+    required_groups = [
+        control for control in controls
+        if control.get("required")
+        and control.get("type") in {"group-radio", "group-checkbox"}
+    ]
+    if not required_groups:
+        return []
+    explicit = qa.explicit_approved_answers(
+        required_groups,
+        company_context=company_context,
+        approved_answers=approved_answers,
+    )
+    allowed, _blocked = qa.filter_manual_answers(
+        required_groups,
+        explicit,
+        approved_answers=approved_answers,
+    )
+    approved_labels = {
+        str(answer.get("label") or "").strip().lower()
+        for answer in allowed
+        if str(answer.get("label") or "").strip()
+    }
+    return [
+        str(control.get("label") or "").strip() or "Unknown required Oracle choice"
+        for control in required_groups
+        if str(control.get("label")).strip().lower() not in approved_labels
+    ]
+
+
 def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = True) -> dict:
     result = {"ok": False, "submitted": False, "reason": "", "unanswered": []}
     with sync_playwright() as pw:
@@ -939,8 +979,13 @@ def apply_oraclecloud(url: str, resume_pdf: Path, slug: str, dry_run: bool = Tru
                     _record_filled_screenshot(result, page, slug)
                     return result
 
+                final_controls = page.evaluate(qa.EXTRACT_JS)
+                approval_required = _unapproved_oracle_group_labels(
+                    final_controls,
+                    company_context=slug,
+                )
                 required_empty = page.evaluate(REQUIRED_EMPTY_JS)
-                unanswered = list(required_empty or [])
+                unanswered = _merge_unique(list(required_empty or []), approval_required)
                 result["unanswered"] = unanswered
                 _record_filled_screenshot(result, page, slug)
                 if unanswered:
