@@ -73,10 +73,20 @@ def main() -> int:
     slug = str(payload["slug"])
     pdf = Path(str(payload["resume_pdf"]))
     dry_run = bool(payload.get("dry_run", False))
-    # Track-based graduation (David 2026-08-19): expose the job title before
-    # any adapter (and therefore qa.py) is imported, so the per-process
-    # overlay in qa.py resolves intern vs full-time for THIS posting.
-    os.environ["JOBHUNT_JOB_TITLE"] = str(payload.get("title") or "")
+    # Track-based graduation and cache-only compensation QA both need public
+    # posting context before any adapter (and therefore qa.py) is imported.
+    context_env = {
+        "JOBHUNT_POSTING_ID": payload.get("posting_id"),
+        "JOBHUNT_COMPANY": payload.get("company"),
+        "JOBHUNT_JOB_TITLE": payload.get("title"),
+        "JOBHUNT_JOB_LOCATION": payload.get("locations"),
+        "JOBHUNT_TRACKER_DB": payload.get("tracker_db"),
+    }
+    for key, value in context_env.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = str(value)
     fn, waas, detected, target_url = _adapter(ats, url)
     if fn is None:
         print(json.dumps({"outcome": "manual", "ok": False, "submitted": False,

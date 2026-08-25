@@ -157,7 +157,11 @@ def execute_claimed_posting(
                 "url": url,
                 "resume_pdf": str(pdf),
                 "slug": slug,
+                "posting_id": posting_id,
+                "company": company,
                 "title": title,
+                "locations": _row_get(row, "locations", "") or "",
+                "tracker_db": str(conn.execute("PRAGMA database_list").fetchone()[2]),
                 "dry_run": dry_run,
             })
         except Exception as exc:

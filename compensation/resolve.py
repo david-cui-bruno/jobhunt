@@ -1,9 +1,13 @@
+import sqlite3
+import urllib.parse
 from decimal import Decimal, ROUND_HALF_UP
 from statistics import median
 from typing import Iterable, List, Optional
 
 from compensation.models import CompensationResolution, EvidenceObservation, JobContext
-from compensation.normalize import canonical_domain
+from compensation.normalize import canonical_domain, requested_period
+from compensation.schema import load_resolution
+from track import infer_track
 
 _SECONDS_30_DAYS = 30 * 86400
 _HOURS_PER_YEAR = Decimal("2080")
@@ -139,3 +143,63 @@ def resolve_observations(context: JobContext, observations: Iterable[EvidenceObs
     amount = _round(Decimal(str(median(values))), context.period)
     evidence = [row for _value, row in by_domain.values()]
     return _resolution(context, amount, "market_median", evidence, now)
+
+
+def _control_text(control: dict) -> str:
+    parts = []
+    for key in ("label", "placeholder", "name", "id"):
+        value = str(control.get(key) or "").strip()
+        if value:
+            parts.append(value)
+    options = control.get("options") or []
+    if options:
+        parts.extend(str(option) for option in options)
+    return " ".join(parts)
+
+
+def _format_amount(value: Decimal) -> str:
+    if value == value.to_integral_value():
+        return str(value.quantize(Decimal("1")))
+    return format(value.normalize(), "f")
+
+
+def cached_answer_for_control(control: dict, env: dict, now: int) -> Optional[str]:
+    """Return an exact fresh cached compensation answer for a form control.
+
+    This path is deliberately read-only and cache-only for browser workers.
+    Missing or ambiguous context fails closed without contacting providers.
+    """
+    period = requested_period(_control_text(control))
+    if period is None:
+        return None
+    db_path = str(env.get("JOBHUNT_TRACKER_DB") or "").strip()
+    posting_id = str(env.get("JOBHUNT_POSTING_ID") or "").strip()
+    company = str(env.get("JOBHUNT_COMPANY") or "").strip()
+    title = str(env.get("JOBHUNT_JOB_TITLE") or "").strip()
+    location = str(env.get("JOBHUNT_JOB_LOCATION") or "").strip()
+    if not (db_path and posting_id and company and title):
+        return None
+    context = JobContext(
+        posting_id=posting_id,
+        company=company,
+        title=title,
+        location=location,
+        employment_type=infer_track(title),
+        currency="USD",
+        period=period,
+    )
+    uri = "file:" + urllib.parse.quote(db_path) + "?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return None
+    try:
+        resolution = load_resolution(conn, context, now=now)
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    if resolution is None:
+        return None
+    return _format_amount(resolution.amount)

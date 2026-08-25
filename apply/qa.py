@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import datetime
+import time
 import urllib.request
 from pathlib import Path
 
@@ -16,6 +17,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import track as _track  # noqa: E402  (shared intern/fulltime classifier)
+from compensation.resolve import cached_answer_for_control  # noqa: E402
 
 PROFILE = yaml.safe_load((ROOT / "profile" / "profile.yaml").read_text())
 
@@ -1188,6 +1190,9 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
         control = dict(original, company_context=company_context)
         question = _control_question_text(control).lower()
         options = [str(option) for option in control.get("options") or []]
+        compensation_answer = None
+        if re.search(r"\b(compensation|salary|pay (?:range|rate)|hourly rate|base pay|expected (?:pay|salary)|desired (?:pay|salary)|(?:pay|compensation) expectations?)\b", question):
+            compensation_answer = cached_answer_for_control(control, os.environ, int(time.time()))
         hometown_component = _hometown_component(control, approved)
         organization_entry = next((
             entry for entry in approved.get("long_form_answers") or []
@@ -1199,6 +1204,8 @@ def explicit_approved_answers(controls: list[dict], key_field: str = "id_or_name
             answer: object | None = _render_boolean(True, options)
         else:
             answer = _approved_long_form_answer(question, approved, company_context)
+        if compensation_answer is not None:
+            answer = compensation_answer
         if answer is not None:
             pass
         elif re.search(r"\b(security clearance|clearance level|public trust|secret clearance|top secret|ts/sci)\b", question):
@@ -2050,7 +2057,10 @@ def _blocked_answer_is_approved(control: dict, answer: object, approved: dict) -
             return False
         numeric = bool(re.search(r"\$|\b\d+(?:\.\d+)?\b", answer_text))
         offered_options = [str(option) for option in control.get("options") or []]
-        return not numeric or answer_text in offered_options
+        if numeric:
+            cached = cached_answer_for_control(control, os.environ, int(time.time()))
+            return bool(cached and answer_text.strip() == cached)
+        return answer_text in offered_options or not numeric
     if re.search(r"\b(offer deadline|exploding offer|deadline to accept)\b", question):
         for offer in offers:
             if not isinstance(offer, dict):

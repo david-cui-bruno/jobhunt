@@ -19,6 +19,7 @@ def _create_dispatch_db(path: Path) -> None:
             posting_id TEXT PRIMARY KEY,
             company TEXT,
             title TEXT,
+            locations TEXT,
             status TEXT,
             url TEXT,
             outcome TEXT,
@@ -48,8 +49,8 @@ def dispatch_db(tmp_path: Path) -> Path:
 def seed_ready(db: Path, posting_id: str, url: str, *, resume_pdf: str | None = None) -> None:
     conn = sqlite3.connect(db)
     conn.execute(
-        "INSERT INTO postings (posting_id, company, title, status, url) VALUES (?,?,?,?,?)",
-        (posting_id, f"Company {posting_id}", "Engineer", "ready", url),
+        "INSERT INTO postings (posting_id, company, title, locations, status, url) VALUES (?,?,?,?,?,?)",
+        (posting_id, f"Company {posting_id}", "Engineer", "New York, NY", "ready", url),
     )
     conn.execute("INSERT INTO emails VALUES (?, ?)", (posting_id, resume_pdf or f"/tmp/{posting_id}.pdf"))
     conn.commit()
@@ -321,8 +322,8 @@ def test_claimed_row_missing_is_released_without_attempt_or_uncertainty(dispatch
 
     conn = sqlite3.connect(dispatch_db)
     conn.execute(
-        "INSERT INTO postings (posting_id, company, title, status, url) VALUES (?,?,?,?,?)",
-        ("orphan", "Orphan", "Engineer", "ready", "https://boards.greenhouse.io/acme/jobs/orphan"),
+        "INSERT INTO postings (posting_id, company, title, locations, status, url) VALUES (?,?,?,?,?,?)",
+        ("orphan", "Orphan", "Engineer", "New York, NY", "ready", "https://boards.greenhouse.io/acme/jobs/orphan"),
     )
     conn.commit()
     conn.close()
@@ -339,3 +340,129 @@ def test_claimed_row_missing_is_released_without_attempt_or_uncertainty(dispatch
         "submission_attempts",
     )
     conn.close()
+
+
+def test_execute_claimed_posting_payload_includes_public_posting_context(dispatch_db, monkeypatch):
+    from submission.executor import execute_claimed_posting
+    from submission.lanes import DIRECT
+
+    seed_ready(dispatch_db, "p1", "https://boards.greenhouse.io/acme/jobs/1")
+    conn = connect_tracker(dispatch_db)
+    row = conn.execute("SELECT p.*, e.resume_pdf FROM postings p JOIN emails e USING (posting_id) WHERE p.posting_id='p1'").fetchone()
+    seen = {}
+
+    monkeypatch.setattr("submission.executor._resume_quality_ready", lambda pdf, posting_id: (True, "ok"))
+    monkeypatch.setattr("submission.executor._posting_dead", lambda url: False)
+    monkeypatch.setattr("submission.executor._enforce_submission_safety", lambda result, attempted: result)
+    monkeypatch.setattr("submission.executor._outcome", lambda result: result["outcome"])
+    monkeypatch.setattr("submission.executor._mark_outcome", lambda *args, **kwargs: True)
+    monkeypatch.setattr("submission.executor.start_attempt", lambda *args, **kwargs: None)
+    monkeypatch.setattr("submission.executor.finish_attempt", lambda *args, **kwargs: None)
+
+    def fake_run_adapter(payload):
+        seen.update(payload)
+        return {"outcome": "manual", "click_attempted": False, "reason": "qa"}
+
+    monkeypatch.setattr("submission.executor.run_adapter", fake_run_adapter)
+
+    execute_claimed_posting(conn, row, lane=DIRECT, dry_run=False, worker_id="w1")
+
+    assert seen["posting_id"] == row["posting_id"]
+    assert seen["company"] == row["company"]
+    assert seen["title"] == row["title"]
+    assert seen["locations"] == row["locations"]
+    assert seen["tracker_db"].endswith("tracker.db")
+    conn.close()
+
+
+def test_submit_worker_sets_public_job_environment_before_adapter_import(monkeypatch):
+    import io
+    import json
+    import os
+    import submit_worker
+
+    captured = {}
+
+    def fake_adapter(ats, url):
+        captured.update({
+            "posting_id": os.environ.get("JOBHUNT_POSTING_ID"),
+            "company": os.environ.get("JOBHUNT_COMPANY"),
+            "title": os.environ.get("JOBHUNT_JOB_TITLE"),
+            "location": os.environ.get("JOBHUNT_JOB_LOCATION"),
+            "tracker_db": os.environ.get("JOBHUNT_TRACKER_DB"),
+        })
+        return None, False, "unsupported", url
+
+    monkeypatch.setattr(submit_worker, "_adapter", fake_adapter)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
+        "url": "https://example.com/job",
+        "slug": "slug",
+        "resume_pdf": "/tmp/resume.pdf",
+        "posting_id": "p1",
+        "company": "Acme",
+        "title": "Software Engineer Intern",
+        "locations": "New York, NY",
+        "tracker_db": "/safe/tracker.db",
+    })))
+
+    assert submit_worker.main() == 0
+    assert captured == {
+        "posting_id": "p1",
+        "company": "Acme",
+        "title": "Software Engineer Intern",
+        "location": "New York, NY",
+        "tracker_db": "/safe/tracker.db",
+    }
+
+
+def test_submit_worker_clears_missing_public_job_environment_between_in_process_calls(monkeypatch):
+    import io
+    import json
+    import os
+    import submit_worker
+
+    snapshots = []
+
+    def fake_adapter(ats, url):
+        snapshots.append({
+            key: os.environ.get(key)
+            for key in (
+                "JOBHUNT_POSTING_ID",
+                "JOBHUNT_COMPANY",
+                "JOBHUNT_JOB_TITLE",
+                "JOBHUNT_JOB_LOCATION",
+                "JOBHUNT_TRACKER_DB",
+            )
+        })
+        return None, False, "unsupported", url
+
+    monkeypatch.setattr(submit_worker, "_adapter", fake_adapter)
+    first = {
+        "url": "https://example.com/one",
+        "slug": "one",
+        "resume_pdf": "/tmp/resume.pdf",
+        "posting_id": "p1",
+        "company": "Acme",
+        "title": "Software Engineer Intern",
+        "locations": "New York, NY",
+        "tracker_db": "/safe/tracker.db",
+    }
+    second = {
+        "url": "https://example.com/two",
+        "slug": "two",
+        "resume_pdf": "/tmp/resume.pdf",
+    }
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(first)))
+    assert submit_worker.main() == 0
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(second)))
+    assert submit_worker.main() == 0
+
+    assert snapshots[0]["JOBHUNT_POSTING_ID"] == "p1"
+    assert snapshots[1] == {
+        "JOBHUNT_POSTING_ID": None,
+        "JOBHUNT_COMPANY": None,
+        "JOBHUNT_JOB_TITLE": None,
+        "JOBHUNT_JOB_LOCATION": None,
+        "JOBHUNT_TRACKER_DB": None,
+    }

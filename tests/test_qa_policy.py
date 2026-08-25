@@ -3099,3 +3099,135 @@ def test_fill_answers_standalone_radio_no_without_click_is_failed_not_filled():
 def test_oracle_redwood_combobox_control_is_not_plain_text():
     src = qa.EXTRACT_JS
     assert "role || el.type" in src
+
+
+# Task 4 compensation cache-only QA tests
+import dataclasses
+import os
+import sqlite3
+from decimal import Decimal
+
+from compensation.models import CompensationResolution, EvidenceObservation, JobContext
+from compensation.schema import ensure_compensation_schema, store_resolution
+
+APPROVED_COMPENSATION = {
+    "version": 1,
+    "preferences": {
+        "compensation_policy": "Use fresh job-specific employer or market evidence; otherwise prefer market rate options.",
+    },
+}
+
+
+def _comp_context(period="hour", posting_id="p1", company="Acme"):
+    return JobContext(
+        posting_id=posting_id,
+        company=company,
+        title="Software Engineer Intern",
+        location="New York, NY",
+        employment_type="intern",
+        currency="USD",
+        period=period,
+    )
+
+
+def _store_compensation(db_path, context=None, amount="47", *, expires_at=1_790_192_000):
+    context = context or _comp_context()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    ensure_compensation_schema(conn)
+    store_resolution(conn, CompensationResolution(
+        context=context,
+        amount=Decimal(amount),
+        method="market_median",
+        evidence=(EvidenceObservation(
+            url="https://levels.fyi/acme",
+            domain="levels.fyi",
+            title="Acme Software Engineer Intern New York pay",
+            low=Decimal("44"),
+            high=Decimal("50"),
+            point=None,
+            currency="USD",
+            period=context.period,
+            source_kind="market",
+            observed_at=1_787_600_000,
+        ),),
+        researched_at=1_787_600_000,
+        expires_at=expires_at,
+    ))
+    conn.close()
+
+
+@pytest.fixture
+def compensation_db(tmp_path):
+    db = tmp_path / "tracker.db"
+    _store_compensation(db)
+    return db
+
+
+def set_job_env(monkeypatch, *, posting_id="p1", company="Acme", title="Software Engineer Intern", location="New York, NY", db=None):
+    values = {
+        "JOBHUNT_POSTING_ID": posting_id,
+        "JOBHUNT_COMPANY": company,
+        "JOBHUNT_JOB_TITLE": title,
+        "JOBHUNT_JOB_LOCATION": location,
+    }
+    if db is not None:
+        values["JOBHUNT_TRACKER_DB"] = str(db)
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+
+
+def _assert_no_provider_or_http(monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("network/provider lookup must not run during QA")
+    monkeypatch.setattr("urllib.request.urlopen", fail, raising=False)
+
+
+def test_numeric_compensation_is_allowed_only_from_exact_fresh_cache(monkeypatch, compensation_db):
+    _assert_no_provider_or_http(monkeypatch)
+    control = {"id": "comp", "label": "Desired hourly compensation", "options": []}
+    set_job_env(monkeypatch, db=compensation_db)
+
+    answers = qa.explicit_approved_answers([control], approved_answers=APPROVED_COMPENSATION)
+
+    assert answers == [{"id_or_name": "comp", "answer": "47"}]
+    assert not qa.answer_requires_manual(control, "47", approved_answers=APPROVED_COMPENSATION)
+    assert qa.answer_requires_manual(control, "48", approved_answers=APPROVED_COMPENSATION)
+
+
+@pytest.mark.parametrize(("env_updates", "context_updates", "label"), [
+    ({}, {"expires_at": 1_787_600_000}, "Desired hourly compensation"),
+    ({"posting_id": "p2"}, {}, "Desired hourly compensation"),
+    ({"company": "Other"}, {}, "Desired hourly compensation"),
+    ({}, {"period": "year", "amount": "98000"}, "Desired hourly compensation"),
+    ({}, {}, "Desired compensation"),
+])
+def test_numeric_compensation_cache_mismatch_or_ambiguous_label_stays_manual(
+        monkeypatch, tmp_path, env_updates, context_updates, label):
+    _assert_no_provider_or_http(monkeypatch)
+    db = tmp_path / "tracker.db"
+    context = _comp_context(period=context_updates.get("period", "hour"))
+    _store_compensation(
+        db,
+        context=context,
+        amount=context_updates.get("amount", "47"),
+        expires_at=context_updates.get("expires_at", 1_790_192_000),
+    )
+    env = {"posting_id": "p1", "company": "Acme"}
+    env.update(env_updates)
+    set_job_env(monkeypatch, db=db, **env)
+    control = {"id": "comp", "label": label, "options": []}
+
+    assert qa.explicit_approved_answers([control], approved_answers=APPROVED_COMPENSATION) == []
+    assert qa.answer_requires_manual(control, "47", approved_answers=APPROVED_COMPENSATION)
+
+
+def test_numeric_compensation_missing_tracker_db_stays_manual_and_non_numeric_option_allowed(monkeypatch):
+    _assert_no_provider_or_http(monkeypatch)
+    control = {"id": "comp", "label": "Desired hourly compensation", "options": ["Market rate", "Other"]}
+    set_job_env(monkeypatch, db=None)
+    monkeypatch.delenv("JOBHUNT_TRACKER_DB", raising=False)
+
+    assert qa.explicit_approved_answers([control], approved_answers=APPROVED_COMPENSATION) == []
+    assert qa.answer_requires_manual(control, "47", approved_answers=APPROVED_COMPENSATION)
+    assert not qa.answer_requires_manual(control, "Market rate", approved_answers=APPROVED_COMPENSATION)
