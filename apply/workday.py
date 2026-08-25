@@ -1412,7 +1412,9 @@ def _explicit_application_href(page) -> str | None:
         return page.evaluate(
             r"""
             () => {
-              const exactLabels = new Set(['Apply', 'Start Your Application']);
+              const exactLabels = new Set([
+                'Apply', 'Start Your Application', 'Continue Application'
+              ]);
               const links = [...document.querySelectorAll('a[href]')];
               const match = links.find((link) => {
                 const style = window.getComputedStyle(link);
@@ -1429,6 +1431,32 @@ def _explicit_application_href(page) -> str | None:
         )
     except Exception:
         return None
+
+
+def _exact_visible_continue_application_button(page):
+    """Return one exact accessible Continue Application button, or fail closed."""
+    try:
+        matches = page.get_by_role(
+            "button", name="Continue Application", exact=True
+        )
+        visible = []
+        for index in range(matches.count()):
+            candidate = matches.nth(index)
+            if candidate.is_visible():
+                visible.append(candidate)
+        return visible[0] if len(visible) == 1 else None
+    except Exception:
+        return None
+
+
+def _application_entry_button(page):
+    btn = page.locator(
+        "a[data-automation-id='adventureButton'], "
+        "button[data-automation-id='adventureButton']"
+    ).first
+    if btn.count():
+        return btn
+    return _exact_visible_continue_application_button(page)
 
 
 def enter_application_form(
@@ -1462,11 +1490,8 @@ def enter_application_form(
     except Exception:
         pass
 
-    btn = page.locator(
-        "a[data-automation-id='adventureButton'], "
-        "button[data-automation-id='adventureButton']"
-    ).first
-    if not btn.count():
+    btn = _application_entry_button(page)
+    if btn is None:
         if _workday_auth_gate_visible(page):
             return WorkdayEntryResult("auth_required", "workday account access required")
         if saved_draft_wizard_is_active(page):
@@ -1498,11 +1523,8 @@ def enter_application_form(
 
     for _ in range(3):
         try:
-            btn = page.locator(
-                "a[data-automation-id='adventureButton'], "
-                "button[data-automation-id='adventureButton']"
-            ).first
-            if btn.count() and btn.is_visible():
+            btn = _application_entry_button(page)
+            if btn is not None and btn.is_visible():
                 btn.click(timeout=5000)
         except Exception:
             pass

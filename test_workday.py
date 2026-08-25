@@ -718,6 +718,47 @@ class MissingApplyPage:
         return None
 
 
+class _ContinueApplicationControl(_EntryLocator):
+    def click(self, **kwargs):
+        self.page.continued = True
+        self.page.apply_clicks += 1
+
+
+class _ContinueApplicationMatches:
+    def __init__(self, page, count: int):
+        self.page = page
+        self._count = count
+
+    def count(self):
+        return self._count
+
+    def nth(self, index: int):
+        return _ContinueApplicationControl(
+            self.page,
+            "button[accessible-name='Continue Application']",
+            1 if index < self._count else 0,
+            True,
+        )
+
+
+class ContinueApplicationPage(MissingApplyPage):
+    def __init__(self, *, accessible_matches: int = 1):
+        super().__init__("Software Engineer Intern Continue Application")
+        self.accessible_matches = accessible_matches
+        self.continued = False
+
+    def get_by_role(self, role, *, name, exact):
+        assert role == "button"
+        assert name == "Continue Application"
+        assert exact is True
+        return _ContinueApplicationMatches(self, self.accessible_matches)
+
+    def locator(self, selector):
+        if "autofillWithResume" in selector or "file-upload-input-ref" in selector:
+            return _EntryLocator(self, selector, 1 if self.continued else 0, self.continued)
+        return super().locator(selector)
+
+
 class _HrefLocator(_EntryLocator):
     def __init__(self, page, selector: str, href: str | None):
         super().__init__(page, selector, 1 if href else 0, bool(href))
@@ -763,6 +804,26 @@ def test_missing_apply_uses_one_explicit_application_href_without_looping():
         APPLY_URL,
         "https://example.wd1.myworkdayjobs.com/jobs/job/example/apply",
     ]
+
+
+def test_missing_apply_uses_one_exact_visible_continue_application_button():
+    page = ContinueApplicationPage()
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult("upload_ready")
+    assert page.apply_clicks == 1
+    assert page.goto_calls == [APPLY_URL]
+
+
+def test_missing_apply_rejects_ambiguous_continue_application_buttons():
+    page = ContinueApplicationPage(accessible_matches=2)
+
+    result = workday.enter_application_form(page, APPLY_URL)
+
+    assert result == workday.WorkdayEntryResult("retryable", "apply button not found")
+    assert page.apply_clicks == 0
+    assert page.goto_calls == [APPLY_URL]
 
 
 def test_missing_apply_ignores_apply_filters_text_fallback_and_remains_retryable():
