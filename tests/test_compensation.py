@@ -240,6 +240,32 @@ def test_extract_range_does_not_also_emit_endpoint_points():
     assert (str(rows[0].low), str(rows[0].high), rows[0].point) == ("24", "45", None)
 
 
+@pytest.mark.parametrize("text", [
+    "Pay is between $24 and $45 per hour.",
+    "Hourly pay ranges from $24 to $45.",
+    "Hourly rate of $24 to $45",
+    "Hourly pay: $24 - $45",
+    "Earn up to $45 per hour.",
+    "Pay starts at $24 per hour.",
+])
+def test_extract_usd_points_never_salvages_semantic_range_endpoints(text):
+    assert extract_usd_observations(
+        text, url="https://indeed.com/x", title="x", source_kind="market", observed_at=100,
+    ) == []
+
+
+@pytest.mark.parametrize("text", [
+    "This role is paid hourly. Referral bonus is $100.",
+    "Salaries are set annually. Our sign-on bonus is $45,000.",
+    "This role is paid hourly\nReferral bonus is $100.",
+    "Hourly pay is $30 per year.",
+])
+def test_extract_usd_points_does_not_inherit_unrelated_or_conflicting_periods(text):
+    assert extract_usd_observations(
+        text, url="https://indeed.com/x", title="x", source_kind="market", observed_at=100,
+    ) == []
+
+
 @pytest.mark.parametrize(("question", "expected"), [
     ("What is your desired hourly rate?", "hour"),
     ("Requested rate", "hour"),

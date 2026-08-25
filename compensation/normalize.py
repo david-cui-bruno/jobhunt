@@ -19,8 +19,21 @@ _POINT = re.compile(
 )
 _POINT_PREFIX = re.compile(
     r"(?P<period>per\s+hour|hourly|per\s+year|annually|annual)"
-    r"[^$€£¥\d]{0,80}(?:USD\s*)?\$?\s*"
+    r"[^$€£¥\d.!?\n\r]{0,80}(?:USD\s*)?\$?\s*"
     r"(?P<point>\d{1,3}(?:,\d{3})*(?:\.\d+)?)",
+    re.I,
+)
+_MONEY_AMOUNT = re.compile(
+    r"(?:(?:USD\s*\$?)|\$)\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?",
+    re.I,
+)
+_BOUND_LANGUAGE = re.compile(
+    r"\b(?:between|from|ranges?|up\s+to|starts?\s+at|starting\s+at|"
+    r"at\s+least|at\s+most|minimum|maximum|no\s+(?:less|more)\s+than)\b",
+    re.I,
+)
+_PERIOD_TOKEN = re.compile(
+    r"per\s+hour|hourly|/\s*hr|per\s+year|annually|annual",
     re.I,
 )
 
@@ -136,6 +149,25 @@ def _valid_bounds(low: Decimal, high: Decimal, period: str) -> bool:
     return Decimal("10000") <= low <= Decimal("1000000") and Decimal("10000") <= high <= Decimal("1000000")
 
 
+def _sentence_window(text: str, start: int, end: int) -> tuple[int, int]:
+    left = max(text.rfind(token, 0, start) for token in (".", "!", "?", "\n", "\r")) + 1
+    boundaries = [position for token in (".", "!", "?", "\n", "\r")
+                  for position in [text.find(token, end)] if position >= 0]
+    right = min(boundaries) if boundaries else len(text)
+    return left, right
+
+
+def _point_is_bound_or_ambiguous(text: str, match: re.Match, period: str) -> bool:
+    left, right = _sentence_window(text, match.start(), match.end())
+    sentence = text[left:right]
+    if _BOUND_LANGUAGE.search(sentence):
+        return True
+    if len(_MONEY_AMOUNT.findall(sentence)) > 1:
+        return True
+    trailing = text[match.end("point"):right]
+    return any(_period(token.group(0)) != period for token in _PERIOD_TOKEN.finditer(trailing))
+
+
 def extract_usd_observations(text: str, *, url: str, title: str, source_kind: str, observed_at: int) -> List[EvidenceObservation]:
     rows = []
     range_matches = list(_RANGE.finditer(text))
@@ -186,6 +218,8 @@ def extract_usd_observations(text: str, *, url: str, title: str, source_kind: st
             except InvalidOperation:
                 continue
             period = _period(match.group("period"))
+            if _point_is_bound_or_ambiguous(text, match, period):
+                continue
             if not _valid_bounds(point, point, period):
                 continue
             rows.append(
