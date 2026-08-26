@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import datetime
 import os
 import sqlite3
 import tempfile
@@ -763,7 +764,10 @@ class CompensationDripTests(unittest.TestCase):
         conn.row_factory = sqlite3.Row
         conn.execute("CREATE TABLE postings(status TEXT)")
         conn.execute("CREATE TABLE emails(sent_at INTEGER, posting_id TEXT, ats TEXT, confirmation TEXT)")
-        with mock.patch.dict(os.environ, {"TAVILY_API_KEY": ""}, clear=False), \
+        fixed_datetime = mock.Mock(wraps=datetime.datetime)
+        fixed_datetime.now.return_value = datetime.datetime(2026, 8, 26, 12, tzinfo=drip.ET)
+        with mock.patch.object(drip.datetime, "datetime", fixed_datetime), \
+             mock.patch.dict(os.environ, {"TAVILY_API_KEY": ""}, clear=False), \
              mock.patch.object(drip, "connect_tracker", return_value=conn), \
              mock.patch.object(drip, "recover_stale_claims", return_value=0), \
              mock.patch("watcher.watch.run", return_value={"new_count": 0, "current_posting_ids": []}), \
@@ -789,7 +793,10 @@ class CompensationDripTests(unittest.TestCase):
         conn.execute("CREATE TABLE emails(sent_at INTEGER, posting_id TEXT, ats TEXT, confirmation TEXT)")
         provider = object()
         calls = []
-        with mock.patch.dict(os.environ, {"TAVILY_API_KEY": "key"}, clear=False), \
+        fixed_datetime = mock.Mock(wraps=datetime.datetime)
+        fixed_datetime.now.return_value = datetime.datetime(2026, 8, 26, 12, tzinfo=drip.ET)
+        with mock.patch.object(drip.datetime, "datetime", fixed_datetime), \
+             mock.patch.dict(os.environ, {"TAVILY_API_KEY": "key"}, clear=False), \
              mock.patch.object(drip, "connect_tracker", return_value=conn), \
              mock.patch.object(drip, "recover_stale_claims", return_value=0), \
              mock.patch("watcher.watch.run", return_value={"new_count": 0, "current_posting_ids": []}), \
