@@ -1351,6 +1351,10 @@ CLOSED_MARKERS = (
     "no longer accepting applications",
     "job posting has been removed",
     "job not found",
+    # 2026-09-07: expired postings now render a bare "page you are looking
+    # for doesn't exist" shell; without this marker they looped forever as
+    # "apply button not found" retries.
+    "page you are looking for doesn't exist",
 )
 
 
@@ -1501,6 +1505,13 @@ def enter_application_form(
             btn = _application_entry_button(page)
             if btn is not None:
                 break
+            try:
+                late_body = page.inner_text("body")[:5000].lower()
+            except Exception:
+                late_body = ""
+            late_closed = workday_closed_marker(late_body)
+            if late_closed:
+                return WorkdayEntryResult("closed", "posting closed", late_closed)
             if _workday_auth_gate_visible(page):
                 return WorkdayEntryResult("auth_required", "workday account access required")
             if saved_draft_wizard_is_active(page):
