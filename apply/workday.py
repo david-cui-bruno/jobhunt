@@ -1492,6 +1492,22 @@ def enter_application_form(
 
     btn = _application_entry_button(page)
     if btn is None:
+        # 2026-09-07: same lazy-load drift as the auth chooser — the
+        # adventureButton renders ~2.5s+ after domcontentloaded and later
+        # under daemon load, so a single post-sleep check raced it. Poll
+        # for any known state before falling through to the href fallback.
+        for _ in range(6):  # up to ~15s
+            page.wait_for_timeout(2500)
+            btn = _application_entry_button(page)
+            if btn is not None:
+                break
+            if _workday_auth_gate_visible(page):
+                return WorkdayEntryResult("auth_required", "workday account access required")
+            if saved_draft_wizard_is_active(page):
+                return WorkdayEntryResult("upload_ready", marker="saved_draft")
+            if page.locator("[data-automation-id='file-upload-input-ref']").count():
+                return WorkdayEntryResult("upload_ready")
+    if btn is None:
         if _workday_auth_gate_visible(page):
             return WorkdayEntryResult("auth_required", "workday account access required")
         if saved_draft_wizard_is_active(page):
