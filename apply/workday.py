@@ -1566,6 +1566,28 @@ def enter_application_form(
         return WorkdayEntryResult(
             "retryable", "workday service interruption; retry later", "outage"
         )
+    # 2026-09-07: Workday now lazy-loads the Create Account/Sign In chooser
+    # (signInContent) several seconds AFTER the apply-flow shell renders. All
+    # instant checks above ran against the still-spinning pane, so ~20
+    # postings/day failed as "resume upload zone never appeared" since 8/30
+    # (zero Workday submits 9/5-9/7). Poll for ANY known next state before
+    # declaring failure; the auth gate is the common late arrival.
+    for _ in range(8):  # up to ~20s
+        page.wait_for_timeout(2500)
+        if _verification_required(page) or _workday_auth_gate_visible(page):
+            return WorkdayEntryResult("auth_required", "workday account access required")
+        if saved_draft_wizard_is_active(page):
+            return WorkdayEntryResult("upload_ready", marker="saved_draft")
+        af = page.locator("[data-automation-id='autofillWithResume']").first
+        if af.count() and af.is_visible():
+            af.click(timeout=8000)
+            page.wait_for_timeout(3000)
+        if page.locator("[data-automation-id='file-upload-input-ref']").count():
+            return WorkdayEntryResult("upload_ready")
+        if _workday_outage(page):
+            return WorkdayEntryResult(
+                "retryable", "workday service interruption; retry later", "outage"
+            )
     return WorkdayEntryResult("retryable", "resume upload zone never appeared")
 
 
