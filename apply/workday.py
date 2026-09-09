@@ -1373,7 +1373,13 @@ ALREADY_APPLIED_REASON = (
 
 def _workday_already_applied(body_text: str) -> bool:
     text = re.sub(r"\s+", " ", body_text.lower()).replace("’", "'")
-    return "you've already applied for this job" in text
+    if "you've already applied for this job" in text:
+        return True
+    # 2026-09-09: signed-in tenants render "You applied for this job on
+    # <date>" with a View Application button instead (Autodesk). Without
+    # this variant those postings retried forever as 'apply button not
+    # found' — there is no adventureButton on an already-applied page.
+    return bool(re.search(r"you applied for this job on ", text))
 
 
 def _safe_https_workday_location(parsed: urllib.parse.ParseResult) -> tuple[str, ...] | None:
@@ -1531,6 +1537,8 @@ def enter_application_form(
             late_closed = workday_closed_marker(late_body)
             if late_closed:
                 return WorkdayEntryResult("closed", "posting closed", late_closed)
+            if _workday_already_applied(late_body):
+                return WorkdayEntryResult("already_applied", ALREADY_APPLIED_REASON)
             if _workday_auth_gate_visible(page):
                 return WorkdayEntryResult("auth_required", "workday account access required")
             if saved_draft_wizard_is_active(page):
