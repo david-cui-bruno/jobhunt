@@ -1503,7 +1503,9 @@ def enter_application_form(
         # adventureButton renders ~2.5s+ after domcontentloaded and later
         # under daemon load, so a single post-sleep check raced it. Poll
         # for any known state before falling through to the href fallback.
-        for _ in range(6):  # up to ~15s
+        # (9/9: bumped 15s -> 25s; live postings under daemon load were
+        # still missing the ceiling and cycling through retryable.)
+        for _ in range(10):  # up to ~25s
             page.wait_for_timeout(2500)
             # 2026-09-09: the cookie-consent wall lazy-loads too (RTX fr-CA
             # tenants). The one-shot click above ran before the banner
