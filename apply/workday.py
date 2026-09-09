@@ -1355,11 +1355,14 @@ CLOSED_MARKERS = (
     # for doesn't exist" shell; without this marker they looped forever as
     # "apply button not found" retries.
     "page you are looking for doesn't exist",
+    # 2026-09-09: same dead-page shell, localized. RTX serves fr-CA tenant
+    # URLs; the English-only marker missed them.
+    "page que vous recherchez n'existe pas",
 )
 
 
 def workday_closed_marker(body_text: str) -> str | None:
-    text = re.sub(r"\s+", " ", body_text.lower())
+    text = re.sub(r"\s+", " ", body_text.lower()).replace("’", "'")
     return next((marker for marker in CLOSED_MARKERS if marker in text), None)
 
 
@@ -1502,6 +1505,20 @@ def enter_application_form(
         # for any known state before falling through to the href fallback.
         for _ in range(6):  # up to ~15s
             page.wait_for_timeout(2500)
+            # 2026-09-09: the cookie-consent wall lazy-loads too (RTX fr-CA
+            # tenants). The one-shot click above ran before the banner
+            # existed, and an unaccepted banner blocks the apply button
+            # forever. Re-try it on every poll tick.
+            try:
+                cb = page.locator(
+                    "[data-automation-id='legalNoticeAcceptButton'], "
+                    "#onetrust-accept-btn-handler"
+                ).first
+                if cb.count() and cb.is_visible():
+                    cb.click(timeout=3000)
+                    page.wait_for_timeout(800)
+            except Exception:
+                pass
             btn = _application_entry_button(page)
             if btn is not None:
                 break
